@@ -8,9 +8,13 @@ export const fmt = {
     if (v == null || Number.isNaN(v)) return '—';
     const n = Number(v);
     const d = Math.abs(n) >= 100 ? 2 : Math.abs(n) >= 1 ? 4 : 6;
-    return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+    return n.toLocaleString('en-US', {
+      minimumFractionDigits: d,
+      maximumFractionDigits: d,
+    });
   },
-  pct: (v) => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%'),
+  pct: (v) =>
+    v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%',
   num: (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d)),
   vol: (v) => {
     if (v == null) return '—';
@@ -19,7 +23,8 @@ export const fmt = {
     if (v >= 1e3) return (v / 1e3).toFixed(2) + 'K';
     return Number(v).toFixed(2);
   },
-  time: (ts) => (ts ? new Date(ts).toLocaleTimeString('zh-CN', { hour12: false }) : '—'),
+  time: (ts) =>
+    ts ? new Date(ts).toLocaleTimeString('zh-CN', { hour12: false }) : '—',
   datetime: (ts) => {
     if (!ts) return '—';
     const d = new Date(ts);
