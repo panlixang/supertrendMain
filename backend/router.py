@@ -16,9 +16,9 @@ import notify
 import regime
 import strategy
 import trade
-from history import fetch_candles
+from history import fetch_candles, load_history
 from indicators import compute
-from state import BIAS_TFS, TF_CONFIG, TFS, state
+from state import BIAS_TFS, MAX_SYMBOLS, TF_CONFIG, TFS, state
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -121,13 +121,8 @@ class SymbolIn(BaseModel):
 @router.post("/api/symbol")
 async def set_symbol(body: SymbolIn):
     inst = body.instId.strip().upper()
-    # 持仓时禁止切换：单品种架构下，切走后 ticker 变成新品种的价格，
-    # 会拿它去比旧持仓的止损 —— 多单立刻误触发市价平仓，空单跟踪止损被移到废价位。
-    pos = state.position
-    if pos and pos.qty > 0 and inst != state.current_symbol:
-        return {"ok": False,
-                "error": f"当前持有 {pos.symbol} 仓位，切换品种会让止盈止损失去行情来源。"
-                         f"请先平仓（或等自动离场）再切换。"}
+    # 多品种架构下切图安全：每个持仓由自己品种的 ticker 驱动止盈止损，
+    # 图表看哪个品种与交易互不影响，无需再禁止切换。
     if not await instruments.is_valid(inst):
         return {"ok": False, "error": f"未知品种: {inst}"}
     if state.feed is None:
@@ -425,6 +420,9 @@ async def set_trade_config(body: TradeCfgIn):
     if body.cooldown_sec is not None: cfg.cooldown_sec = max(0, body.cooldown_sec)
     if body.quick_enabled is not None: cfg.quick_enabled = body.quick_enabled
 
+    # 注意：leverage / amount_usdt / allow_tfs 已下放到品种级（/api/trade/symbols），
+    # 这里改的只是「新品种默认值」，不影响已添加品种。
+
     if cfg.enabled and not cfg.paper:
         logger.warning("⚠️ 自动挂单已开启且指向【实盘】，将使用真实资金下单")
         if cfg.quick_enabled:
@@ -479,10 +477,127 @@ async def set_exit_rules(body: ExitRulesIn):
     return {"ok": True, "rules": _all_rules()}
 
 
+# ─── 交易品种管理（多品种） ──────────────────────────────────────
+
+def _symbol_row(st) -> dict:
+    return {
+        **vars(st.cfg), "params": vars(st.params),
+        "last": st.ticker.last, "history_loaded": st.history_loaded,
+        "position": st.position.to_dict(st.ticker.last) if st.position else None,
+    }
+
+
+def _symbols_payload() -> list:
+    return [_symbol_row(st) for st in state.stores.values() if st.cfg]
+
+
+@router.get("/api/trade/symbols")
+async def list_trade_symbols():
+    return {"symbols": _symbols_payload(), "max": MAX_SYMBOLS}
+
+
+class SymbolCfgIn(BaseModel):
+    symbol:      str
+    enabled:     Optional[bool]  = None
+    margin_usdt: Optional[float] = None
+    leverage:    Optional[int]   = None
+    allow_tfs:   Optional[list]  = None
+    periods:     Optional[int]   = None
+    multiplier:  Optional[float] = None
+
+
+async def _load_symbol_history(sym: str):
+    """新品种历史在后台拉，不阻塞请求。完成后重扫信号并刷新前端。"""
+    st = state.stores.get(sym)
+    if st is None:
+        return
+    try:
+        await load_history(st)
+        if state.feed:
+            state.feed.rescan_signals(st)
+            await state.feed.push_snapshot()
+        logger.info(f"[{sym}] 历史加载完成，进入实时监控")
+    except Exception as e:
+        logger.warning(f"[{sym}] 历史加载失败: {e}")
+
+
+@router.post("/api/trade/symbols")
+async def upsert_trade_symbol(body: SymbolCfgIn):
+    """新增或修改一个交易品种的下单参数。新品种默认 enabled=False。"""
+    sym = body.symbol.strip().upper()
+    st = state.stores.get(sym)
+
+    if st is None:                                   # ── 新增 ──
+        if len(state.stores) >= MAX_SYMBOLS:
+            return {"ok": False, "error": f"最多同时交易 {MAX_SYMBOLS} 个品种"}
+        if not await instruments.is_valid(sym):
+            return {"ok": False, "error": f"未知品种: {sym}"}
+        from state import SymbolStore, SymbolTradeConfig
+        cfg = SymbolTradeConfig(
+            symbol=sym, margin_usdt=state.trade_cfg.amount_usdt,
+            leverage=state.trade_cfg.leverage,
+            allow_tfs=list(state.trade_cfg.allow_tfs),
+        )
+        vs = state.view_store
+        if vs and vs.symbol == sym:                  # 正在看图的品种升级为交易品种
+            st = vs
+            st.cfg = cfg
+            state.view_store = None
+        else:
+            st = SymbolStore(sym, cfg=cfg)
+        state.stores[sym] = st
+        from executor import Executor
+        state.executors[sym] = Executor(state, st)
+        if state.feed:
+            await state.feed.add_symbol(sym)
+        if not st.history_loaded:
+            asyncio.get_event_loop().create_task(_load_symbol_history(sym))
+
+    c = st.cfg
+    if body.enabled is not None:
+        if body.enabled and not trade.configured:
+            return {"ok": False, "error": "未配置 OKX API 密钥，无法开启该品种"}
+        c.enabled = body.enabled
+    if body.margin_usdt is not None: c.margin_usdt = max(1.0, body.margin_usdt)
+    if body.leverage    is not None: c.leverage    = max(1, min(125, body.leverage))
+    if body.allow_tfs   is not None: c.allow_tfs   = [t for t in body.allow_tfs if t in TF_CONFIG]
+    if body.periods     is not None: st.params.periods    = max(1, body.periods)
+    if body.multiplier  is not None: st.params.multiplier = max(0.1, body.multiplier)
+
+    await state.broadcast({"type": "symbols", "data": _symbols_payload()})
+    state.save_settings()
+    return {"ok": True, "symbols": _symbols_payload()}
+
+
+@router.delete("/api/trade/symbols/{symbol}")
+async def delete_trade_symbol(symbol: str):
+    sym = symbol.strip().upper()
+    st = state.stores.get(sym)
+    if st is None:
+        return {"ok": False, "error": f"{sym} 不在交易列表"}
+    if st.position and st.position.qty > 0:
+        return {"ok": False, "error": f"{sym} 有未平仓位，先平仓再移除"}
+    if len(state.stores) <= 1:
+        return {"ok": False, "error": "至少保留一个品种"}
+
+    state.stores.pop(sym, None)
+    state.executors.pop(sym, None)
+    if sym == state.current_symbol:
+        st.cfg = None                      # 还在看图 → 降级为仅看图 store
+        state.view_store = st
+    elif state.feed:
+        await state.feed.remove_symbol(sym)
+
+    await state.broadcast({"type": "symbols", "data": _symbols_payload()})
+    state.save_settings()
+    return {"ok": True, "symbols": _symbols_payload()}
+
+
 # ─── 持仓 ────────────────────────────────────────────────────────
 
 @router.get("/api/trade/position")
 async def get_position():
+    """旧接口：图表品种的持仓（兼容保留）。全品种用 /api/trade/positions。"""
     pos = state.position
     return {
         "position": pos.to_dict(state.ticker.last) if pos else None,
@@ -490,33 +605,61 @@ async def get_position():
     }
 
 
+@router.get("/api/trade/positions")
+async def get_positions_all():
+    """全品种持仓 + 合并的已平仓历史（带 sym 字段，按时间升序）。"""
+    closed = [row for st in state.stores.values() for row in st.closed]
+    closed.sort(key=lambda r: r.get("entry_ts") or 0)
+    return {
+        "positions": {sym: st.position.to_dict(st.ticker.last)
+                      for sym, st in state.stores.items() if st.position},
+        "closed": closed[-30:],
+    }
+
+
+class CloseIn(BaseModel):
+    symbol: Optional[str] = None    # 不传 = 图表当前品种
+
+
 @router.post("/api/trade/close")
-async def close_position():
-    """手动平掉当前全部持仓。"""
-    if not state.executor:
-        return {"ok": False, "error": "执行器未初始化"}
-    return await state.executor.close_manual("手动平仓")
+async def close_position(body: CloseIn = None):
+    """手动平掉指定品种的全部持仓。"""
+    sym = (body.symbol.strip().upper() if body and body.symbol
+           else state.current_symbol)
+    ex = state.executors.get(sym)
+    if not ex:
+        return {"ok": False, "error": f"{sym} 不在交易列表或执行器未初始化"}
+    return await ex.close_manual("手动平仓")
 
 
 @router.get("/api/trade/exchange-position")
-async def exchange_position():
+async def exchange_position(symbol: Optional[str] = None):
     """查交易所实际持仓，用于和本地状态机对账。"""
-    return await trade.get_positions(state.current_symbol, state.trade_cfg.category,
+    return await trade.get_positions(symbol or state.current_symbol,
+                                     state.trade_cfg.category,
                                      sim=state.trade_cfg.paper)
 
 
 class LeverageIn(BaseModel):
     leverage: int
+    symbol:   Optional[str] = None
 
 
 @router.post("/api/trade/leverage")
 async def set_lev(body: LeverageIn):
+    sym = (body.symbol or state.current_symbol).strip().upper()
     lev = max(1, min(125, body.leverage))
-    r = await trade.set_leverage(state.current_symbol, lev,
+    r = await trade.set_leverage(sym, lev,
                                  state.trade_cfg.margin_mode, sim=state.trade_cfg.paper)
     if r.get("ok"):
-        state.trade_cfg.leverage = lev
-        await state.broadcast({"type": "trade_config", "data": vars(state.trade_cfg)})
+        st = state.stores.get(sym)
+        if st and st.cfg:
+            st.cfg.leverage = lev
+            await state.broadcast({"type": "symbols", "data": _symbols_payload()})
+        else:
+            state.trade_cfg.leverage = lev
+            await state.broadcast({"type": "trade_config", "data": vars(state.trade_cfg)})
+        state.save_settings()
     return r
 
 
@@ -586,11 +729,12 @@ async def test_order(body: TestOrderIn):
 
 class CancelIn(BaseModel):
     orderId: str
+    symbol:  Optional[str] = None
 
 
 @router.post("/api/trade/cancel")
 async def cancel_order(body: CancelIn):
-    return await trade.cancel(state.current_symbol, body.orderId,
+    return await trade.cancel(body.symbol or state.current_symbol, body.orderId,
                               state.trade_cfg.category, sim=state.trade_cfg.paper)
 
 
@@ -624,6 +768,12 @@ async def websocket_endpoint(ws: WebSocket):
             "orders":  state.orders[-50:],
             "position": state.position.to_dict(state.ticker.last) if state.position else None,
             "closed":  state.closed[-20:],
+            # 多品种：所有品种的最新价 / 持仓 / 品种配置
+            "tickers":   {sym: vars(st.ticker) for sym, st in state.stores.items()},
+            "positions": {sym: st.position.to_dict(st.ticker.last)
+                          for sym, st in state.stores.items() if st.position},
+            "symbols":   _symbols_payload(),
+            "max_symbols": MAX_SYMBOLS,
         })
         while True:
             await ws.receive_text()

@@ -82,28 +82,32 @@ class TradeConfig:
     amount_usdt:  float = 10.0         # 每笔保证金，名义价值 = 它 × 杠杆
     price_offset: float = 0.05         # 限价单偏移 %：买单挂在触发价下方，卖单上方
     # ── 闸门 ──
-    er_min:       float = 0.15         # 标准档下界：ER ≥ 此值走「吃波段」那套规则
-    er_trend:     float = 0.30
-    # 震荡边缘档：ER 落在 [er_weak_min, er_min) 时，用「快进快出」那套规则下单。
-    # 默认关 —— 打开等于把有效闸门从 er_min 降到 er_weak_min，是实打实的行为变更，
-    # 必须由用户在面板上显式勾选，不能靠部署悄悄生效。
-    er_weak_min:   float = 0.12
-    quick_enabled: bool  = False
-    allow_grades: list  = field(default_factory=lambda: ["A", "B"])
-    min_score:    int   = 2            # 0~3
-    allow_tfs:    list  = field(default_factory=lambda: ["15m", "30m", "1h", "4h", "1d"])
+    er_hide_below: float = 0.10        # ER < 此值时信号静默（仍存db但不弹窗、不提醒、面板灰显）
+    er_weak_min:   float = 0.12        # 弱档下界：ER ∈ [er_weak_min, er_min) 走「快进快出」规则
+    er_min:        float = 0.15        # 标准档下界：ER ≥ 此值走「吃波段」那套规则
+    er_trend:      float = 0.30        # 趋势判定：ER ≥ 此值升级为趋势行情（较少触发快进快出）
+    quick_enabled: bool  = False       # 是否启用弱档快进快出下单
+    allow_grades:  list  = field(default_factory=lambda: ["A", "B"])
+    min_score:     int   = 2            # 0~3
+    allow_tfs:     list  = field(default_factory=lambda: ["15m", "30m", "1h", "4h", "1d"])
     # 同一周期两次下单的最小间隔（秒），防止参数被调小后连续触发
-    cooldown_sec: int   = 300
+    cooldown_sec:  int   = 300
 
 
 def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig) -> dict:
     """决定这条信号该不该真下单。
 
-    返回 {"trade": bool, "regime": {...}, "reasons": [...]}，
+    返回 {"trade": bool, "regime": {...}, "reasons": [...], "hidden": bool}，
     reasons 是所有未通过项，会原样显示在 UI 和推送里 —— 用户要看得到为什么没下单。
+    hidden=True 表示 ER 过低，信号静默（不弹窗、不提醒、前端灰显）。
     """
     er = efficiency_ratio(candles)
     regime = classify(er, cfg.er_min, cfg.er_trend, cfg.er_weak_min, cfg.quick_enabled)
+
+    # ER 太低的信号彻底静默（不弹窗、不推送、前端灰显）
+    hidden = er is not None and er < cfg.er_hide_below
+    if hidden:
+        return {"trade": False, "regime": regime, "reasons": [], "hidden": True}
 
     reasons = []
     if not cfg.enabled:

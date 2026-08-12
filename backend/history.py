@@ -10,7 +10,7 @@ import json
 import logging
 import urllib.request
 
-from state import AppState, Candle, TF_CONFIG
+from state import Candle, SymbolStore, TF_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -82,17 +82,19 @@ def fetch_candles(tf: str, limit: int = 300, symbol: str = "BTC-USDT") -> list[C
     return out
 
 
-async def load_history(state: AppState, symbol: str):
-    """按 TF_CONFIG.maxlen 填满各周期 deque。"""
+async def load_history(store: SymbolStore):
+    """按 TF_CONFIG.maxlen 填满该品种各周期 deque。"""
     loop = asyncio.get_event_loop()
+    symbol = store.symbol
     for tf, cfg in TF_CONFIG.items():
         try:
             candles = await loop.run_in_executor(
                 None, fetch_candles, tf, cfg["maxlen"], symbol
             )
-            deq = state.candles[tf]
+            deq = store.candles[tf]
             deq.clear()
             deq.extend(candles)
         except Exception as e:
             logger.error(f"历史K线[{symbol} {tf}] 异常: {e}")
         await asyncio.sleep(0.15)   # 轻微限速，避免触发 OKX 频控
+    store.history_loaded = True

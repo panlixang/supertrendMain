@@ -1,9 +1,17 @@
 """
-OKX 实时行情采集
+OKX 实时行情采集（多品种）
 
 两条 WS：
-  public   → tickers（最新价 / 24h 统计）
-  business → candle{1m,5m,15m,30m,1H,4H,1D,1W,1M}
+  public   → tickers（最新价 / 24h 统计）× 所有品种
+  business → candle{1m,5m,15m,30m,1H,4H,1D,1W,1M} × 所有品种
+
+订阅集合 = 交易品种（state.stores）∪ 图表品种（current_symbol，可能只是看图）。
+消息按 instId 路由到对应 SymbolStore，各品种的信号检测 / 止盈止损互不干扰。
+
+广播策略：
+  candle   只发图表品种（前端只画一张图）
+  ticker   图表品种每 tick 发；其它品种节流 ~1 秒 1 次（前端持仓卡算浮盈用）
+  signal / order / position  所有品种都发，消息带 symbol
 
 每根 K 线收盘时重算该周期 SuperTrend；若最后一次翻转正好落在这根，
 就产生 Buy/Sell 信号，补上 MTF Bias 上下文后广播 + 推送。
@@ -26,10 +34,9 @@ from websockets.exceptions import ConnectionClosed
 import notify
 import regime
 import strategy
-import trade
 from history import fetch_candles, load_history
 from indicators import st_signals, super_trend
-from state import AppState, Candle, Ticker, TF_CONFIG
+from state import AppState, Candle, SymbolStore, Ticker, TF_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,8 @@ BUSINESS_ENDPOINTS = ["wss://ws.okx.com:8443/ws/v5/business", "wss://ws.okx.com/
 
 CHANNEL_TF = {cfg["okx_channel"]: tf for tf, cfg in TF_CONFIG.items()}
 RECONNECT_DELAY = 3
+SUB_CHUNK = 20            # 单次 subscribe 请求最多带多少个频道参数
+TICK_BC_INTERVAL = 1.0    # 非图表品种 ticker 广播节流（秒）
 
 # 触发微信推送的周期（短周期翻转频繁，默认只推 15m 以上）
 NOTIFY_TFS = [t.strip() for t in os.environ.get("NOTIFY_TFS", "15m,30m,1h,4h,1d").split(",") if t.strip()]
@@ -46,10 +55,25 @@ NOTIFY_TFS = [t.strip() for t in os.environ.get("NOTIFY_TFS", "15m,30m,1h,4h,1d"
 class OKXFeed:
     def __init__(self, state: AppState):
         self.state = state
-        self.symbol = state.current_symbol
         self._pub_idx = self._biz_idx = 0
         self._biz_started = False
         self._ws: dict = {"public": None, "business": None}
+        self._tick_bc: dict[str, float] = {}   # {symbol: 上次 ticker 广播时刻}
+
+    # ── 品种集合 ────────────────────────────────────────────────
+    def _symbols(self) -> list[str]:
+        """需要订阅行情的全部品种：交易列表 ∪ 图表品种。"""
+        syms = list(self.state.stores)
+        if self.state.current_symbol not in syms:
+            syms.append(self.state.current_symbol)
+        return syms
+
+    def _store_of(self, symbol: str) -> SymbolStore | None:
+        s = self.state.stores.get(symbol)
+        if s:
+            return s
+        vs = self.state.view_store
+        return vs if vs and vs.symbol == symbol else None
 
     # ── 连接管理 ────────────────────────────────────────────────
     async def run(self):
@@ -80,13 +104,18 @@ class OKXFeed:
                 logger.error(f"[{kind}] 错误: {e}")
                 await asyncio.sleep(RECONNECT_DELAY)
 
+    async def _send_op(self, ws, op: str, args: list):
+        """subscribe/unsubscribe 分批发送，避免单条请求参数过多被拒。"""
+        for i in range(0, len(args), SUB_CHUNK):
+            await ws.send(json.dumps({"op": op, "args": args[i:i + SUB_CHUNK]}))
+
     async def _connect(self, url: str, kind: str):
         async with websockets.connect(url, ping_interval=20, ping_timeout=10, close_timeout=5) as ws:
             self._ws[kind] = ws
             try:
-                args = self._sub_args(kind, self.symbol)
-                await ws.send(json.dumps({"op": "subscribe", "args": args}))
-                logger.info(f"[{kind}] 订阅 {self.symbol}（{len(args)} 个频道）")
+                syms = self._symbols()
+                await self._send_op(ws, "subscribe", self._sub_args(kind, syms))
+                logger.info(f"[{kind}] 订阅 {syms}")
 
                 # 首连历史由 main 的 load_history 负责；重连说明断过网，REST 补缺口
                 if kind == "business":
@@ -103,29 +132,45 @@ class OKXFeed:
             finally:
                 self._ws[kind] = None
 
-    def _sub_args(self, kind: str, symbol: str) -> list:
+    def _sub_args(self, kind: str, symbols: list[str]) -> list:
         if kind == "public":
-            return [{"channel": "tickers", "instId": symbol}]
-        return [{"channel": cfg["okx_channel"], "instId": symbol} for cfg in TF_CONFIG.values()]
+            return [{"channel": "tickers", "instId": s} for s in symbols]
+        return [{"channel": cfg["okx_channel"], "instId": s}
+                for s in symbols for cfg in TF_CONFIG.values()]
+
+    async def _resub(self, op: str, symbol: str):
+        """对单个品种在两条连接上执行 subscribe / unsubscribe。"""
+        for kind in ("public", "business"):
+            ws = self._ws.get(kind)
+            if ws is None:
+                continue
+            try:
+                await self._send_op(ws, op, self._sub_args(kind, [symbol]))
+            except Exception as e:
+                logger.warning(f"[{kind}] {op} {symbol} 失败: {e}")
 
     async def _backfill(self):
         """重连后拉 REST 补断网期间的 K 线，再整段刷新前端。"""
-        logger.info(f"[business] 重连，回补 [{self.symbol}] K线…")
-        loop = asyncio.get_event_loop()
-        for tf in TF_CONFIG:
-            try:
-                fetched = await loop.run_in_executor(None, fetch_candles, tf, 300, self.symbol)
-                if fetched:
-                    self._merge(tf, fetched)
-            except Exception as e:
-                logger.warning(f"[business] 回补 {tf} 失败: {e}")
-            await asyncio.sleep(0.15)
-        self.rescan_signals()
+        for symbol in self._symbols():
+            store = self._store_of(symbol)
+            if store is None:
+                continue
+            logger.info(f"[business] 重连，回补 [{symbol}] K线…")
+            loop = asyncio.get_event_loop()
+            for tf in TF_CONFIG:
+                try:
+                    fetched = await loop.run_in_executor(None, fetch_candles, tf, 300, symbol)
+                    if fetched:
+                        self._merge(store, tf, fetched)
+                except Exception as e:
+                    logger.warning(f"[business] 回补 {symbol} {tf} 失败: {e}")
+                await asyncio.sleep(0.15)
+            self.rescan_signals(store)
         await self.push_snapshot()
 
-    def _merge(self, tf: str, fetched: list[Candle]):
+    def _merge(self, store: SymbolStore, tf: str, fetched: list[Candle]):
         """REST 数据补缺口，重叠 ts 以内存实时数据为准。"""
-        deq = self.state.candles.get(tf)
+        deq = store.candles.get(tf)
         if deq is None:
             return
         by_ts = {c.ts: c for c in fetched}
@@ -145,8 +190,10 @@ class OKXFeed:
             return
 
         arg = msg.get("arg") or {}
-        # 切换品种瞬间会收到旧品种残留消息，按 instId 丢弃
-        if arg.get("instId") and arg["instId"] != self.symbol:
+        inst = arg.get("instId")
+        # 按 instId 路由；退订后的残留消息路由不到 store，自然丢弃
+        store = self._store_of(inst) if inst else None
+        if store is None:
             return
         data = msg.get("data") or []
         if not data:
@@ -154,18 +201,17 @@ class OKXFeed:
 
         ch = arg.get("channel", "")
         if ch == "tickers":
-            await self._on_ticker(data[0])
+            await self._on_ticker(store, data[0])
         elif ch in CHANNEL_TF:
             tf = CHANNEL_TF[ch]
             for row in data:
-                await self._on_candle(tf, row)
+                await self._on_candle(store, tf, row)
 
-    async def _on_ticker(self, d: dict):
-        s = self.state
+    async def _on_ticker(self, store: SymbolStore, d: dict):
         last = float(d.get("last", 0) or 0)
         open24h = float(d.get("open24h", 0) or 0)
-        s.ticker = Ticker(
-            symbol=self.symbol,
+        store.ticker = Ticker(
+            symbol=store.symbol,
             last=last,
             open24h=open24h,
             high24h=float(d.get("high24h", 0) or 0),
@@ -174,16 +220,23 @@ class OKXFeed:
             change24h=last - open24h,
             ts=int(d.get("ts", time.time() * 1000)),
         )
-        await s.broadcast({"type": "ticker", "symbol": self.symbol, "data": vars(s.ticker)})
+        # 图表品种每 tick 广播；其它品种节流（前端只用来刷持仓卡的浮盈）
+        now = time.time()
+        if (store.symbol == self.state.current_symbol
+                or now - self._tick_bc.get(store.symbol, 0) >= TICK_BC_INTERVAL):
+            self._tick_bc[store.symbol] = now
+            await self.state.broadcast(
+                {"type": "ticker", "symbol": store.symbol, "data": vars(store.ticker)})
 
-        # 止盈止损按 tick 检查（秒级）—— 等 K 线收盘再止损就晚了
-        if s.executor and s.position:
+        # 止盈止损按 tick 检查（秒级，不受广播节流影响）—— 等 K 线收盘再止损就晚了
+        ex = self.state.executors.get(store.symbol)
+        if ex and store.position:
             try:
-                await s.executor.on_price(s.ticker.last)
+                await ex.on_price(store.ticker.last)
             except Exception as e:
-                logger.warning(f"[止盈止损检查失败] {e}")
+                logger.warning(f"[{store.symbol} 止盈止损检查失败] {e}")
 
-    async def _on_candle(self, tf: str, row: list):
+    async def _on_candle(self, store: SymbolStore, tf: str, row: list):
         try:
             candle = Candle(
                 ts=int(row[0]), o=float(row[1]), h=float(row[2]),
@@ -193,7 +246,7 @@ class OKXFeed:
         except (IndexError, ValueError):
             return
 
-        deq = self.state.candles.get(tf)
+        deq = store.candles.get(tf)
         if deq is None:
             return
         if deq and deq[-1].ts == candle.ts:
@@ -201,33 +254,35 @@ class OKXFeed:
         else:
             deq.append(candle)
 
-        await self.state.broadcast({
-            "type": "candle", "symbol": self.symbol, "tf": tf, "data": vars(candle),
-        })
+        if store.symbol == self.state.current_symbol:
+            await self.state.broadcast({
+                "type": "candle", "symbol": store.symbol, "tf": tf, "data": vars(candle),
+            })
 
         if candle.confirm:
-            await self._check_flip(tf, candle.ts)
+            await self._check_flip(store, tf, candle.ts)
             # 收盘后超趋线已定，跟随它移动止损
-            if self.state.executor and self.state.position:
+            ex = self.state.executors.get(store.symbol)
+            if ex and store.position:
                 try:
-                    await self.state.executor.on_st_line(tf, self._st_line(tf))
+                    await ex.on_st_line(tf, self._st_line(store, tf))
                 except Exception as e:
-                    logger.warning(f"[移动止损失败] {e}")
+                    logger.warning(f"[{store.symbol} 移动止损失败] {e}")
 
-    def _st_line(self, tf: str) -> float | None:
-        """该周期当前的超趋线值（多头取 up、空头取 dn）。"""
-        candles = self.state.candles_by_tf(tf)
-        if len(candles) < self.state.params.periods + 2:
+    def _st_line(self, store: SymbolStore, tf: str) -> float | None:
+        """该品种该周期当前的超趋线值（多头取 up、空头取 dn）。"""
+        candles = store.candles_by_tf(tf)
+        if len(candles) < store.params.periods + 2:
             return None
-        st = self._st_of(candles)
+        st = self._st_of(store, candles)
         trend = st.get("trend") or []
         if not trend or trend[-1] is None:
             return None
         return st["up"][-1] if trend[-1] == 1 else st["dn"][-1]
 
     # ── 信号判定 ────────────────────────────────────────────────
-    def _st_of(self, candles: list[dict]) -> dict:
-        p = vars(self.state.params)
+    def _st_of(self, store: SymbolStore, candles: list[dict]) -> dict:
+        p = vars(store.params)
         return super_trend(
             [c["o"] for c in candles], [c["h"] for c in candles],
             [c["l"] for c in candles], [c["c"] for c in candles],
@@ -235,146 +290,177 @@ class OKXFeed:
             src=p["src"], change_atr=p["change_atr"],
         )
 
-    def _flip_at(self, tf: str, ts: int) -> dict | None:
+    def _flip_at(self, store: SymbolStore, tf: str, ts: int) -> dict | None:
         """最后一次翻转恰好落在 ts 这根 → 返回信号，否则 None。"""
-        candles = self.state.candles_by_tf(tf)
-        if len(candles) < self.state.params.periods + 2:
+        candles = store.candles_by_tf(tf)
+        if len(candles) < store.params.periods + 2:
             return None
-        st = self._st_of(candles)
+        st = self._st_of(store, candles)
         if not st.get("flips"):
             return None
         sigs = st_signals(candles, st, tf)
         return sigs[-1] if sigs and sigs[-1]["ts"] == ts else None
 
-    async def _check_flip(self, tf: str, ts: int):
+    async def _check_flip(self, store: SymbolStore, tf: str, ts: int):
         try:
-            sig = self._flip_at(tf, ts)
+            sig = self._flip_at(store, tf, ts)
         except Exception as e:
-            logger.warning(f"[{tf}] 信号计算失败: {e}")
+            logger.warning(f"[{store.symbol} {tf}] 信号计算失败: {e}")
             return
         if not sig:
             return
 
         try:
-            full = strategy.evaluate(self.state.all_candles(), vars(self.state.params), sig)
+            full = strategy.evaluate(store.all_candles(), vars(store.params), sig)
         except Exception as e:
-            logger.warning(f"[{tf}] Bias 评估失败: {e}")
+            logger.warning(f"[{store.symbol} {tf}] Bias 评估失败: {e}")
             full = sig
 
         # ── 行情状态闸门：震荡市只提醒不下单 ──
-        cfg = self.state.trade_cfg
-        candles = self.state.candles_by_tf(tf)
+        # cfg 是「全局闸门 + 本品种下单参数」的合并视图；仅看图品种 enabled 恒为 False
+        cfg = self.state.cfg_for(store.symbol)
+        candles = store.candles_by_tf(tf)
         try:
             gate = regime.evaluate(full, candles, cfg)
         except Exception as e:
-            logger.warning(f"[{tf}] 行情判定失败: {e}")
+            logger.warning(f"[{store.symbol} {tf}] 行情判定失败: {e}")
             gate = {"trade": False, "regime": {"label": "判定失败"}, "reasons": [str(e)]}
 
         full["regime"] = gate["regime"]
         full["gate_reasons"] = gate["reasons"]
         full["will_trade"] = gate["trade"]
+        full["hidden"] = gate.get("hidden", False)    # ER过低的静默信号
         full["profile"] = gate.get("profile")
+        full["symbol"] = store.symbol
 
-        self.state.add_signal(full)
+        store.add_signal(full)
+        # ER太低的信号不弹窗、不提醒、静默入库
+        if gate.get("hidden"):
+            logger.info(f"[静默信号] {store.symbol} {tf} ER {full.get('er', '?')} < {cfg.er_hide_below}")
+            return
         prof = {"quick": " 弱档", "normal": " 标准档"}.get(gate.get("profile"), "")
         logger.info(
-            f"[{'BUY ' if full['type'] == 'buy' else 'SELL'}] {self.symbol} {tf} "
+            f"[{'BUY ' if full['type'] == 'buy' else 'SELL'}] {store.symbol} {tf} "
             f"@ {full['price']} 等级={full.get('grade','?')} 强度={full.get('score')}/3 "
             f"Bias={full.get('bias_label','')} 行情={gate['regime'].get('label')} "
             f"{'→ 挂单' + prof if gate['trade'] else '→ 仅提醒: ' + '; '.join(gate['reasons'][:2])}"
         )
-        await self.state.broadcast({"type": "signal", "symbol": self.symbol, "data": full})
+        await self.state.broadcast({"type": "signal", "symbol": store.symbol, "data": full})
 
-        # 冷却：同周期短时间内不重复开仓
+        # 冷却：同品种同周期短时间内不重复开仓（按品种隔离）
         order = None
         if gate["trade"]:
-            last = self.state.last_order_at.get(tf, 0)
+            last = store.last_order_at.get(tf, 0)
             if time.time() - last < cfg.cooldown_sec:
                 full["will_trade"] = False
                 full["gate_reasons"] = [f"冷却中（{cfg.cooldown_sec}s 内已下过单）"]
                 gate = {**gate, "trade": False}
 
-        # 交给执行器：反向信号会先平仓，再按闸门决定是否开新仓
-        if self.state.executor:
+        # 交给该品种的执行器：反向信号会先平仓，再按闸门决定是否开新仓
+        ex = self.state.executors.get(store.symbol)
+        if ex:
             try:
-                order = await self.state.executor.on_signal(full, gate)
+                order = await ex.on_signal(full, gate)
                 if order and order.get("ok"):
-                    self.state.last_order_at[tf] = time.time()
+                    store.last_order_at[tf] = time.time()
             except Exception as e:
-                logger.error(f"[执行器异常] {e}")
+                logger.error(f"[{store.symbol} 执行器异常] {e}")
 
         if notify.enabled and tf in NOTIFY_TFS:
-            asyncio.create_task(notify.push_signal(self.symbol, full, order))
+            asyncio.create_task(notify.push_signal(store.symbol, full, order))
 
-    def rescan_signals(self):
-        """用当前内存 K 线重扫各周期历史翻转，重建 state.signals。"""
-        p = vars(self.state.params)
-        all_c = self.state.all_candles()
-        try:
-            verdict = strategy.mtf_bias(all_c, p)["verdict"]
-        except Exception:
-            verdict = "mixed"
-
-        out = []
-        for tf, candles in all_c.items():
-            if len(candles) < p["periods"] + 2:
+    def rescan_signals(self, store: SymbolStore | None = None):
+        """用内存 K 线重扫历史翻转，重建 store.signals。store=None 时扫全部。"""
+        stores = [store] if store else [self._store_of(s) for s in self._symbols()]
+        for st_store in stores:
+            if st_store is None:
                 continue
+            p = vars(st_store.params)
+            all_c = st_store.all_candles()
             try:
-                st = self._st_of(candles)
-                if not st.get("flips"):
+                verdict = strategy.mtf_bias(all_c, p)["verdict"]
+            except Exception:
+                verdict = "mixed"
+
+            out = []
+            for tf, candles in all_c.items():
+                if len(candles) < p["periods"] + 2:
                     continue
-                for s in st_signals(candles, st, tf)[-25:]:
-                    s["grade"] = strategy.grade(s, verdict)
-                    out.append(s)
-            except Exception as e:
-                logger.warning(f"[{tf}] 历史信号扫描失败: {e}")
-        out.sort(key=lambda s: s["ts"])
-        self.state.signals = out[-300:]
+                try:
+                    st = self._st_of(st_store, candles)
+                    if not st.get("flips"):
+                        continue
+                    for s in st_signals(candles, st, tf)[-25:]:
+                        s["grade"] = strategy.grade(s, verdict)
+                        s["symbol"] = st_store.symbol
+                        out.append(s)
+                except Exception as e:
+                    logger.warning(f"[{st_store.symbol} {tf}] 历史信号扫描失败: {e}")
+            out.sort(key=lambda s: s["ts"])
+            st_store.signals = out[-300:]
 
     async def push_snapshot(self):
-        await self.state.broadcast({
+        s = self.state
+        await s.broadcast({
             "type":    "snapshot",
-            "symbol":  self.symbol,
-            "ticker":  vars(self.state.ticker),
-            "candles": self.state.all_candles(),
-            "signals": self.state.signals,
-            "params":  vars(self.state.params),
+            "symbol":  s.current_symbol,
+            "ticker":  vars(s.ticker),
+            "candles": s.all_candles(),
+            "signals": s.signals,
+            "params":  vars(s.params),
+            # 多品种视图（旧前端会忽略这些键）
+            "tickers":   {sym: vars(st.ticker) for sym, st in s.stores.items()},
+            "positions": {sym: st.position.to_dict(st.ticker.last)
+                          for sym, st in s.stores.items() if st.position},
+            "symbols":   [{**vars(st.cfg), "params": vars(st.params),
+                           "last": st.ticker.last, "history_loaded": st.history_loaded}
+                          for st in s.stores.values() if st.cfg],
         })
 
     # ── 运行时变更 ──────────────────────────────────────────────
     async def switch_symbol(self, new: str) -> dict:
-        old = self.symbol
+        """切换图表品种。交易列表内 → 秒切；列表外 → 建仅看图 store 拉历史。"""
+        old = self.state.current_symbol
         if new == old:
             return {"ok": True, "symbol": new, "changed": False}
 
-        logger.info(f"切换品种 {old} → {new}")
-        self.symbol = new
+        logger.info(f"图表切换 {old} → {new}")
+        old_view = self.state.view_store
         self.state.current_symbol = new
 
-        for kind in ("public", "business"):
-            ws = self._ws.get(kind)
-            if ws is None:
-                continue
-            try:
-                await ws.send(json.dumps({"op": "unsubscribe", "args": self._sub_args(kind, old)}))
-                await ws.send(json.dumps({"op": "subscribe",   "args": self._sub_args(kind, new)}))
-            except Exception as e:
-                logger.warning(f"[{kind}] 重订阅失败: {e}")
+        if new in self.state.stores:
+            # 交易中的品种：数据本来就在内存里，退订旧的仅看图品种即可
+            if old_view and old_view.symbol not in self.state.stores:
+                await self._resub("unsubscribe", old_view.symbol)
+                self.state.view_store = None
+            await self.push_snapshot()
+            return {"ok": True, "symbol": new, "changed": True}
 
-        for tf in TF_CONFIG:
-            self.state.candles[tf].clear()
-        self.state.ticker = Ticker(symbol=new)
-        self.state.signals = []
+        # 列表外的品种：建 view store、订阅、拉历史
+        if old_view and old_view.symbol != new and old_view.symbol not in self.state.stores:
+            await self._resub("unsubscribe", old_view.symbol)
+            self.state.view_store = None
+        vs = self.state.view          # 创建/复用 view_store
+        await self._resub("subscribe", new)
         try:
-            await load_history(self.state, new)
+            await load_history(vs)
         except Exception as e:
             logger.warning(f"加载 {new} 历史失败: {e}")
-
-        self.rescan_signals()
+        self.rescan_signals(vs)
         await self.push_snapshot()
         return {"ok": True, "symbol": new, "changed": True}
 
-    async def apply_params(self):
-        """参数变更后重扫信号并整段刷新前端。"""
-        self.rescan_signals()
+    async def add_symbol(self, symbol: str):
+        """品种加入交易列表后调用：订阅行情（若还没订过）。历史加载由调用方安排。"""
+        # view_store 升级为交易 store 的场景已在 router 处理，这里只保证订阅存在
+        await self._resub("subscribe", symbol)
+
+    async def remove_symbol(self, symbol: str):
+        """品种移出交易列表后调用：若也不是图表品种则退订。"""
+        if symbol != self.state.current_symbol:
+            await self._resub("unsubscribe", symbol)
+
+    async def apply_params(self, store: SymbolStore | None = None):
+        """参数变更后重扫该品种信号并整段刷新前端。默认作用于图表品种。"""
+        self.rescan_signals(store or self.state.view)
         await self.push_snapshot()

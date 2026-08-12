@@ -52,8 +52,7 @@ export function useWebSocket() {
 
     function handle(msg) {
       const s = useStore.getState();
-      // 切品种瞬间会收到旧品种残留消息
-      if (msg.symbol && msg.symbol !== s.symbol && msg.type !== 'snapshot') return;
+      const isChart = !msg.symbol || msg.symbol === s.symbol;   // 是否图表当前品种
 
       switch (msg.type) {
         case 'snapshot': {
@@ -65,6 +64,10 @@ export function useWebSocket() {
           if (msg.orders) s.setOrders(msg.orders);
           if (msg.closed) s.setClosed(msg.closed);
           s.setPosition(msg.position || null);
+          if (msg.tickers) s.setTickers(msg.tickers);
+          if (msg.positions) s.setPositions(msg.positions);
+          if (msg.symbols) s.setSymbolCfgs(msg.symbols);
+          if (msg.max_symbols) s.setMaxSymbols(msg.max_symbols);
           if (msg.candles) {
             Object.entries(msg.candles).forEach(([tf, d]) => s.setCandles(tf, d));
           }
@@ -78,9 +81,11 @@ export function useWebSocket() {
           break;
         }
         case 'ticker':
-          s.setTicker(msg.data);
+          if (msg.symbol) s.setTickerFor(msg.symbol, msg.data);
+          if (isChart) s.setTicker(msg.data);
           break;
         case 'candle':
+          if (!isChart) break;              // 图表只画当前品种
           s.upsertCandle(msg.tf, msg.data);
           fetchIndicators(msg.tf);
           break;
@@ -90,18 +95,25 @@ export function useWebSocket() {
         case 'exit_rules':
           s.setExitRules(msg.data);
           break;
+        case 'symbols':
+          s.setSymbolCfgs(msg.data);
+          break;
         case 'position':
-          s.setPosition(msg.data);
-          // 平仓后刷一次已平仓列表
+          if (msg.symbol) s.setPositionFor(msg.symbol, msg.data);
+          if (isChart) s.setPosition(msg.data);
+          // 平仓后刷一次全品种持仓 + 已平仓列表
           if (!msg.data) {
-            fetch(`${API}/api/trade/position`)
+            fetch(`${API}/api/trade/positions`)
               .then((r) => r.json())
-              .then((d) => s.setClosed(d.closed || []))
+              .then((d) => {
+                s.setPositions(d.positions || {});
+                s.setClosed(d.closed || []);
+              })
               .catch(() => {});
           }
           break;
         case 'order':
-          s.addOrder(msg.data);
+          s.addOrder({ ...msg.data, sym: msg.data.sym || msg.symbol });
           // 挂单结果补进弹窗，让「已挂单/失败」直接显示在同一个弹窗里
           if (s.modalSignal && s.modalSignal.ts === msg.data.sig_ts) {
             s.showModal({ ...s.modalSignal, order: msg.data });
@@ -109,17 +121,19 @@ export function useWebSocket() {
           break;
         case 'signal': {
           const sig = { ...msg.data, symbol: msg.symbol };
-          s.addSignal(sig);
-          if (s.opts.modal) s.showModal(sig);
+          if (isChart) s.addSignal(sig);      // 信号列表跟着图表品种走
+          if (s.opts.modal) s.showModal(sig); // 弹窗/提示所有品种都出，带品种名
           s.pushToast({
             type: sig.type,
             tf: sig.tf,
             grade: sig.grade,
             price: sig.price,
-            label: sig.type === 'buy' ? 'BUY 超趋翻多' : 'SELL 超趋翻空',
+            label: `${msg.symbol || ''} ${sig.type === 'buy' ? 'BUY 超趋翻多' : 'SELL 超趋翻空'}`,
           });
-          fetchIndicators(sig.tf, true);
-          fetchOverview();
+          if (isChart) {
+            fetchIndicators(sig.tf, true);
+            fetchOverview();
+          }
           break;
         }
         default:

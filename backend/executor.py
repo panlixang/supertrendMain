@@ -23,8 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 class Executor:
-    def __init__(self, state):
+    """一个品种一个实例。store 是该品种的 SymbolStore，持仓/价格/冷却都在里面 ——
+    品种之间互不串行（各自有锁），品种内 on_price 与 on_signal 互斥。"""
+
+    def __init__(self, state, store):
         self.state = state
+        self.store = store
         # 同一时刻只允许一个下单流程，避免 ticker 与信号并发重复平仓
         self._lock = asyncio.Lock()
         self._lev_set: set = set()      # 已设置过杠杆的 (symbol, leverage)
@@ -32,7 +36,8 @@ class Executor:
     # ── 工具 ────────────────────────────────────────────────────
     @property
     def cfg(self):
-        return self.state.trade_cfg
+        # 全局闸门 + 本品种下单参数的合并视图（enabled = 总开关 AND 品种开关）
+        return self.state.cfg_for(self.store.symbol)
 
     @property
     def rules(self):
@@ -50,17 +55,19 @@ class Executor:
         return await trade.get_spec(iid, "SWAP" if swap else "SPOT")
 
     async def _record(self, order: dict, extra: dict):
-        o = {**order, **extra, "ts": order.get("ts") or int(time.time() * 1000)}
+        # sym 一律用现货形式（store 键），order 里交易所返回的 symbol 是合约形式
+        o = {**order, **extra, "sym": self.store.symbol,
+             "ts": order.get("ts") or int(time.time() * 1000)}
         self.state.add_order(o)
-        await self.state.broadcast({"type": "order", "symbol": self.state.current_symbol, "data": o})
+        await self.state.broadcast({"type": "order", "symbol": self.store.symbol, "data": o})
         return o
 
     async def _push_position(self):
-        pos = self.state.position
+        pos = self.store.position
         await self.state.broadcast({
             "type": "position",
-            "symbol": self.state.current_symbol,
-            "data": pos.to_dict(self.state.ticker.last) if pos else None,
+            "symbol": self.store.symbol,
+            "data": pos.to_dict(self.store.ticker.last) if pos else None,
         })
 
     async def _ensure_leverage(self, symbol: str) -> None:
@@ -82,7 +89,7 @@ class Executor:
     async def on_signal(self, sig: dict, gate: dict) -> dict | None:
         """返回本次产生的开仓单（没下单则 None）。平仓单单独广播。"""
         async with self._lock:
-            pos = self.state.position
+            pos = self.store.position
             want = "long" if sig["type"] == "buy" else "short"
 
             # 1) 反向信号平仓：只认「与持仓同周期」或「自身通过闸门要下单」的信号。
@@ -93,9 +100,9 @@ class Executor:
                 await self._close(pos, f"{sig['tf']} 出现反向信号", sig.get("price"))
 
             # 2) 同向已有仓位就不加仓，避免信号密集时越滚越大
-            pos = self.state.position
+            pos = self.store.position
             if pos and pos.qty > 0 and pos.side == want:
-                logger.info(f"[跳过开仓] 已持有同向 {want} 仓位")
+                logger.info(f"[跳过开仓] {self.store.symbol} 已持有同向 {want} 仓位")
                 return None
 
             if not gate.get("trade"):
@@ -103,7 +110,7 @@ class Executor:
             return await self._open(sig, gate.get("profile") or "normal")
 
     async def _open(self, sig: dict, profile: str = "normal") -> dict | None:
-        cfg, symbol = self.cfg, self.state.current_symbol
+        cfg, symbol = self.cfg, self.store.symbol
         rules = self.state.rules_for(profile)
         await self._ensure_leverage(symbol)
 
@@ -115,7 +122,7 @@ class Executor:
             category=cfg.category, mgn_mode=cfg.margin_mode,
             client_oid=f"o{sig['tf']}{sig['ts']}",
             sim=cfg.paper,
-            ref_price=self.state.ticker.last or sig["price"],
+            ref_price=self.store.ticker.last or sig["price"],
         )
         order = await self._record(r, {
             "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
@@ -128,7 +135,7 @@ class Executor:
         stop = position.initial_stop(sig, rules)
         # 用交易所返回的 instId（已是 BTC-USDT-SWAP 这种合约形式），
         # 后续查规格/平仓都直接用它，避免现货/合约 form 混淆
-        self.state.position = position.Position(
+        self.store.position = position.Position(
             symbol=r.get("symbol") or symbol, side="long" if side == "buy" else "short",
             tf=sig["tf"], entry=r["price"], qty=r["qty"], init_qty=r["qty"],
             stop=stop, leverage=cfg.leverage, entry_ts=r["ts"], order_id=r.get("orderId", ""),
@@ -136,20 +143,20 @@ class Executor:
         )
         unit = "张" if cfg.category == "SWAP" else ""
         tag = "快进快出档" if profile == "quick" else "标准档"
-        self.state.position.log(
+        self.store.position.log(
             "open",
             f"开{'多' if side == 'buy' else '空'} {r['qty']}{unit} @ {r['price']}"
             f"（保证金 {cfg.amount_usdt}U × {cfg.leverage}x，止损 {stop}，{tag}"
             f" 止盈 {rules.tp1_pct}% 平 {rules.tp1_ratio:.0f}%）",
         )
-        logger.info(f"[持仓建立] {symbol} {self.state.position.side} @ {r['price']} "
+        logger.info(f"[持仓建立] {symbol} {self.store.position.side} @ {r['price']} "
                     f"止损 {stop} 档位 {profile}")
         await self._push_position()
         return order
 
     # ── 价格入口（止盈止损） ────────────────────────────────────
     async def on_price(self, price: float):
-        pos = self.state.position
+        pos = self.store.position
         if not pos or pos.qty <= 0 or not price:
             return
         act = position.check(pos, price, self.rules_of(pos))
@@ -157,7 +164,7 @@ class Executor:
             return
         async with self._lock:
             # 抢到锁后重新确认，避免与 on_signal 的平仓重复执行
-            pos = self.state.position
+            pos = self.store.position
             if not pos or pos.qty <= 0:
                 return
             act = position.check(pos, price, self.rules_of(pos))
@@ -197,14 +204,14 @@ class Executor:
     def _finalize(self, pos, price: float, reason: str):
         """仓位归零后的统一收尾：落进历史、清空当前持仓。"""
         logger.info(f"[持仓结束] {pos.symbol} {reason}，本笔已实现 {pos.realized:+.4f} USDT")
-        self.state.closed.append(pos.to_dict(price))
-        self.state.closed = self.state.closed[-50:]
-        self.state.position = None
+        self.store.closed.append({**pos.to_dict(price), "sym": self.store.symbol})
+        self.store.closed = self.store.closed[-50:]
+        self.store.position = None
 
     async def _close(self, pos, reason: str, price: float | None = None):
         if not pos or pos.qty <= 0:
             return
-        r = await self._reduce(pos, pos.qty, price or self.state.ticker.last, "平仓")
+        r = await self._reduce(pos, pos.qty, price or self.store.ticker.last, "平仓")
         if not r.get("ok"):
             logger.warning(f"[平仓失败] {r.get('error')} — 请到交易所手动处理")
             await self._record(r, {"kind": "close", "tf": pos.tf, "reason": reason})
@@ -225,12 +232,12 @@ class Executor:
             order_type="market", reduce_only=True,
             client_oid=f"c{int(time.time()*1000)}",
             sim=self.cfg.paper,
-            ref_price=price or self.state.ticker.last,
+            ref_price=price or self.store.ticker.last,
         )
 
     # ── 超趋线更新 → 移动止损 ───────────────────────────────────
     async def on_st_line(self, tf: str, line: float | None):
-        pos = self.state.position
+        pos = self.store.position
         if not pos or pos.qty <= 0 or pos.tf != tf or line is None:
             return
         # 已保本的仓位不再下调止损（trail 内部只朝有利方向移，这里是双保险）。
@@ -240,7 +247,7 @@ class Executor:
 
     async def close_manual(self, reason: str = "手动平仓") -> dict:
         async with self._lock:
-            pos = self.state.position
+            pos = self.store.position
             if not pos or pos.qty <= 0:
                 return {"ok": False, "error": "当前无持仓"}
             await self._close(pos, reason)

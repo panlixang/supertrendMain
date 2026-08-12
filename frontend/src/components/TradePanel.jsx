@@ -21,14 +21,22 @@ export default function TradePanel() {
   const rules = allRules?.normal;
   const quick = allRules?.quick;
   const orders = useStore((s) => s.orders);
-  const rawPos = useStore((s) => s.position);
   const closed = useStore((s) => s.closed);
   const tf = useStore((s) => s.tf);
-  const last = useStore((s) => s.ticker?.last);
+  const positions = useStore((s) => s.positions);
+  const tickers = useStore((s) => s.tickers);
+  const symbolCfgs = useStore((s) => s.symbolCfgs);
+  const setSymbolCfgs = useStore((s) => s.setSymbolCfgs);
+  const maxSymbols = useStore((s) => s.maxSymbols);
 
-  // 后端只在仓位变动时推 position，浮动盈亏要跟着 ticker 秒级更新，
-  // 所以这里用最新价本地重算，避免面板上的浮盈是几分钟前的
-  const pos = rawPos && last ? withLivePnl(rawPos, last) : rawPos;
+  // 后端只在仓位变动时推 position，浮动盈亏要跟着各品种 ticker 秒级更新，
+  // 所以这里用「该品种自己的最新价」本地重算 —— 千万不能拿别的品种的价来算
+  const posList = Object.entries(positions)
+    .map(([sym, p]) => {
+      const t = tickers[sym]?.last;
+      return [sym, p && t ? withLivePnl(p, t) : p];
+    })
+    .filter(([, p]) => p && p.qty > 0);
 
   const [amount, setAmount] = useState(10);
   const [offset, setOffset] = useState(0.05);
@@ -38,7 +46,10 @@ export default function TradePanel() {
   // 弱档（快进快出）规则的本地输入
   const [qTp, setQTp] = useState(0.8);
   const [qSl, setQSl] = useState(1);
-  const [weakMin, setWeakMin] = useState(0.12);
+  // ER 阈值参数
+  const [erHide, setErHide] = useState(0.10);
+  const [erWeakMin, setErWeakMin] = useState(0.12);
+  const [erMin, setErMin] = useState(0.15);
   const [msg, setMsg] = useState('');
   const [ping, setPing] = useState(null);
   const [regime, setRegime] = useState(null);
@@ -48,8 +59,10 @@ export default function TradePanel() {
     if (!cfg) return;
     setAmount(cfg.amount_usdt);
     setOffset(cfg.price_offset);
-    if (cfg.er_weak_min != null) setWeakMin(cfg.er_weak_min);
-  }, [cfg?.amount_usdt, cfg?.price_offset, cfg?.er_weak_min]);
+    if (cfg.er_hide_below != null) setErHide(cfg.er_hide_below);
+    if (cfg.er_weak_min != null) setErWeakMin(cfg.er_weak_min);
+    if (cfg.er_min != null) setErMin(cfg.er_min);
+  }, [cfg?.amount_usdt, cfg?.price_offset, cfg?.er_hide_below, cfg?.er_weak_min, cfg?.er_min]);
 
   useEffect(() => {
     if (!rules) return;
@@ -124,12 +137,40 @@ export default function TradePanel() {
     } catch { flash('网络错误'); }
   }
 
-  async function closeNow() {
-    if (!window.confirm('确认市价平掉当前全部持仓？')) return;
+  async function closeNow(sym) {
+    if (!window.confirm(`确认市价平掉 ${sym} 的全部持仓？`)) return;
     try {
-      const r = await fetch(`${API}/api/trade/close`, { method: 'POST' });
+      const r = await fetch(`${API}/api/trade/close`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: sym }),
+      });
       const d = await r.json();
-      flash(d.ok ? '已平仓' : d.error);
+      flash(d.ok ? `${sym} 已平仓` : d.error);
+    } catch { flash('网络错误'); }
+  }
+
+  // ── 品种列表操作 ──
+  async function patchSymbol(sym, body, note) {
+    try {
+      const r = await fetch(`${API}/api/trade/symbols`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: sym, ...body }),
+      });
+      const d = await r.json();
+      if (d.ok) { setSymbolCfgs(d.symbols); flash(note || '已保存'); }
+      else flash(d.error || '保存失败');
+      return d.ok;
+    } catch { flash('网络错误'); return false; }
+  }
+
+  async function removeSymbol(sym) {
+    if (!window.confirm(`确认把 ${sym} 移出交易列表？`)) return;
+    try {
+      const r = await fetch(`${API}/api/trade/symbols/${encodeURIComponent(sym)}`,
+                            { method: 'DELETE' });
+      const d = await r.json();
+      if (d.ok) { setSymbolCfgs(d.symbols); flash(`${sym} 已移除`); }
+      else flash(d.error || '移除失败');
     } catch { flash('网络错误'); }
   }
 
@@ -169,13 +210,17 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
         </div>
       )}
 
-      {/* ── 当前持仓 ── */}
-      {pos && pos.qty > 0 && (
-        <div style={{ ...sty.card, borderColor: pos.side === 'long' ? '#00c9a7' : '#c2185b' }}>
+      {/* ── 当前持仓（全品种） ── */}
+      {posList.map(([sym, pos]) => (
+        <div key={sym}
+             style={{ ...sty.card, borderColor: pos.side === 'long' ? '#00c9a7' : '#c2185b' }}>
           <div style={sty.rowBetween}>
             <span style={{ fontSize: 13, fontWeight: 800,
                            color: pos.side === 'long' ? '#00c9a7' : '#e05263' }}>
               {pos.side === 'long' ? '▲ 持多' : '▼ 持空'}
+              <span style={{ fontSize: 10, color: '#c8ccd4', marginLeft: 6, fontWeight: 700 }}>
+                {sym}
+              </span>
               <span style={{ fontSize: 10, color: '#8b93a0', marginLeft: 6, fontWeight: 400 }}>
                 {pos.tf} · {pos.leverage}x
                 {pos.profile === 'quick' && (
@@ -214,11 +259,12 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
               ))}
             </div>
           )}
-          <button onClick={closeNow} style={{ ...sty.btn, borderColor: '#c2185b', color: '#e05263' }}>
-            市价全平
+          <button onClick={() => closeNow(sym)}
+                  style={{ ...sty.btn, borderColor: '#c2185b', color: '#e05263' }}>
+            市价全平 {sym}
           </button>
         </div>
-      )}
+      ))}
 
       {/* ── 总开关 ── */}
       <div style={{ ...sty.card, borderColor: cfg.enabled ? (live ? '#c2185b' : '#00c9a7') : '#262626' }}>
@@ -262,14 +308,32 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
         </div>
         {confirmLive && (
           <div style={{ fontSize: 10, color: '#e05263', lineHeight: 1.7 }}>
-            实盘每次触发都用真实资金。确认前核对：保证金 {amount}U × {cfg.leverage}x
-            = 名义 {(amount * cfg.leverage).toFixed(0)}U、允许周期、等级门槛。
+            实盘每次触发都用真实资金。确认前逐个核对下方「交易品种」里
+            各品种的保证金 × 杠杆、允许周期和品种开关。
           </div>
         )}
       </div>
 
-      {/* ── 下单参数 ── */}
-      <Section title="下单参数">
+      {/* ── 交易品种（多品种并行） ── */}
+      <Section title={`交易品种（${symbolCfgs.length}/${maxSymbols}）`}>
+        <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7 }}>
+          每个品种独立设置保证金 / 杠杆 / 允许周期 / 指标参数，独立开关；
+          闸门阈值与止盈止损规则全局共用。品种开关 × 上方总开关同时打开才会下单。
+        </div>
+        {symbolCfgs.map((c) => (
+          <SymbolRow key={c.symbol} c={c} swap={swap}
+                     last={tickers[c.symbol]?.last ?? c.last}
+                     hasPos={!!positions[c.symbol]}
+                     onPatch={(body, note) => patchSymbol(c.symbol, body, note)}
+                     onRemove={() => removeSymbol(c.symbol)} />
+        ))}
+        <AddSymbol disabled={symbolCfgs.length >= maxSymbols}
+                   max={maxSymbols}
+                   onAdd={(sym) => patchSymbol(sym, {}, `${sym} 已加入，正在拉历史K线…`)} />
+      </Section>
+
+      {/* ── 下单参数（全局默认） ── */}
+      <Section title="下单参数（新品种默认值）">
         <Row label="交易品类" hint={swap ? '永续合约，可做多做空' : '现货，只能做多'}>
           <div style={{ display: 'flex', gap: 3 }}>
             {[['SWAP', '合约'], ['SPOT', '现货']].map(([v, l]) => (
@@ -428,11 +492,11 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
                         display: 'flex', flexDirection: 'column', gap: 6 }}>
             <Row label="弱档下界 ER" hint={`低于此值仍只提醒；上界为标准线 ${cfg.er_min}`}>
               <div style={{ display: 'flex', gap: 4 }}>
-                <input type="number" min={0} max={1} step={0.01} value={weakMin}
-                       onChange={(e) => setWeakMin(+e.target.value)} style={sty.input} />
-                <button onClick={() => patch({ er_weak_min: weakMin }, `弱档下界改为 ${weakMin}`)}
-                        disabled={weakMin === cfg.er_weak_min}
-                        style={{ ...sty.smallBtn, opacity: weakMin === cfg.er_weak_min ? 0.3 : 1 }}>改</button>
+                <input type="number" min={0} max={1} step={0.01} value={erWeakMin}
+                       onChange={(e) => setErWeakMin(+e.target.value)} style={sty.input} />
+                <button onClick={() => patch({ er_weak_min: erWeakMin }, `弱档下界改为 ${erWeakMin}`)}
+                        disabled={erWeakMin === cfg.er_weak_min}
+                        style={{ ...sty.smallBtn, opacity: erWeakMin === cfg.er_weak_min ? 0.3 : 1 }}>改</button>
               </div>
             </Row>
             <Row label="止盈 %" hint={swap ? `全平。${cfg.leverage}x 下 = 保证金 ${(qTp * cfg.leverage).toFixed(1)}%` : '价格幅度，触发即全平'}>
@@ -501,17 +565,39 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             </span>
           </div>
           <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7, marginTop: 4 }}>
-            效率比 ER = 净位移 / 路径长度。ER &lt; {cfg.er_weak_min ?? cfg.er_min} 判为震荡
-            （实测信号亏损率约 <b style={{ color: '#f5a623' }}>80%</b>，只提醒不挂单）；
-            {cfg.er_weak_min != null && (
-              <>
-                {cfg.er_weak_min}~{cfg.er_min} 为弱档
-                {cfg.quick_enabled ? '（快进快出下单）' : '（未开启，仅提醒）'}；
-              </>
-            )}
-            ≥ {cfg.er_min} 走标准档。
+            效率比 ER = 净位移 / 路径长度。ER &lt; {cfg.er_hide_below ?? '?'} 完全静默不显；
+            &lt; {cfg.er_weak_min ?? '?'} 震荡市不挂单；{cfg.er_weak_min}~{cfg.er_min} 弱档
+            {cfg.quick_enabled ? '（快进快出）' : '（未开启）'}；≥ {cfg.er_min} 标准档。
           </div>
         </div>
+
+        <Row label="ER 显示阈值" hint="ER 低于此值的信号静默（不弹窗、不提醒、不显示）">
+          <div style={{ display: 'flex', gap: 4 }}>
+            <input type="number" min={0} max={1} step={0.01} value={erHide}
+                   onChange={(e) => setErHide(+e.target.value)} style={sty.input} />
+            <button onClick={() => patch({ er_hide_below: erHide }, `ER 显示阈值改为 ${erHide}`)}
+                    disabled={erHide === cfg.er_hide_below}
+                    style={{ ...sty.smallBtn, opacity: erHide === cfg.er_hide_below ? 0.3 : 1 }}>改</button>
+          </div>
+        </Row>
+        <Row label="ER 弱档下界" hint={`ER ∈ [${erWeakMin}, ${erMin}) 的信号走「快进快出」规则`}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <input type="number" min={0} max={1} step={0.01} value={erWeakMin}
+                   onChange={(e) => setErWeakMin(+e.target.value)} style={sty.input} />
+            <button onClick={() => patch({ er_weak_min: erWeakMin }, `ER 弱档下界改为 ${erWeakMin}`)}
+                    disabled={erWeakMin === cfg.er_weak_min}
+                    style={{ ...sty.smallBtn, opacity: erWeakMin === cfg.er_weak_min ? 0.3 : 1 }}>改</button>
+          </div>
+        </Row>
+        <Row label="ER 标准档下界" hint={`ER ≥ 此值走「吃波段」规则，< 此值需弱档开关才能下单`}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <input type="number" min={0} max={1} step={0.01} value={erMin}
+                   onChange={(e) => setErMin(+e.target.value)} style={sty.input} />
+            <button onClick={() => patch({ er_min: erMin }, `ER 标准档下界改为 ${erMin}`)}
+                    disabled={erMin === cfg.er_min}
+                    style={{ ...sty.smallBtn, opacity: erMin === cfg.er_min ? 0.3 : 1 }}>改</button>
+          </div>
+        </Row>
 
         <Row label="允许等级" hint="C 级为逆 Bias 信号">
           <div style={{ display: 'flex', gap: 3 }}>
@@ -533,23 +619,8 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             ))}
           </div>
         </Row>
-        <div style={{ padding: '4px 0' }}>
-          <div style={{ fontSize: 11, color: '#c8ccd4' }}>允许周期</div>
-          <div style={{ fontSize: 8.5, color: '#4a5058', marginBottom: 5 }}>
-            小周期噪声大，默认只做 15m 以上
-          </div>
-          <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-            {ALL_TFS.map((t) => {
-              const on = cfg.allow_tfs.includes(t);
-              return (
-                <button key={t} onClick={() => patch({
-                  allow_tfs: on ? cfg.allow_tfs.filter((x) => x !== t) : [...cfg.allow_tfs, t],
-                })} style={{ ...sty.chip, opacity: on ? 1 : 0.25, fontSize: 9.5, padding: '2px 6px' }}>
-                  {t}
-                </button>
-              );
-            })}
-          </div>
+        <div style={{ fontSize: 9, color: '#3f4650', lineHeight: 1.6, padding: '2px 0' }}>
+          允许周期已移到「交易品种」里按品种单独设置。
         </div>
       </Section>
 
@@ -590,6 +661,9 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
               <span style={{ fontSize: 10, fontWeight: 800, color: KIND_COLOR[o.kind] || '#8b93a0' }}>
                 {KIND_LABEL[o.kind] || o.kind || '—'}
               </span>
+              {(o.sym || o.symbol) && (
+                <span style={{ ...sty.tag, color: '#c8ccd4' }}>{o.sym || o.symbol}</span>
+              )}
               <span style={sty.tag}>{o.tf}</span>
               {o.grade && <span style={sty.tag}>{o.grade}</span>}
               {o.leverage > 1 && <span style={sty.tag}>{o.leverage}x</span>}
@@ -622,6 +696,9 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
                                color: c.side === 'long' ? '#00c9a7' : '#e05263' }}>
                   {c.side === 'long' ? '多' : '空'}
                 </span>
+                {(c.sym || c.symbol) && (
+                  <span style={{ ...sty.tag, color: '#c8ccd4' }}>{c.sym || c.symbol}</span>
+                )}
                 <span style={sty.tag}>{c.tf}</span>
                 <span style={sty.tag}>{c.leverage}x</span>
                 <span style={{ flex: 1 }} />
@@ -693,6 +770,138 @@ function Mini({ k, v, sub, color }) {
       <div style={{ fontSize: 8.5, color: '#4a5058' }}>{k}</div>
       <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: color || '#e9ecef' }}>{v}</div>
       {sub && <div style={{ fontSize: 8, color: '#4a5058' }}>{sub}</div>}
+    </div>
+  );
+}
+
+/** 交易品种行：一行摘要 + 展开后编辑保证金/杠杆/周期/指标参数。 */
+function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
+  const [open, setOpen] = useState(false);
+  const [margin, setMargin] = useState(c.margin_usdt);
+  const [periods, setPeriods] = useState(c.params?.periods ?? 15);
+  const [mult, setMult] = useState(c.params?.multiplier ?? 9.1);
+
+  useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
+  useEffect(() => {
+    setPeriods(c.params?.periods ?? 15);
+    setMult(c.params?.multiplier ?? 9.1);
+  }, [c.params?.periods, c.params?.multiplier]);
+
+  return (
+    <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
+                  borderColor: c.enabled ? '#00c9a755' : '#262626' }}>
+      <div style={sty.rowBetween}>
+        <button onClick={() => setOpen(!open)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                         display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ fontSize: 9, color: '#5a6270' }}>{open ? '▾' : '▸'}</span>
+          <span style={{ fontSize: 11.5, fontWeight: 800, color: '#e9ecef' }}>{c.symbol}</span>
+          {hasPos && <span style={{ ...sty.tag, color: '#f5a623' }}>持仓中</span>}
+          {!c.history_loaded && <span style={{ ...sty.tag, color: '#4e8aff' }}>加载中…</span>}
+        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 10, color: '#8b93a0', fontFamily: 'var(--font-mono)' }}>
+            {last ? fmt.price(last) : '—'}
+          </span>
+          <Toggle on={!!c.enabled}
+                  onClick={() => onPatch({ enabled: !c.enabled },
+                    c.enabled ? `${c.symbol} 已停用` : `${c.symbol} 已启用`)} />
+        </div>
+      </div>
+      <div style={{ fontSize: 9, color: '#4a5058' }}>
+        {c.margin_usdt}U × {c.leverage}x　·　{(c.allow_tfs || []).join('/')}　·
+        参数 {c.params?.periods}×{c.params?.multiplier}
+      </div>
+
+      {open && (
+        <div style={{ borderTop: '1px solid #1e1e1e', paddingTop: 6,
+                      display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Row label="每笔保证金" hint={swap ? `× ${c.leverage}x = 名义 ${(margin * c.leverage).toFixed(0)}U` : 'USDT'}>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input type="number" min={1} step={1} value={margin}
+                     onChange={(e) => setMargin(+e.target.value)} style={sty.input} />
+              <button onClick={() => onPatch({ margin_usdt: margin }, `${c.symbol} 保证金改为 ${margin}U`)}
+                      disabled={margin === c.margin_usdt}
+                      style={{ ...sty.smallBtn, opacity: margin === c.margin_usdt ? 0.3 : 1 }}>改</button>
+            </div>
+          </Row>
+          {swap && (
+            <Row label="杠杆倍数">
+              <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {LEVERAGES.map((l) => (
+                  <button key={l} onClick={() => onPatch({ leverage: l }, `${c.symbol} 杠杆改为 ${l}x`)}
+                          style={{ ...sty.chip, opacity: c.leverage === l ? 1 : 0.3 }}>{l}x</button>
+                ))}
+              </div>
+            </Row>
+          )}
+          <div style={{ padding: '2px 0' }}>
+            <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>允许周期</div>
+            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+              {ALL_TFS.map((t) => {
+                const on = (c.allow_tfs || []).includes(t);
+                return (
+                  <button key={t} onClick={() => onPatch({
+                    allow_tfs: on ? c.allow_tfs.filter((x) => x !== t) : [...c.allow_tfs, t],
+                  })} style={{ ...sty.chip, opacity: on ? 1 : 0.25, fontSize: 9.5, padding: '2px 6px' }}>
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <Row label="指标参数" hint="ATR 周期 × 倍数，换品种通常要用「参数寻优」重调">
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input type="number" min={1} step={1} value={periods}
+                     onChange={(e) => setPeriods(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 10, color: '#4a5058' }}>×</span>
+              <input type="number" min={0.1} step={0.1} value={mult}
+                     onChange={(e) => setMult(+e.target.value)}
+                     style={{ ...sty.input, width: 48 }} />
+              <button onClick={() => onPatch({ periods, multiplier: mult },
+                                             `${c.symbol} 参数改为 ${periods}×${mult}`)}
+                      disabled={periods === c.params?.periods && mult === c.params?.multiplier}
+                      style={{ ...sty.smallBtn,
+                               opacity: (periods === c.params?.periods && mult === c.params?.multiplier) ? 0.3 : 1 }}>
+                改
+              </button>
+            </div>
+          </Row>
+          <button onClick={onRemove} disabled={hasPos}
+                  style={{ ...sty.smallBtn, alignSelf: 'flex-end',
+                           borderColor: '#c2185b55', color: hasPos ? '#4a5058' : '#e05263' }}>
+            {hasPos ? '有持仓，不可移除' : '移出交易列表'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 添加交易品种：输入 instId 提交，后端校验合法性并后台拉历史。 */
+function AddSymbol({ disabled, max, onAdd }) {
+  const [val, setVal] = useState('');
+  const submit = () => {
+    const sym = val.trim().toUpperCase();
+    if (!sym) return;
+    onAdd(sym);
+    setVal('');
+  };
+  if (disabled) {
+    return <div style={{ fontSize: 9, color: '#4a5058' }}>已达上限（{max} 个品种）</div>;
+  }
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      <input value={val} placeholder="如 SOL-USDT / ETH-USDT-SWAP"
+             onChange={(e) => setVal(e.target.value)}
+             onKeyDown={(e) => e.key === 'Enter' && submit()}
+             style={{ ...sty.input, width: '100%', flex: 1 }} />
+      <button onClick={submit} disabled={!val.trim()}
+              style={{ ...sty.smallBtn, borderColor: '#00c9a755', color: '#00c9a7',
+                       opacity: val.trim() ? 1 : 0.3 }}>
+        添加
+      </button>
     </div>
   );
 }

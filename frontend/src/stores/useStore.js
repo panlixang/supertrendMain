@@ -53,7 +53,10 @@ export const useStore = create((set) => ({
   setSignals: (list) => set({ signals: list || [] }),
   addSignal: (sig) =>
     set((s) => {
-      const rest = s.signals.filter((x) => !(x.tf === sig.tf && x.ts === sig.ts));
+      // 去重键带 symbol：不同品种同周期同时刻收盘的信号不能互相覆盖
+      const rest = s.signals.filter(
+        (x) => !(x.tf === sig.tf && x.ts === sig.ts && x.symbol === sig.symbol),
+      );
       return { signals: [...rest, sig].sort((a, b) => a.ts - b.ts).slice(-300) };
     }),
 
@@ -75,6 +78,27 @@ export const useStore = create((set) => ({
 
   position: null,
   setPosition: (p) => set({ position: p }),
+
+  // ── 多品种 ──
+  // {symbol: ticker} 所有交易品种的最新价（持仓卡算浮盈用）
+  tickers: {},
+  setTickerFor: (sym, t) => set((s) => ({ tickers: { ...s.tickers, [sym]: t } })),
+  setTickers: (m) => set({ tickers: m || {} }),
+  // {symbol: position} 所有品种的当前持仓
+  positions: {},
+  setPositionFor: (sym, p) =>
+    set((s) => {
+      const next = { ...s.positions };
+      if (p) next[sym] = p;
+      else delete next[sym];
+      return { positions: next };
+    }),
+  setPositions: (m) => set({ positions: m || {} }),
+  // 交易品种配置列表 [{symbol, enabled, margin_usdt, leverage, allow_tfs, params, ...}]
+  symbolCfgs: [],
+  setSymbolCfgs: (list) => set({ symbolCfgs: list || [] }),
+  maxSymbols: 5,
+  setMaxSymbols: (n) => set({ maxSymbols: n || 5 }),
 
   closed: [],
   setClosed: (list) => set({ closed: list || [] }),
