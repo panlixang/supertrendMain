@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 import json
 import logging
 import os
+from typing import Optional
 
 from fastapi import WebSocket
 
@@ -102,8 +103,8 @@ class SymbolTradeConfig:
 class SymbolStore:
     """一个品种的全部运行时数据。cfg=None 表示「仅看图」，结构上不可能下单。"""
 
-    def __init__(self, symbol: str, cfg: SymbolTradeConfig | None = None,
-                 params: Params | None = None):
+    def __init__(self, symbol: str, cfg: Optional[SymbolTradeConfig] = None,
+                 params: Optional[Params] = None):
         self.symbol = symbol                 # 现货形式（BTC-USDT），全程作为字典键
         self.cfg = cfg
         self.params = params or Params()
@@ -152,7 +153,7 @@ class AppState:
         self.orders: list[dict] = []
         # 多品种：交易 store + 仅看图 store + 每品种一个执行器
         self.stores: dict[str, SymbolStore] = {}
-        self.view_store: SymbolStore | None = None
+        self.view_store: Optional[SymbolStore] = None
         self.executors: dict = {}            # {symbol: Executor}，main/router 装配
         self.feed = None                     # 运行时由 main 注入
         self._load_settings()
@@ -234,7 +235,7 @@ class AppState:
                 dead.add(ws)
         self.clients -= dead
 
-    def rules_for(self, profile: str | None):
+    def rules_for(self, profile: Optional[str]):
         """取该档的出场规则。未知档位一律退回标准档 —— 宁可用保守的老规则，
         也不要因为拼错一个字符串就跑出一套没人预期的止盈止损。"""
         return self.exit_rules_quick if profile == "quick" else self.exit_rules

@@ -394,8 +394,16 @@ class OKXFeed:
                     for s in st_signals(candles, st, tf)[-25:]:
                         s["grade"] = strategy.grade(s, verdict)
                         s["symbol"] = st_store.symbol
-                        # 重新评估信号，获取 hidden 字段（ER 过低的静默）
-                        gate = regime.evaluate(s, candles, cfg)
+                        # 用信号出现时刻的K线切片算ER，而非当前最新K线
+                        sig_idx = next(
+                            (j for j, c in enumerate(candles) if c["ts"] == s["ts"]),
+                            None,
+                        )
+                        if sig_idx is not None and sig_idx + 1 >= 61:
+                            candles_at_signal = candles[:sig_idx + 1]
+                        else:
+                            candles_at_signal = candles
+                        gate = regime.evaluate(s, candles_at_signal, cfg)
                         s["hidden"] = gate.get("hidden", False)
                         out.append(s)
                 except Exception as e:
