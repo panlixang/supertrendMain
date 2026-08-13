@@ -91,6 +91,9 @@ export function useWebSocket() {
           break;
         case 'trade_config':
           s.setTradeConfig(msg.data);
+          // ER 参数可能改变了 hidden 字段，重新拉取各周期指标让图表刷新
+          s.clearIndicators();
+          ALL_TFS.forEach((tf) => fetchIndicators(tf, true));
           break;
         case 'exit_rules':
           s.setExitRules(msg.data);

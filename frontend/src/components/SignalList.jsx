@@ -13,7 +13,7 @@ export default function SignalList() {
   const focus = useStore((s) => s.focusSignal);
   const focusTs = useStore((s) => s.focusTs);
 
-  const list = (onlyCur ? all.filter((s) => s.tf === tf) : all).slice().reverse();
+  const list = (onlyCur ? all.filter((s) => s.tf === tf && !s.hidden) : all.filter((s) => !s.hidden)).slice().reverse();
 
   return (
     <div style={sty.wrap}>

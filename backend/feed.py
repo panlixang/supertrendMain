@@ -383,6 +383,7 @@ class OKXFeed:
                 verdict = "mixed"
 
             out = []
+            cfg = self.state.cfg_for(st_store.symbol)   # 用当前 ER 阈值
             for tf, candles in all_c.items():
                 if len(candles) < p["periods"] + 2:
                     continue
@@ -393,6 +394,9 @@ class OKXFeed:
                     for s in st_signals(candles, st, tf)[-25:]:
                         s["grade"] = strategy.grade(s, verdict)
                         s["symbol"] = st_store.symbol
+                        # 重新评估信号，获取 hidden 字段（ER 过低的静默）
+                        gate = regime.evaluate(s, candles, cfg)
+                        s["hidden"] = gate.get("hidden", False)
                         out.append(s)
                 except Exception as e:
                     logger.warning(f"[{st_store.symbol} {tf}] 历史信号扫描失败: {e}")

@@ -45,7 +45,20 @@ async def get_candles(tf: str = "15m"):
 async def get_indicators(tf: str = "15m"):
     """单周期 SuperTrend 全量：轨道 / 趋势 / 信号 / 状态。"""
     candles = state.candles_by_tf(tf)
-    return compute(candles, tf, vars(state.params)) if candles else {}
+    if not candles:
+        return {}
+    result = compute(candles, tf, vars(state.params))
+    if result and result.get("signals"):
+        # 把 state.signals 里的 hidden 字段注入到 compute 的信号里
+        # state.signals 由 rescan_signals() 维护，含当前 ER 阈值评估结果
+        hidden_set = {
+            (s["tf"], s["ts"])
+            for s in state.signals
+            if s.get("hidden")
+        }
+        for sig in result["signals"]:
+            sig["hidden"] = (sig.get("tf", tf), sig["ts"]) in hidden_set
+    return result
 
 
 @router.get("/api/overview")
@@ -373,9 +386,10 @@ class TradeCfgIn(BaseModel):
     margin_mode:  Optional[str]   = None
     amount_usdt:  Optional[float] = None
     price_offset: Optional[float] = None
+    er_hide_below: Optional[float] = None
     er_min:       Optional[float] = None
     er_trend:     Optional[float] = None
-    er_weak_min:   Optional[float] = None
+    er_weak_min:  Optional[float] = None
     quick_enabled: Optional[bool]  = None
     allow_grades: Optional[list]  = None
     min_score:    Optional[int]   = None
@@ -413,6 +427,7 @@ async def set_trade_config(body: TradeCfgIn):
 
     if body.amount_usdt  is not None: cfg.amount_usdt  = max(1.0, body.amount_usdt)
     if body.price_offset is not None: cfg.price_offset = max(0.0, min(5.0, body.price_offset))
+    if body.er_hide_below is not None: cfg.er_hide_below = max(0.0, min(1.0, body.er_hide_below))
     if body.er_trend     is not None: cfg.er_trend     = max(0.0, min(1.0, body.er_trend))
     if body.allow_grades is not None: cfg.allow_grades = [g.upper() for g in body.allow_grades if g]
     if body.min_score    is not None: cfg.min_score    = max(0, min(3, body.min_score))
@@ -431,6 +446,10 @@ async def set_trade_config(body: TradeCfgIn):
 
     await state.broadcast({"type": "trade_config", "data": vars(cfg)})
     state.save_settings()
+
+    # ER 参数改变后重扫历史信号，更新 hidden 字段
+    state.feed.rescan_signals()
+
     return {"ok": True, "config": vars(cfg)}
 
 

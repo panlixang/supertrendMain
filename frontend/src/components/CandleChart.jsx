@@ -233,9 +233,11 @@ export default function CandleChart() {
     }
 
     // plotshape：Buy 标签打在 up 上，Sell 打在 dn 上
+    // 过滤掉 hidden=true 的静默信号（ER 过低）
     if (opts.showSignals) {
       r.candle.setMarkers(
         (ind.signals || [])
+          .filter(s => !s.hidden)    // 隐藏 ER 过低的信号
           .map((s) => ({
             time: toT(s.ts),
             position: s.type === 'buy' ? 'belowBar' : 'aboveBar',
