@@ -456,6 +456,7 @@ async def set_trade_config(body: TradeCfgIn):
 # ─── 止盈止损规则 ────────────────────────────────────────────────
 
 class ExitRulesIn(BaseModel):
+    symbol:           Optional[str]  = None   # 品种独立时指定品种，None=改全局默认
     profile:          str = "normal"    # normal 标准档 / quick 快进快出档
     enabled:          Optional[bool]  = None
     tp1_pct:          Optional[float] = None
@@ -466,20 +467,35 @@ class ExitRulesIn(BaseModel):
     trail_with_st:    Optional[bool]  = None
 
 
-def _all_rules() -> dict:
+def _all_rules(symbol: Optional[str] = None) -> dict:
+    """symbol 指定则返回该品种的规则，否则返回全局默认规则。"""
+    if symbol:
+        st = state.stores.get(symbol)
+        if st:
+            return {"normal": vars(st.exit_rules), "quick": vars(st.exit_rules_quick)}
     return {"normal": vars(state.exit_rules), "quick": vars(state.exit_rules_quick)}
 
 
 @router.get("/api/trade/exit-rules")
-async def get_exit_rules():
-    return _all_rules()
+async def get_exit_rules(symbol: Optional[str] = None):
+    return _all_rules(symbol)
 
 
 @router.post("/api/trade/exit-rules")
 async def set_exit_rules(body: ExitRulesIn):
     if body.profile not in ("normal", "quick"):
         return {"ok": False, "error": "profile 仅支持 normal（标准档）/ quick（快进快出档）"}
-    r = state.rules_for(body.profile)
+
+    # 品种独立止盈止损
+    if body.symbol:
+        st = state.stores.get(body.symbol)
+        if not st:
+            return {"ok": False, "error": f"品种 {body.symbol} 不存在"}
+        r = st.exit_rules_quick if body.profile == "quick" else st.exit_rules
+    else:
+        # 全局默认规则
+        r = state.rules_for(body.profile)
+
     if body.enabled          is not None: r.enabled = body.enabled
     if body.tp1_pct          is not None: r.tp1_pct = max(0.1, min(100.0, body.tp1_pct))
     if body.tp1_ratio        is not None: r.tp1_ratio = max(1.0, min(100.0, body.tp1_ratio))
@@ -491,17 +507,21 @@ async def set_exit_rules(body: ExitRulesIn):
     if body.sl_pct           is not None: r.sl_pct = max(0.1, min(50.0, body.sl_pct))
     if body.trail_with_st    is not None: r.trail_with_st = body.trail_with_st
 
-    await state.broadcast({"type": "exit_rules", "data": _all_rules()})
+    await state.broadcast({"type": "exit_rules", "data": _all_rules(body.symbol)})
     state.save_settings()
-    return {"ok": True, "rules": _all_rules()}
+    return {"ok": True, "rules": _all_rules(body.symbol)}
 
 
 # ─── 交易品种管理（多品种） ──────────────────────────────────────
 
 def _symbol_row(st) -> dict:
     return {
-        **vars(st.cfg), "params": vars(st.params),
-        "last": st.ticker.last, "history_loaded": st.history_loaded,
+        **vars(st.cfg),
+        "params": vars(st.params),
+        "exit_rules": vars(st.exit_rules),
+        "exit_rules_quick": vars(st.exit_rules_quick),
+        "last": st.ticker.last,
+        "history_loaded": st.history_loaded,
         "position": st.position.to_dict(st.ticker.last) if st.position else None,
     }
 
@@ -521,6 +541,16 @@ class SymbolCfgIn(BaseModel):
     margin_usdt: Optional[float] = None
     leverage:    Optional[int]   = None
     allow_tfs:   Optional[list]  = None
+    # ER 闸门品种独立
+    er_hide_below: Optional[float] = None
+    er_weak_min:   Optional[float] = None
+    er_min:        Optional[float] = None
+    er_trend:      Optional[float] = None
+    quick_enabled: Optional[bool]  = None
+    allow_grades:  Optional[list]  = None
+    min_score:     Optional[int]   = None
+    cooldown_sec:  Optional[int]   = None
+    # 指标参数
     periods:     Optional[int]   = None
     multiplier:  Optional[float] = None
 
@@ -580,8 +610,26 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if body.margin_usdt is not None: c.margin_usdt = max(1.0, body.margin_usdt)
     if body.leverage    is not None: c.leverage    = max(1, min(125, body.leverage))
     if body.allow_tfs   is not None: c.allow_tfs   = [t for t in body.allow_tfs if t in TF_CONFIG]
+
+    # ER 闸门品种独立
+    if body.er_hide_below is not None: c.er_hide_below = max(0.0, min(1.0, body.er_hide_below))
+    if body.er_min        is not None: c.er_min        = max(0.0, min(1.0, body.er_min))
+    if body.er_weak_min   is not None: c.er_weak_min   = max(0.0, min(1.0, body.er_weak_min))
+    if body.er_trend      is not None: c.er_trend      = max(0.0, min(1.0, body.er_trend))
+    if body.quick_enabled is not None: c.quick_enabled = body.quick_enabled
+    if body.allow_grades  is not None: c.allow_grades  = [g.upper() for g in body.allow_grades if g]
+    if body.min_score     is not None: c.min_score     = max(0, min(3, body.min_score))
+    if body.cooldown_sec  is not None: c.cooldown_sec  = max(0, body.cooldown_sec)
+
+    # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
     if body.multiplier  is not None: st.params.multiplier = max(0.1, body.multiplier)
+
+    # ER 参数改变后重扫该品种历史信号
+    if any(x is not None for x in [body.er_hide_below, body.er_min, body.er_weak_min,
+                                     body.er_trend, body.allow_grades, body.min_score]):
+        if state.feed:
+            state.feed.rescan_signals(st)
 
     await state.broadcast({"type": "symbols", "data": _symbols_payload()})
     state.save_settings()

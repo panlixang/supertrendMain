@@ -41,12 +41,12 @@ class Executor:
 
     @property
     def rules(self):
-        """标准档规则。只在没有具体持仓上下文时用（如新开仓前的默认值）。"""
-        return self.state.exit_rules
+        """标准档规则，品种独立。"""
+        return self.store.exit_rules
 
     def rules_of(self, pos):
         """该持仓开仓时定下的那档规则。持仓期间不随行情改档。"""
-        return self.state.rules_for(getattr(pos, "profile", "normal"))
+        return self.state.rules_for(getattr(pos, "profile", "normal"), self.store.symbol)
 
     async def _spec_of(self, pos) -> dict:
         """取该持仓对应的合约规格。instId 必须是交易品类对应的形式。"""

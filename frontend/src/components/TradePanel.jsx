@@ -46,10 +46,6 @@ export default function TradePanel() {
   // 弱档（快进快出）规则的本地输入
   const [qTp, setQTp] = useState(0.8);
   const [qSl, setQSl] = useState(1);
-  // ER 阈值参数
-  const [erHide, setErHide] = useState(0.10);
-  const [erWeakMin, setErWeakMin] = useState(0.12);
-  const [erMin, setErMin] = useState(0.15);
   const [msg, setMsg] = useState('');
   const [ping, setPing] = useState(null);
   const [regime, setRegime] = useState(null);
@@ -59,10 +55,7 @@ export default function TradePanel() {
     if (!cfg) return;
     setAmount(cfg.amount_usdt);
     setOffset(cfg.price_offset);
-    if (cfg.er_hide_below != null) setErHide(cfg.er_hide_below);
-    if (cfg.er_weak_min != null) setErWeakMin(cfg.er_weak_min);
-    if (cfg.er_min != null) setErMin(cfg.er_min);
-  }, [cfg?.amount_usdt, cfg?.price_offset, cfg?.er_hide_below, cfg?.er_weak_min, cfg?.er_min]);
+  }, [cfg?.amount_usdt, cfg?.price_offset]);
 
   useEffect(() => {
     if (!rules) return;
@@ -317,8 +310,8 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
       {/* ── 交易品种（多品种并行） ── */}
       <Section title={`交易品种（${symbolCfgs.length}/${maxSymbols}）`}>
         <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7 }}>
-          每个品种独立设置保证金 / 杠杆 / 允许周期 / 指标参数，独立开关；
-          闸门阈值与止盈止损规则全局共用。品种开关 × 上方总开关同时打开才会下单。
+          每个品种独立设置保证金 / 杠杆 / 允许周期 / 指标参数 / ER 阈值 / 止盈止损规则，独立开关；
+          品种开关 × 上方总开关同时打开才会下单。
         </div>
         {symbolCfgs.map((c) => (
           <SymbolRow key={c.symbol} c={c} swap={swap}
@@ -565,39 +558,10 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             </span>
           </div>
           <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7, marginTop: 4 }}>
-            效率比 ER = 净位移 / 路径长度。ER &lt; {cfg.er_hide_below ?? '?'} 完全静默不显；
-            &lt; {cfg.er_weak_min ?? '?'} 震荡市不挂单；{cfg.er_weak_min}~{cfg.er_min} 弱档
-            {cfg.quick_enabled ? '（快进快出）' : '（未开启）'}；≥ {cfg.er_min} 标准档。
+            效率比 ER = 净位移 / 路径长度。图表品种当前 ER 档位以此展示；
+            每个品种独立配置 ER 阈值，在「交易品种」展开编辑。
           </div>
         </div>
-
-        <Row label="ER 显示阈值" hint="ER 低于此值的信号静默（不弹窗、不提醒、不显示）">
-          <div style={{ display: 'flex', gap: 4 }}>
-            <input type="number" min={0} max={1} step={0.01} value={erHide}
-                   onChange={(e) => setErHide(+e.target.value)} style={sty.input} />
-            <button onClick={() => patch({ er_hide_below: erHide }, `ER 显示阈值改为 ${erHide}`)}
-                    disabled={erHide === cfg.er_hide_below}
-                    style={{ ...sty.smallBtn, opacity: erHide === cfg.er_hide_below ? 0.3 : 1 }}>改</button>
-          </div>
-        </Row>
-        <Row label="ER 弱档下界" hint={`ER ∈ [${erWeakMin}, ${erMin}) 的信号走「快进快出」规则`}>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <input type="number" min={0} max={1} step={0.01} value={erWeakMin}
-                   onChange={(e) => setErWeakMin(+e.target.value)} style={sty.input} />
-            <button onClick={() => patch({ er_weak_min: erWeakMin }, `ER 弱档下界改为 ${erWeakMin}`)}
-                    disabled={erWeakMin === cfg.er_weak_min}
-                    style={{ ...sty.smallBtn, opacity: erWeakMin === cfg.er_weak_min ? 0.3 : 1 }}>改</button>
-          </div>
-        </Row>
-        <Row label="ER 标准档下界" hint={`ER ≥ 此值走「吃波段」规则，< 此值需弱档开关才能下单`}>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <input type="number" min={0} max={1} step={0.01} value={erMin}
-                   onChange={(e) => setErMin(+e.target.value)} style={sty.input} />
-            <button onClick={() => patch({ er_min: erMin }, `ER 标准档下界改为 ${erMin}`)}
-                    disabled={erMin === cfg.er_min}
-                    style={{ ...sty.smallBtn, opacity: erMin === cfg.er_min ? 0.3 : 1 }}>改</button>
-          </div>
-        </Row>
 
         <Row label="允许等级" hint="C 级为逆 Bias 信号">
           <div style={{ display: 'flex', gap: 3 }}>
@@ -620,7 +584,7 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
           </div>
         </Row>
         <div style={{ fontSize: 9, color: '#3f4650', lineHeight: 1.6, padding: '2px 0' }}>
-          允许周期已移到「交易品种」里按品种单独设置。
+          ER 阈值、允许周期、止盈止损已移到「交易品种」里按品种单独设置。
         </div>
       </Section>
 
@@ -774,18 +738,57 @@ function Mini({ k, v, sub, color }) {
   );
 }
 
-/** 交易品种行：一行摘要 + 展开后编辑保证金/杠杆/周期/指标参数。 */
+/** 交易品种行：一行摘要 + 展开后编辑保证金/杠杆/周期/指标参数/ER阈值/止盈止损。 */
 function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [open, setOpen] = useState(false);
   const [margin, setMargin] = useState(c.margin_usdt);
   const [periods, setPeriods] = useState(c.params?.periods ?? 15);
   const [mult, setMult] = useState(c.params?.multiplier ?? 9.1);
+  // ER 阈值
+  const [erHide, setErHide] = useState(c.er_hide_below ?? 0.15);
+  const [erWeakMin, setErWeakMin] = useState(c.er_weak_min ?? 0.15);
+  const [erMin, setErMin] = useState(c.er_min ?? 0.2);
+  // 标准档止盈止损
+  const [tp1, setTp1] = useState(c.exit_rules?.tp1_pct ?? 2);
+  const [tpRatio, setTpRatio] = useState(c.exit_rules?.tp1_ratio ?? 70);
+  const [slPct, setSlPct] = useState(c.exit_rules?.sl_pct ?? 2);
+  const [moveSlToEntry, setMoveSlToEntry] = useState(c.exit_rules?.move_sl_to_entry ?? true);
+  const [trailWithSt, setTrailWithSt] = useState(c.exit_rules?.trail_with_st ?? true);
+  // 快档止盈止损
+  const [qTp, setQTp] = useState(c.exit_rules_quick?.tp1_pct ?? 1);
+  const [qTpRatio, setQTpRatio] = useState(c.exit_rules_quick?.tp1_ratio ?? 100);
+  const [qSl, setQSl] = useState(c.exit_rules_quick?.sl_pct ?? 1);
+  const [qMoveSlToEntry, setQMoveSlToEntry] = useState(c.exit_rules_quick?.move_sl_to_entry ?? false);
+  const [qTrailWithSt, setQTrailWithSt] = useState(c.exit_rules_quick?.trail_with_st ?? true);
 
   useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
   useEffect(() => {
     setPeriods(c.params?.periods ?? 15);
     setMult(c.params?.multiplier ?? 9.1);
   }, [c.params?.periods, c.params?.multiplier]);
+  useEffect(() => {
+    setErHide(c.er_hide_below ?? 0.15);
+    setErWeakMin(c.er_weak_min ?? 0.15);
+    setErMin(c.er_min ?? 0.2);
+  }, [c.er_hide_below, c.er_weak_min, c.er_min]);
+  useEffect(() => {
+    if (c.exit_rules) {
+      setTp1(c.exit_rules.tp1_pct ?? 2);
+      setTpRatio(c.exit_rules.tp1_ratio ?? 70);
+      setSlPct(c.exit_rules.sl_pct ?? 2);
+      setMoveSlToEntry(c.exit_rules.move_sl_to_entry ?? true);
+      setTrailWithSt(c.exit_rules.trail_with_st ?? true);
+    }
+  }, [c.exit_rules]);
+  useEffect(() => {
+    if (c.exit_rules_quick) {
+      setQTp(c.exit_rules_quick.tp1_pct ?? 1);
+      setQTpRatio(c.exit_rules_quick.tp1_ratio ?? 100);
+      setQSl(c.exit_rules_quick.sl_pct ?? 1);
+      setQMoveSlToEntry(c.exit_rules_quick.move_sl_to_entry ?? false);
+      setQTrailWithSt(c.exit_rules_quick.trail_with_st ?? true);
+    }
+  }, [c.exit_rules_quick]);
 
   return (
     <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
@@ -859,15 +862,106 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
               <input type="number" min={0.1} step={0.1} value={mult}
                      onChange={(e) => setMult(+e.target.value)}
                      style={{ ...sty.input, width: 48 }} />
-              <button onClick={() => onPatch({ periods, multiplier: mult },
-                                             `${c.symbol} 参数改为 ${periods}×${mult}`)}
-                      disabled={periods === c.params?.periods && mult === c.params?.multiplier}
-                      style={{ ...sty.smallBtn,
-                               opacity: (periods === c.params?.periods && mult === c.params?.multiplier) ? 0.3 : 1 }}>
-                改
-              </button>
             </div>
           </Row>
+          <Row label="ER 阈值" hint="隐藏/弱信号/标准档最低值">
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input type="number" min={0} max={1} step={0.01} value={erHide}
+                     onChange={(e) => setErHide(+e.target.value)}
+                     style={{ ...sty.input, width: 48 }} placeholder="隐藏" />
+              <input type="number" min={0} max={1} step={0.01} value={erWeakMin}
+                     onChange={(e) => setErWeakMin(+e.target.value)}
+                     style={{ ...sty.input, width: 48 }} placeholder="弱档" />
+              <input type="number" min={0} max={1} step={0.01} value={erMin}
+                     onChange={(e) => setErMin(+e.target.value)}
+                     style={{ ...sty.input, width: 48 }} placeholder="标准" />
+            </div>
+          </Row>
+          <div style={{ padding: '2px 0' }}>
+            <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>标准档止盈止损</div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 9, color: '#6a7280' }}>TP1</span>
+              <input type="number" min={0} step={0.1} value={tp1}
+                     onChange={(e) => setTp1(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%×</span>
+              <input type="number" min={0} max={100} step={1} value={tpRatio}
+                     onChange={(e) => setTpRatio(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%　SL</span>
+              <input type="number" min={0} step={0.1} value={slPct}
+                     onChange={(e) => setSlPct(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#c8ccd4', cursor: 'pointer' }}>
+                <input type="checkbox" checked={moveSlToEntry}
+                       onChange={(e) => setMoveSlToEntry(e.target.checked)} />
+                保本
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#c8ccd4', cursor: 'pointer' }}>
+                <input type="checkbox" checked={trailWithSt}
+                       onChange={(e) => setTrailWithSt(e.target.checked)} />
+                跟踪
+              </label>
+            </div>
+          </div>
+          <div style={{ padding: '2px 0' }}>
+            <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>快档止盈止损（弱信号）</div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 9, color: '#6a7280' }}>TP1</span>
+              <input type="number" min={0} step={0.1} value={qTp}
+                     onChange={(e) => setQTp(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%×</span>
+              <input type="number" min={0} max={100} step={1} value={qTpRatio}
+                     onChange={(e) => setQTpRatio(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%　SL</span>
+              <input type="number" min={0} step={0.1} value={qSl}
+                     onChange={(e) => setQSl(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#c8ccd4', cursor: 'pointer' }}>
+                <input type="checkbox" checked={qMoveSlToEntry}
+                       onChange={(e) => setQMoveSlToEntry(e.target.checked)} />
+                保本
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#c8ccd4', cursor: 'pointer' }}>
+                <input type="checkbox" checked={qTrailWithSt}
+                       onChange={(e) => setQTrailWithSt(e.target.checked)} />
+                跟踪
+              </label>
+            </div>
+          </div>
+          <button onClick={() => onPatch({
+                    margin_usdt: margin,
+                    leverage: c.leverage,
+                    params: { periods, multiplier: mult },
+                    er_hide_below: erHide,
+                    er_weak_min: erWeakMin,
+                    er_min: erMin,
+                    exit_rules: {
+                      enabled: true,
+                      tp1_pct: tp1,
+                      tp1_ratio: tpRatio,
+                      move_sl_to_entry: moveSlToEntry,
+                      sl_mode: 'st',
+                      sl_pct: slPct,
+                      trail_with_st: trailWithSt,
+                    },
+                    exit_rules_quick: {
+                      enabled: true,
+                      tp1_pct: qTp,
+                      tp1_ratio: qTpRatio,
+                      move_sl_to_entry: qMoveSlToEntry,
+                      sl_mode: 'st',
+                      sl_pct: qSl,
+                      trail_with_st: qTrailWithSt,
+                    },
+                  }, `${c.symbol} 配置已更新`)}
+                  style={{ ...sty.smallBtn, alignSelf: 'flex-end', borderColor: '#00c9a755', color: '#00c9a7' }}>
+            保存所有配置
+          </button>
           <button onClick={onRemove} disabled={hasPos}
                   style={{ ...sty.smallBtn, alignSelf: 'flex-end',
                            borderColor: '#c2185b55', color: hasPos ? '#4a5058' : '#e05263' }}>

@@ -89,7 +89,7 @@ class Params:
 
 @dataclass
 class SymbolTradeConfig:
-    """单个品种的下单参数。闸门阈值 / 止盈止损 / paper 等全局项在 TradeConfig 里。
+    """单个品种的下单参数。现在所有自动下单参数都品种独立（含 ER / 止盈止损）。
 
     生效开关 = 全局总开关 AND 这里的 enabled（见 AppState.cfg_for）。
     """
@@ -98,16 +98,32 @@ class SymbolTradeConfig:
     margin_usdt: float = 10.0
     leverage:    int   = 3
     allow_tfs:   list  = field(default_factory=lambda: ["15m", "30m", "1h", "4h", "1d"])
+    # ── ER 闸门（品种独立）──
+    er_hide_below: float = 0.10
+    er_weak_min:   float = 0.12
+    er_min:        float = 0.15
+    er_trend:      float = 0.30
+    quick_enabled: bool  = False
+    allow_grades:  list  = field(default_factory=lambda: ["A", "B"])
+    min_score:     int   = 2
+    cooldown_sec:  int   = 300
 
 
 class SymbolStore:
     """一个品种的全部运行时数据。cfg=None 表示「仅看图」，结构上不可能下单。"""
 
     def __init__(self, symbol: str, cfg: Optional[SymbolTradeConfig] = None,
-                 params: Optional[Params] = None):
+                 params: Optional[Params] = None, exit_rules = None, exit_rules_quick = None):
         self.symbol = symbol                 # 现货形式（BTC-USDT），全程作为字典键
         self.cfg = cfg
         self.params = params or Params()
+        # 止盈止损规则（品种独立）
+        from position import ExitRules
+        self.exit_rules = exit_rules or ExitRules()
+        self.exit_rules_quick = exit_rules_quick or ExitRules(
+            tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+            sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+        )
         self.candles: dict[str, deque] = {
             tf: deque(maxlen=c["maxlen"]) for tf, c in TF_CONFIG.items()
         }
@@ -213,7 +229,7 @@ class AppState:
     # ── 多品种工具 ──────────────────────────────────────────────
     def cfg_for(self, symbol: str):
         """全局配置 + 品种配置的合并视图。regime.evaluate / Executor 拿到的
-        就是一份普通 TradeConfig，闸门阈值来自全局、下单参数来自品种。"""
+        就是一份普通 TradeConfig，ER闸门/等级/周期来自品种配置。"""
         store = self.stores.get(symbol)
         sc = store.cfg if store else None
         if sc is None:
@@ -224,6 +240,15 @@ class AppState:
             leverage=sc.leverage,
             amount_usdt=sc.margin_usdt,
             allow_tfs=list(sc.allow_tfs),
+            # ER 闸门品种独立
+            er_hide_below=sc.er_hide_below,
+            er_weak_min=sc.er_weak_min,
+            er_min=sc.er_min,
+            er_trend=sc.er_trend,
+            quick_enabled=sc.quick_enabled,
+            allow_grades=list(sc.allow_grades),
+            min_score=sc.min_score,
+            cooldown_sec=sc.cooldown_sec,
         )
 
     async def broadcast(self, msg: dict):
@@ -235,9 +260,12 @@ class AppState:
                 dead.add(ws)
         self.clients -= dead
 
-    def rules_for(self, profile: Optional[str]):
-        """取该档的出场规则。未知档位一律退回标准档 —— 宁可用保守的老规则，
-        也不要因为拼错一个字符串就跑出一套没人预期的止盈止损。"""
+    def rules_for(self, profile: Optional[str], symbol: Optional[str] = None):
+        """取该档的出场规则。symbol 指定则用品种独立规则，否则用全局规则。"""
+        if symbol:
+            store = self.stores.get(symbol)
+            if store:
+                return store.exit_rules_quick if profile == "quick" else store.exit_rules
         return self.exit_rules_quick if profile == "quick" else self.exit_rules
 
     def add_order(self, order: dict):
@@ -254,7 +282,12 @@ class AppState:
                 "exit_rules_quick": vars(self.exit_rules_quick),
                 "current_symbol": self.current_symbol,
                 "symbols": [
-                    {**vars(st.cfg), "params": vars(st.params)}
+                    {
+                        **vars(st.cfg),
+                        "params": vars(st.params),
+                        "exit_rules": vars(st.exit_rules),
+                        "exit_rules_quick": vars(st.exit_rules_quick),
+                    }
                     for st in self.stores.values() if st.cfg
                 ],
                 # 旧版字段：图表品种的指标参数，兼容旧代码读取
@@ -300,33 +333,80 @@ class AppState:
 
         entries = data.get("symbols")
         if isinstance(entries, list) and entries:
+            from position import ExitRules
             for e in entries[:MAX_SYMBOLS]:
                 if not isinstance(e, dict) or not e.get("symbol"):
                     continue
                 symbol = str(e["symbol"]).upper()
-                cfg = SymbolTradeConfig(symbol=symbol)
-                for k, v in e.items():
-                    if k not in ("symbol", "params") and hasattr(cfg, k):
-                        setattr(cfg, k, v)
+                # 从全局配置作为默认值，再用品种配置覆盖
+                cfg = SymbolTradeConfig(
+                    symbol=symbol,
+                    margin_usdt=e.get("margin_usdt", self.trade_cfg.amount_usdt),
+                    leverage=e.get("leverage", self.trade_cfg.leverage),
+                    allow_tfs=e.get("allow_tfs", list(self.trade_cfg.allow_tfs)),
+                    er_hide_below=e.get("er_hide_below", self.trade_cfg.er_hide_below),
+                    er_weak_min=e.get("er_weak_min", self.trade_cfg.er_weak_min),
+                    er_min=e.get("er_min", self.trade_cfg.er_min),
+                    er_trend=e.get("er_trend", self.trade_cfg.er_trend),
+                    quick_enabled=e.get("quick_enabled", self.trade_cfg.quick_enabled),
+                    allow_grades=e.get("allow_grades", list(self.trade_cfg.allow_grades)),
+                    min_score=e.get("min_score", self.trade_cfg.min_score),
+                    cooldown_sec=e.get("cooldown_sec", self.trade_cfg.cooldown_sec),
+                )
+                # 覆盖其他字段
+                if "enabled" in e:
+                    cfg.enabled = e["enabled"]
+
                 params = Params()
                 for k, v in (e.get("params") or {}).items():
                     if hasattr(params, k):
                         setattr(params, k, v)
-                self.stores[symbol] = SymbolStore(symbol, cfg=cfg, params=params)
+
+                # 品种独立止盈止损规则（旧配置没有则用全局默认）
+                exit_rules = ExitRules()
+                for k, v in (e.get("exit_rules") or vars(self.exit_rules)).items():
+                    if hasattr(exit_rules, k):
+                        setattr(exit_rules, k, v)
+                exit_rules_quick = ExitRules(
+                    tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+                    sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+                )
+                for k, v in (e.get("exit_rules_quick") or vars(self.exit_rules_quick)).items():
+                    if hasattr(exit_rules_quick, k):
+                        setattr(exit_rules_quick, k, v)
+
+                self.stores[symbol] = SymbolStore(
+                    symbol, cfg=cfg, params=params,
+                    exit_rules=exit_rules, exit_rules_quick=exit_rules_quick
+                )
         else:
             # 旧版单品种配置文件：从全局字段合成一条品种配置（enabled 保持 False）
+            from position import ExitRules
             symbol = self.current_symbol
             cfg = SymbolTradeConfig(
                 symbol=symbol,
                 margin_usdt=self.trade_cfg.amount_usdt,
                 leverage=self.trade_cfg.leverage,
                 allow_tfs=list(self.trade_cfg.allow_tfs),
+                # 旧版的 ER 阈值在 trade_cfg 里，迁移到品种级
+                er_hide_below=self.trade_cfg.er_hide_below,
+                er_weak_min=self.trade_cfg.er_weak_min,
+                er_min=self.trade_cfg.er_min,
+                er_trend=self.trade_cfg.er_trend,
+                quick_enabled=self.trade_cfg.quick_enabled,
+                allow_grades=list(self.trade_cfg.allow_grades),
+                min_score=self.trade_cfg.min_score,
+                cooldown_sec=self.trade_cfg.cooldown_sec,
             )
             params = Params()
             for k, v in (data.get("params") or {}).items():
                 if hasattr(params, k):
                     setattr(params, k, v)
-            self.stores[symbol] = SymbolStore(symbol, cfg=cfg, params=params)
+            # 旧版止盈止损在全局 exit_rules，迁移到品种级
+            self.stores[symbol] = SymbolStore(
+                symbol, cfg=cfg, params=params,
+                exit_rules=self.exit_rules, exit_rules_quick=self.exit_rules_quick
+            )
             logger.info(f"旧版配置已迁移为品种条目: {symbol}")
 
         logger.info(f"已从 {SETTINGS_FILE} 恢复配置，交易品种: "
