@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>超级趋势监控台 · Signal Engine</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      :root {
+        /* 与 Pine 脚本 COLORS 区块一致 */
+        --bull:       #00c9a7;   /* C_Bull */
+        --bear:       #8b0000;   /* C_Bear */
+        --bear-lit:   #e05263;   /* 深红在暗色 UI 上读不清，文字用亮一档 */
+        --buy-label:  #00c9a7;   /* C_BuyLabel */
+        --sell-label: #c2185b;   /* C_SellLabel */
+
+        --bg:      #0a0a0a;
+        --surface: #0d0d0d;
+        --card:    #111111;
+        --border:  #262626;
+        --text:    #e9ecef;
+        --muted:   #6c7480;
+        --amber:   #f5a623;
+        --font-mono: "JetBrains Mono", "SF Mono", "Consolas", monospace;
+        --font-sans: -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+      }
+      html, body, #root {
+        height: 100%; background: var(--bg); color: var(--text);
+        font-family: var(--font-sans);
+      }
+      button { font-family: inherit; }
+      ::-webkit-scrollbar { width: 4px; height: 4px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
