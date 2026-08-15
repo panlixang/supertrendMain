@@ -598,7 +598,9 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
         </div>
       </Section>
 
-      {msg && <div style={sty.msg}>{msg}</div>}
+      {msg && (
+        <div style={sty.toast}>{msg}</div>
+      )}
 
       {/* ── 订单记录 ── */}
       <Section title={`挂单记录（${orders.length}）`}>
@@ -830,7 +832,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
       </div>
       <div style={{ fontSize: 9, color: '#4a5058' }}>
         {c.margin_usdt}U × {c.leverage}x　·　{(c.allow_tfs || []).join('/')}　·
-        参数 {c.params?.periods}×{c.params?.multiplier}
+        参数 {c.params?.periods}×{c.params?.multiplier}　·
+        ER {c.er_hide_below ?? 0.10}/{c.er_weak_min ?? 0.12}/{c.er_min ?? 0.15}
       </div>
 
       {open && (
@@ -885,13 +888,13 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
               <input type="number" min={0} max={1} step={0.01} value={erHide}
                      onChange={(e) => setErHide(+e.target.value)}
-                     style={{ ...sty.input, width: 48 }} placeholder="隐藏" />
+                     style={{ ...sty.input, width: 54 }} placeholder="隐藏" />
               <input type="number" min={0} max={1} step={0.01} value={erWeakMin}
                      onChange={(e) => setErWeakMin(+e.target.value)}
-                     style={{ ...sty.input, width: 48 }} placeholder="弱档" />
+                     style={{ ...sty.input, width: 54 }} placeholder="弱档" />
               <input type="number" min={0} max={1} step={0.01} value={erMin}
                      onChange={(e) => setErMin(+e.target.value)}
-                     style={{ ...sty.input, width: 48 }} placeholder="标准" />
+                     style={{ ...sty.input, width: 54 }} placeholder="标准" />
             </div>
           </Row>
 
@@ -1230,6 +1233,13 @@ const sty = {
     padding: '6px 10px', cursor: 'pointer',
   },
   msg: { fontSize: 10.5, color: '#00c9a7', lineHeight: 1.6 },
+  toast: {
+    position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+    background: '#1a2a1a', borderWidth: 1, borderStyle: 'solid', borderColor: '#00c9a755',
+    borderRadius: 6, padding: '8px 16px', fontSize: 11.5, color: '#00c9a7',
+    zIndex: 9999, whiteSpace: 'nowrap', pointerEvents: 'none',
+    boxShadow: '0 4px 16px #00000088',
+  },
   warn: {
     borderWidth: 1, borderStyle: 'solid', borderColor: '#f5a62355', borderRadius: 6,
     background: '#f5a62310', padding: '10px 12px', fontSize: 10.5,
