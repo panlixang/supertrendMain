@@ -101,6 +101,9 @@ class TradeConfig:
     mtf_filter_enabled:    bool  = False   # 是否启用MTF一致性过滤
     mtf_consistency_min:   float = 0.6     # MTF一致性最小值
     mtf_flip_max:          int   = 5       # 大周期翻转次数上限
+    adx_filter_enabled:    bool  = False   # 是否启用ADX过滤
+    adx_min:               float = 20.0    # ADX最小值（低于此值视为无趋势）
+    adx_period:            int   = 14      # ADX计算周期
 
 
 def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
@@ -174,7 +177,14 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
         if mtf["big_tf_flips"] > cfg.mtf_flip_max:
             reasons.append(f"大周期震荡（4h+1d翻转{mtf['big_tf_flips']}次）")
 
-    # 5. 原有 grade/score/tf 检查
+    # 5. ADX 过滤
+    if cfg.adx_filter_enabled:
+        adx_val = adx_latest(candles, cfg.adx_period)
+        filters["adx"] = adx_val
+        if adx_val is not None and adx_val < cfg.adx_min:
+            reasons.append(f"ADX过低（{adx_val:.1f} < {cfg.adx_min}），无趋势")
+
+    # 6. 原有 grade/score/tf 检查
     if sig.get("grade") not in cfg.allow_grades:
         reasons.append(f"信号等级 {sig.get('grade')} 不在允许范围 {'/'.join(cfg.allow_grades)}")
     if (sig.get("score") or 0) < cfg.min_score:
@@ -191,6 +201,19 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
         "profile": regime.get("profile") if not reasons else None,
         "filters": filters
     }
+
+
+def adx_latest(candles: list[dict], period: int = 14) -> float | None:
+    """取最新一根的 ADX 值，数据不足返回 None。"""
+    if len(candles) < period * 2 + 1:
+        return None
+    from indicators import ta_adx
+    highs  = [c["h"] for c in candles]
+    lows   = [c["l"] for c in candles]
+    closes = [c["c"] for c in candles]
+    series = ta_adx(highs, lows, closes, period)
+    val = series[-1]
+    return round(val, 2) if val is not None else None
 
 
 def atr_volatility(candles: list[dict], atr_window: int = 14, lookback: int = 20) -> float | None:

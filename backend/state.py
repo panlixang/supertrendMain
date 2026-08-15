@@ -116,6 +116,9 @@ class SymbolTradeConfig:
     mtf_filter_enabled:    bool  = False   # 是否启用MTF一致性过滤
     mtf_consistency_min:   float = 0.6     # MTF一致性最小值（0~1）
     mtf_flip_max:          int   = 5       # 大周期翻转次数上限（4h+1d近期翻转）
+    adx_filter_enabled:    bool  = False   # 是否启用ADX过滤
+    adx_min:               float = 20.0    # ADX最小值（低于此值视为无趋势）
+    adx_period:            int   = 14      # ADX计算周期
 
 
 class SymbolStore:
@@ -379,6 +382,9 @@ class AppState:
                     mtf_filter_enabled=e.get("mtf_filter_enabled", False),
                     mtf_consistency_min=e.get("mtf_consistency_min", 0.6),
                     mtf_flip_max=e.get("mtf_flip_max", 5),
+                    adx_filter_enabled=e.get("adx_filter_enabled", False),
+                    adx_min=e.get("adx_min", 20.0),
+                    adx_period=e.get("adx_period", 14),
                 )
                 # 覆盖其他字段
                 if "enabled" in e:

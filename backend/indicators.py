@@ -107,6 +107,50 @@ def ta_atr(highs, lows, closes, length: int) -> list[Num]:
     return ta_rma(ta_tr(highs, lows, closes), length)
 
 
+def ta_adx(highs: list[float], lows: list[float], closes: list[float],
+           length: int = 14) -> list[Num]:
+    """ADX（平均趋向指数），0~100。
+
+    ADX < 20 → 无趋势 / 震荡；ADX > 25 → 趋势确认；ADX > 40 → 强趋势。
+    用 Wilder RMA 平滑（与 Pine ta.adx 一致）。
+    """
+    n = len(closes)
+    out: list[Num] = [None] * n
+    if n < length * 2 + 1 or length <= 0:
+        return out
+
+    tr   = ta_tr(highs, lows, closes)
+    pdm  = [0.0] * n   # +DM
+    ndm  = [0.0] * n   # -DM
+
+    for i in range(1, n):
+        up   = highs[i] - highs[i - 1]
+        down = lows[i - 1] - lows[i]
+        pdm[i] = up   if up > 0 and up > down   else 0.0
+        ndm[i] = down if down > 0 and down > up else 0.0
+
+    atr_s  = ta_rma(tr,  length)
+    pdm_s  = ta_rma(pdm, length)
+    ndm_s  = ta_rma(ndm, length)
+
+    dx: list[Num] = [None] * n
+    for i in range(n):
+        if atr_s[i] is None or pdm_s[i] is None or ndm_s[i] is None:
+            continue
+        if atr_s[i] <= 0:
+            continue
+        pdi = 100 * pdm_s[i] / atr_s[i]
+        ndi = 100 * ndm_s[i] / atr_s[i]
+        denom = pdi + ndi
+        dx[i] = 100 * abs(pdi - ndi) / denom if denom > 0 else 0.0
+
+    adx = ta_rma([v if v is not None else 0.0 for v in dx], length)
+    # 前 length*2 根 RMA 未成型，置 None
+    for i in range(min(length * 2, n)):
+        adx[i] = None
+    return adx
+
+
 def ma(values: list[float], length: int, ma_type: str = "EMA") -> list[Num]:
     """Pine 的 f_ma：maType == 'EMA' ? ta.ema : ta.sma"""
     return ta_ema(values, length) if ma_type.upper() == "EMA" else ta_sma(values, length)
