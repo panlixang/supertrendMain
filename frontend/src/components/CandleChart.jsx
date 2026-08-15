@@ -233,19 +233,25 @@ export default function CandleChart() {
     }
 
     // plotshape：Buy 标签打在 up 上，Sell 打在 dn 上
-    // 过滤掉 hidden=true 的静默信号（ER 过低）
+    // hidden=true → 完全不显示（ER 过低）
+    // will_trade===false 且非 hidden → 灰色半透明（被过滤器拦住，仍显示供参考）
     if (opts.showSignals) {
       r.candle.setMarkers(
         (ind.signals || [])
-          .filter(s => !s.hidden)    // 隐藏 ER 过低的信号
-          .map((s) => ({
-            time: toT(s.ts),
-            position: s.type === 'buy' ? 'belowBar' : 'aboveBar',
-            color: s.type === 'buy' ? C.buyLabel : C.sellLabel,
-            shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown',
-            text: `${s.type === 'buy' ? 'Buy' : 'Sell'}${s.grade ? ' ' + s.grade : ''}`,
-            size: (s.score ?? 0) >= 2 ? 2 : 1.3,
-          }))
+          .filter(s => !s.hidden)
+          .map((s) => {
+            const blocked = s.will_trade === false;
+            const buyColor  = blocked ? '#4a7a6e' : C.buyLabel;
+            const sellColor = blocked ? '#7a4a55' : C.sellLabel;
+            return {
+              time: toT(s.ts),
+              position: s.type === 'buy' ? 'belowBar' : 'aboveBar',
+              color: s.type === 'buy' ? buyColor : sellColor,
+              shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown',
+              text: `${s.type === 'buy' ? 'Buy' : 'Sell'}${s.grade ? ' ' + s.grade : ''}${blocked ? ' ✕' : ''}`,
+              size: blocked ? 1 : (s.score ?? 0) >= 2 ? 2 : 1.3,
+            };
+          })
           .sort((a, b) => a.time - b.time),
       );
     } else {

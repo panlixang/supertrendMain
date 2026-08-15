@@ -49,15 +49,21 @@ async def get_indicators(tf: str = "15m"):
         return {}
     result = compute(candles, tf, vars(state.params))
     if result and result.get("signals"):
-        # 把 state.signals 里的 hidden 字段注入到 compute 的信号里
-        # state.signals 由 rescan_signals() 维护，含当前 ER 阈值评估结果
-        hidden_set = {
-            (s["tf"], s["ts"])
+        # 把 state.signals 里的 hidden / will_trade / gate_reasons 注入
+        # state.signals 由 rescan_signals() 维护，含当前过滤器评估结果
+        meta = {
+            (s["tf"], s["ts"]): {
+                "hidden":      s.get("hidden", False),
+                "will_trade":  s.get("will_trade"),
+                "gate_reasons": s.get("gate_reasons", []),
+            }
             for s in state.signals
-            if s.get("hidden")
         }
         for sig in result["signals"]:
-            sig["hidden"] = (sig.get("tf", tf), sig["ts"]) in hidden_set
+            m = meta.get((sig.get("tf", tf), sig["ts"]), {})
+            sig["hidden"]      = m.get("hidden", False)
+            sig["will_trade"]  = m.get("will_trade")
+            sig["gate_reasons"] = m.get("gate_reasons", [])
     return result
 
 
