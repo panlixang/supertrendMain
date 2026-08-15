@@ -26,6 +26,7 @@ export default function BacktestPanel() {
     er_min: '', use_exit_rules: false,
     sizing: 'equity', margin_usdt: 10, leverage: 10,
     er_weak_min: '', quick_enabled: false,
+    use_symbol_filters: false,
   });
   const [res, setRes] = useState(null);
   const [sweep, setSweep] = useState(null);
@@ -45,6 +46,7 @@ export default function BacktestPanel() {
     leverage: +cfg.leverage,
     er_weak_min: weakVal(),
     quick_enabled: cfg.quick_enabled && weakVal() != null,
+    use_symbol_filters: cfg.use_symbol_filters,
   });
 
   async function run() {
@@ -178,6 +180,10 @@ export default function BacktestPanel() {
 
       <Check on={cfg.use_exit_rules} onClick={() => set('use_exit_rules', !cfg.use_exit_rules)}
              label="按实盘止盈止损（用「挂单」页那套规则）" />
+
+      <Check on={cfg.use_symbol_filters}
+             onClick={() => set('use_symbol_filters', !cfg.use_symbol_filters)}
+             label="按品种过滤器（ATR萎缩 / 区间震荡 / ADX）" />
 
       <div style={{ fontSize: 9.5, color: '#4a5058' }}>
         当前参数 <b style={{ color: '#8b93a0', fontFamily: 'var(--font-mono)' }}>

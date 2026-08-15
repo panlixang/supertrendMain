@@ -185,6 +185,16 @@ class BacktestIn(BaseModel):
     sl_mode:          Optional[str]   = None
     sl_pct:           Optional[float] = None
     trail_with_st:    Optional[bool]  = None
+    # 组合过滤器（默认全关；use_symbol_filters=True 时从当前品种配置读取）
+    use_symbol_filters:    bool  = False
+    atr_filter_enabled:    bool  = False
+    atr_vol_min:           float = 0.7
+    range_filter_enabled:  bool  = False
+    range_size_max:        float = 0.15
+    range_touches_min:     int   = 3
+    adx_filter_enabled:    bool  = False
+    adx_min:               float = 20.0
+    adx_period:            int   = 14
 
 
 def _params_with(body) -> dict:
@@ -225,7 +235,23 @@ def _engine_kw(body) -> dict:
     }
 
 
-async def _candles_for(tf: str, bars: int) -> list[dict]:
+def _filter_kw(body) -> dict:
+    """组合过滤器参数。use_symbol_filters=True 时从当前品种配置读取，否则用 body 里的值。"""
+    cfg = state.cfg_for(state.current_symbol)
+    use = getattr(body, "use_symbol_filters", False)
+    return {
+        "atr_filter_enabled":   cfg.atr_filter_enabled   if use else getattr(body, "atr_filter_enabled", False),
+        "atr_vol_min":          cfg.atr_vol_min           if use else getattr(body, "atr_vol_min", 0.7),
+        "range_filter_enabled": cfg.range_filter_enabled  if use else getattr(body, "range_filter_enabled", False),
+        "range_size_max":       cfg.range_size_max        if use else getattr(body, "range_size_max", 0.15),
+        "range_touches_min":    cfg.range_touches_min     if use else getattr(body, "range_touches_min", 3),
+        "adx_filter_enabled":   cfg.adx_filter_enabled    if use else getattr(body, "adx_filter_enabled", False),
+        "adx_min":              cfg.adx_min               if use else getattr(body, "adx_min", 20.0),
+        "adx_period":           cfg.adx_period            if use else getattr(body, "adx_period", 14),
+    }
+
+
+
     """优先用内存 deque；要的根数超出缓存时现拉 REST。"""
     if tf not in TF_CONFIG:
         return []
@@ -252,7 +278,7 @@ async def backtest(body: BacktestIn):
         candles, _params_with(body),
         init_cash=body.init_cash, fee_rate=body.fee_rate,
         allow_short=body.allow_short, bias_filter=body.bias_filter,
-        er_min=body.er_min, **_engine_kw(body),
+        er_min=body.er_min, **_engine_kw(body), **_filter_kw(body),
     ))
     rules = _exit_rules_of(body)
     r.update({"tf": body.tf, "symbol": state.current_symbol,
@@ -280,6 +306,15 @@ class SweepIn(BaseModel):
     sizing:          str   = "equity"
     margin_usdt:     float = 10.0
     leverage:        int   = 1
+    use_symbol_filters:    bool  = False
+    atr_filter_enabled:    bool  = False
+    atr_vol_min:           float = 0.7
+    range_filter_enabled:  bool  = False
+    range_size_max:        float = 0.15
+    range_touches_min:     int   = 3
+    adx_filter_enabled:    bool  = False
+    adx_min:               float = 20.0
+    adx_period:            int   = 14
 
 
 @router.post("/api/sweep")
@@ -301,7 +336,8 @@ async def sweep(body: SweepIn):
         bt.sweep,
         candles, vars(state.params), periods, mults,
         fee_rate=body.fee_rate, allow_short=body.allow_short,
-        bias_filter=body.bias_filter, er_min=body.er_min, **_engine_kw(body)))
+        bias_filter=body.bias_filter, er_min=body.er_min,
+        **_engine_kw(body), **_filter_kw(body)))
     return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
             "count": len(rows), "rows": rows[:60]}
 
@@ -322,6 +358,15 @@ class ErSweepIn(BaseModel):
     quick_enabled:   bool  = False
     periods:     Optional[int]   = None
     multiplier:  Optional[float] = None
+    use_symbol_filters:    bool  = False
+    atr_filter_enabled:    bool  = False
+    atr_vol_min:           float = 0.7
+    range_filter_enabled:  bool  = False
+    range_size_max:        float = 0.15
+    range_touches_min:     int   = 3
+    adx_filter_enabled:    bool  = False
+    adx_min:               float = 20.0
+    adx_period:            int   = 14
 
 
 @router.post("/api/sweep-er")
@@ -348,7 +393,7 @@ async def sweep_er(body: ErSweepIn):
         bt.sweep_er,
         candles, _params_with(body), ers,
         fee_rate=body.fee_rate, allow_short=body.allow_short,
-        bias_filter=body.bias_filter, **_engine_kw(body)))
+        bias_filter=body.bias_filter, **_engine_kw(body), **_filter_kw(body)))
     return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
             "live_er_min": state.trade_cfg.er_min, "rows": rows}
 

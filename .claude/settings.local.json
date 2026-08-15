@@ -76,7 +76,17 @@
       "Bash(curl -s -m 2 http://127.0.0.1:8011/api/ticker)",
       "Bash(curl -s -X POST http://127.0.0.1:8011/api/backtest -H 'Content-Type: application/json' -d '{\"tf\":\"15m\",\"bars\":800}')",
       "Bash(npx --yes esbuild src/components/BacktestPanel.jsx --loader:.jsx=jsx --bundle --external:react --external:../stores/useStore --external:../utils/format --outfile=/dev/null)",
-      "Bash(pkill -f \"uvicorn main:app --port 8000\")"
+      "Bash(pkill -f \"uvicorn main:app --port 8000\")",
+      "Bash(curl -s -X POST \"http://43.108.10.84:5174/api/symbol\" -H \"Content-Type: application/json\" -d '{\"instId\":\"MU-USDT-SWAP\"}')",
+      "Bash(curl -s \"http://43.108.10.84:5174/api/candles?tf=15m\")",
+      "Bash(curl -s -X POST \"http://43.108.10.84:5174/api/symbol\" -H \"Content-Type: application/json\" -d '{\"instId\":\"BTC-USDT-SWAP\"}')",
+      "Bash(curl -s \"http://43.108.10.84:5174/api/instruments?q=ETH&limit=5\")",
+      "Bash(curl -s -X POST \"http://43.108.10.84:5174/api/symbol\" -H \"Content-Type: application/json\" -d '{\"instId\":\"ETH-USDT-SWAP\"}')",
+      "Bash(curl -s -X POST http://43.108.10.84:5174/api/trade/symbols/BTC-USDT-SWAP -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s \"http://43.108.10.84:5174/api/trade/config\")",
+      "Bash(curl -s -X POST http://43.108.10.84:5174/api/trade/symbols -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s \"http://43.108.10.84:5174/api/trade/symbols\")",
+      "Bash(curl -s -X POST http://43.108.10.84:5174/api/backtest -H 'Content-Type: application/json' -d '{ *)"
     ],
     "additionalDirectories": [
       "/tmp"

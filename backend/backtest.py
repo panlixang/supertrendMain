@@ -64,6 +64,14 @@ def run_backtest(
     leverage: int = 1,
     er_weak_min: float | None = None,
     exit_rules_quick: ExitRules | None = None,
+    atr_filter_enabled: bool = False,
+    atr_vol_min: float = 0.7,
+    range_filter_enabled: bool = False,
+    range_size_max: float = 0.15,
+    range_touches_min: int = 3,
+    adx_filter_enabled: bool = False,
+    adx_min: float = 20.0,
+    adx_period: int = 14,
 ) -> dict:
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
@@ -250,6 +258,28 @@ def run_backtest(
                     else:
                         ok = False
                         n_block += 1
+                # ATR 波动率过滤
+                if ok and atr_filter_enabled:
+                    from regime import atr_volatility
+                    atr_vol = atr_volatility(candles[:i + 1])
+                    if atr_vol is not None and atr_vol < atr_vol_min:
+                        ok = False
+                        n_block += 1
+                # 区间震荡过滤
+                if ok and range_filter_enabled:
+                    from regime import range_bound
+                    rc = range_bound(candles[:i + 1])
+                    if (rc["range_size_pct"] < range_size_max * 100
+                            and rc["touches"] >= range_touches_min):
+                        ok = False
+                        n_block += 1
+                # ADX 过滤
+                if ok and adx_filter_enabled:
+                    from regime import adx_latest
+                    adx_val = adx_latest(candles[:i + 1], adx_period)
+                    if adx_val is not None and adx_val < adx_min:
+                        ok = False
+                        n_block += 1
                 if ok:
                     open_pos(i, price, typ, profile)
 
@@ -312,7 +342,13 @@ def run_backtest(
 
 def sweep(candles: list[dict], base: dict, periods: list[int], mults: list[float],
           fee_rate: float = 0.0005, allow_short: bool = True,
-          bias_filter: bool = False, **kw) -> list[dict]:
+          bias_filter: bool = False,
+          atr_filter_enabled: bool = False, atr_vol_min: float = 0.7,
+          range_filter_enabled: bool = False, range_size_max: float = 0.15,
+          range_touches_min: int = 3,
+          adx_filter_enabled: bool = False, adx_min: float = 20.0,
+          adx_period: int = 14,
+          **kw) -> list[dict]:
     """参数寻优：网格跑 ATR Period × Multiplier，按收益率降序。
 
     脚本默认 15 / 9.1 是作者在某个品种上调出来的，换品种/周期基本要重调，
@@ -323,7 +359,13 @@ def sweep(candles: list[dict], base: dict, periods: list[int], mults: list[float
         for m in mults:
             r = run_backtest(
                 candles, {**base, "periods": pe, "multiplier": m},
-                fee_rate=fee_rate, allow_short=allow_short, bias_filter=bias_filter, **kw,
+                fee_rate=fee_rate, allow_short=allow_short, bias_filter=bias_filter,
+                atr_filter_enabled=atr_filter_enabled, atr_vol_min=atr_vol_min,
+                range_filter_enabled=range_filter_enabled, range_size_max=range_size_max,
+                range_touches_min=range_touches_min,
+                adx_filter_enabled=adx_filter_enabled, adx_min=adx_min,
+                adx_period=adx_period,
+                **kw,
             )
             if "error" in r:
                 continue
