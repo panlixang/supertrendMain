@@ -483,15 +483,6 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
           <div style={{ opacity: cfg.quick_enabled ? 1 : 0.4,
                         pointerEvents: cfg.quick_enabled ? 'auto' : 'none',
                         display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Row label="弱档下界 ER" hint={`低于此值仍只提醒；上界为标准线 ${cfg.er_min}`}>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <input type="number" min={0} max={1} step={0.01} value={erWeakMin}
-                       onChange={(e) => setErWeakMin(+e.target.value)} style={sty.input} />
-                <button onClick={() => patch({ er_weak_min: erWeakMin }, `弱档下界改为 ${erWeakMin}`)}
-                        disabled={erWeakMin === cfg.er_weak_min}
-                        style={{ ...sty.smallBtn, opacity: erWeakMin === cfg.er_weak_min ? 0.3 : 1 }}>改</button>
-              </div>
-            </Row>
             <Row label="止盈 %" hint={swap ? `全平。${cfg.leverage}x 下 = 保证金 ${(qTp * cfg.leverage).toFixed(1)}%` : '价格幅度，触发即全平'}>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input type="number" min={0.1} step={0.1} value={qTp}
@@ -566,10 +557,11 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
         <Row label="允许等级" hint="C 级为逆 Bias 信号">
           <div style={{ display: 'flex', gap: 3 }}>
             {['A', 'B', 'C'].map((g) => {
-              const on = cfg.allow_grades.includes(g);
+              const grades = cfg.allow_grades || [];
+              const on = grades.includes(g);
               return (
                 <button key={g} onClick={() => patch({
-                  allow_grades: on ? cfg.allow_grades.filter((x) => x !== g) : [...cfg.allow_grades, g],
+                  allow_grades: on ? grades.filter((x) => x !== g) : [...grades, g],
                 })} style={{ ...sty.chip, opacity: on ? 1 : 0.3 }}>{g}</button>
               );
             })}
