@@ -568,6 +568,9 @@ class SymbolCfgIn(BaseModel):
     mtf_filter_enabled:    Optional[bool]  = None
     mtf_consistency_min:   Optional[float] = None
     mtf_flip_max:          Optional[int]   = None
+    adx_filter_enabled:    Optional[bool]  = None
+    adx_min:               Optional[float] = None
+    adx_period:            Optional[int]   = None
 
 
 async def _load_symbol_history(sym: str):
@@ -645,6 +648,9 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if body.mtf_filter_enabled   is not None: c.mtf_filter_enabled   = body.mtf_filter_enabled
     if body.mtf_consistency_min  is not None: c.mtf_consistency_min  = max(0.0, min(1.0, body.mtf_consistency_min))
     if body.mtf_flip_max         is not None: c.mtf_flip_max         = max(1, body.mtf_flip_max)
+    if body.adx_filter_enabled   is not None: c.adx_filter_enabled   = body.adx_filter_enabled
+    if body.adx_min              is not None: c.adx_min              = max(0.0, min(100.0, body.adx_min))
+    if body.adx_period           is not None: c.adx_period           = max(1, min(50, body.adx_period))
 
     # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
@@ -654,7 +660,8 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if any(x is not None for x in [body.er_hide_below, body.er_min, body.er_weak_min,
                                      body.er_trend, body.allow_grades, body.min_score,
                                      body.atr_filter_enabled, body.range_filter_enabled,
-                                     body.mtf_filter_enabled]):
+                                     body.mtf_filter_enabled, body.adx_filter_enabled,
+                                     body.adx_min, body.adx_period]):
         if state.feed:
             state.feed.rescan_signals(st)
 

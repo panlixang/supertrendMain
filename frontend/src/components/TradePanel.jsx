@@ -757,6 +757,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [mtfOn, setMtfOn] = useState(c.mtf_filter_enabled ?? false);
   const [mtfMin, setMtfMin] = useState(c.mtf_consistency_min ?? 0.6);
   const [mtfFlipMax, setMtfFlipMax] = useState(c.mtf_flip_max ?? 5);
+  const [adxOn, setAdxOn] = useState(c.adx_filter_enabled ?? false);
+  const [adxMin, setAdxMin] = useState(c.adx_min ?? 20);
+  const [adxPeriod, setAdxPeriod] = useState(c.adx_period ?? 14);
   // 标准档止盈止损
   const [tp1, setTp1] = useState(c.exit_rules?.tp1_pct ?? 2);
   const [tpRatio, setTpRatio] = useState(c.exit_rules?.tp1_ratio ?? 70);
@@ -789,7 +792,10 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
     setMtfOn(c.mtf_filter_enabled ?? false);
     setMtfMin(c.mtf_consistency_min ?? 0.6);
     setMtfFlipMax(c.mtf_flip_max ?? 5);
-  }, [c.atr_filter_enabled, c.range_filter_enabled, c.mtf_filter_enabled]);
+    setAdxOn(c.adx_filter_enabled ?? false);
+    setAdxMin(c.adx_min ?? 20);
+    setAdxPeriod(c.adx_period ?? 14);
+  }, [c.atr_filter_enabled, c.range_filter_enabled, c.mtf_filter_enabled, c.adx_filter_enabled]);
   useEffect(() => {
     if (c.exit_rules) {
       setTp1(c.exit_rules.tp1_pct ?? 2);
@@ -993,6 +999,41 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 </>
               )}
             </div>
+
+            {/* ADX 趋势强度过滤 */}
+            <div style={sty.filterBlock}>
+              <div style={sty.rowBetween}>
+                <div>
+                  <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>ADX 趋势强度过滤</div>
+                  <div style={{ fontSize: 8.5, color: '#4a5058' }}>
+                    ADX &lt; 阈值 → 无趋势 / 震荡，拦截信号
+                  </div>
+                </div>
+                <Toggle on={adxOn} onClick={() => setAdxOn(!adxOn)} color="#4e8aff" />
+              </div>
+              {adxOn && (
+                <>
+                  <Row label="ADX 下限" hint="典型值 20：&lt;20 无趋势，&gt;25 趋势确认">
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      {[15, 20, 25, 30].map((n) => (
+                        <button key={n} onClick={() => setAdxMin(n)}
+                                style={{ ...sty.chip, fontSize: 9.5, padding: '2px 6px',
+                                         opacity: adxMin === n ? 1 : 0.3 }}>{n}</button>
+                      ))}
+                    </div>
+                  </Row>
+                  <Row label="ADX 周期" hint="Wilder RMA 周期，典型值 14">
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      {[10, 14, 20].map((n) => (
+                        <button key={n} onClick={() => setAdxPeriod(n)}
+                                style={{ ...sty.chip, fontSize: 9.5, padding: '2px 6px',
+                                         opacity: adxPeriod === n ? 1 : 0.3 }}>{n}</button>
+                      ))}
+                    </div>
+                  </Row>
+                </>
+              )}
+            </div>
           </div>
           <div style={{ padding: '2px 0' }}>
             <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>标准档止盈止损</div>
@@ -1067,6 +1108,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     mtf_filter_enabled: mtfOn,
                     mtf_consistency_min: mtfMin,
                     mtf_flip_max: mtfFlipMax,
+                    adx_filter_enabled: adxOn,
+                    adx_min: adxMin,
+                    adx_period: adxPeriod,
                     exit_rules: {
                       enabled: true,
                       tp1_pct: tp1,

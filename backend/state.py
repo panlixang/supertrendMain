@@ -270,6 +270,9 @@ class AppState:
             mtf_filter_enabled=sc.mtf_filter_enabled,
             mtf_consistency_min=sc.mtf_consistency_min,
             mtf_flip_max=sc.mtf_flip_max,
+            adx_filter_enabled=sc.adx_filter_enabled,
+            adx_min=sc.adx_min,
+            adx_period=sc.adx_period,
         )
 
     async def broadcast(self, msg: dict):
