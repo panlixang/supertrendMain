@@ -86,7 +86,8 @@
       "Bash(curl -s \"http://43.108.10.84:5174/api/trade/config\")",
       "Bash(curl -s -X POST http://43.108.10.84:5174/api/trade/symbols -H 'Content-Type: application/json' -d '{ *)",
       "Bash(curl -s \"http://43.108.10.84:5174/api/trade/symbols\")",
-      "Bash(curl -s -X POST http://43.108.10.84:5174/api/backtest -H 'Content-Type: application/json' -d '{ *)"
+      "Bash(curl -s -X POST http://43.108.10.84:5174/api/backtest -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s -X POST http://43.108.10.84:5174/api/sweep -H 'Content-Type: application/json' -d '{ *)"
     ],
     "additionalDirectories": [
       "/tmp"

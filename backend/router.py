@@ -506,9 +506,7 @@ async def set_trade_config(body: TradeCfgIn):
 
 # ─── 止盈止损规则 ────────────────────────────────────────────────
 
-class ExitRulesIn(BaseModel):
-    symbol:           Optional[str]  = None   # 品种独立时指定品种，None=改全局默认
-    profile:          str = "normal"    # normal 标准档 / quick 快进快出档
+class ExitRulesPatch(BaseModel):
     enabled:          Optional[bool]  = None
     tp1_pct:          Optional[float] = None
     tp1_ratio:        Optional[float] = None
@@ -516,6 +514,28 @@ class ExitRulesIn(BaseModel):
     sl_mode:          Optional[str]   = None
     sl_pct:           Optional[float] = None
     trail_with_st:    Optional[bool]  = None
+
+
+class ExitRulesIn(ExitRulesPatch):
+    symbol:           Optional[str]  = None   # 品种独立时指定品种，None=改全局默认
+    profile:          str = "normal"    # normal 标准档 / quick 快进快出档
+
+
+def _apply_exit_patch(r, patch: ExitRulesPatch):
+    """把 patch 写进 ExitRules。非法 sl_mode 返回错误字符串。"""
+    if patch is None:
+        return None
+    if patch.enabled          is not None: r.enabled = patch.enabled
+    if patch.tp1_pct          is not None: r.tp1_pct = max(0.1, min(100.0, patch.tp1_pct))
+    if patch.tp1_ratio        is not None: r.tp1_ratio = max(1.0, min(100.0, patch.tp1_ratio))
+    if patch.move_sl_to_entry is not None: r.move_sl_to_entry = patch.move_sl_to_entry
+    if patch.sl_mode is not None:
+        if patch.sl_mode not in ("st", "pct"):
+            return "sl_mode 仅支持 st（超趋线）/ pct（百分比）"
+        r.sl_mode = patch.sl_mode
+    if patch.sl_pct           is not None: r.sl_pct = max(0.1, min(50.0, patch.sl_pct))
+    if patch.trail_with_st    is not None: r.trail_with_st = patch.trail_with_st
+    return None
 
 
 def _all_rules(symbol: Optional[str] = None) -> dict:
@@ -547,16 +567,9 @@ async def set_exit_rules(body: ExitRulesIn):
         # 全局默认规则
         r = state.rules_for(body.profile)
 
-    if body.enabled          is not None: r.enabled = body.enabled
-    if body.tp1_pct          is not None: r.tp1_pct = max(0.1, min(100.0, body.tp1_pct))
-    if body.tp1_ratio        is not None: r.tp1_ratio = max(1.0, min(100.0, body.tp1_ratio))
-    if body.move_sl_to_entry is not None: r.move_sl_to_entry = body.move_sl_to_entry
-    if body.sl_mode          is not None:
-        if body.sl_mode not in ("st", "pct"):
-            return {"ok": False, "error": "sl_mode 仅支持 st（超趋线）/ pct（百分比）"}
-        r.sl_mode = body.sl_mode
-    if body.sl_pct           is not None: r.sl_pct = max(0.1, min(50.0, body.sl_pct))
-    if body.trail_with_st    is not None: r.trail_with_st = body.trail_with_st
+    err = _apply_exit_patch(r, body)
+    if err:
+        return {"ok": False, "error": err}
 
     await state.broadcast({"type": "exit_rules", "data": _all_rules(body.symbol)})
     state.save_settings()
@@ -616,6 +629,9 @@ class SymbolCfgIn(BaseModel):
     adx_filter_enabled:    Optional[bool]  = None
     adx_min:               Optional[float] = None
     adx_period:            Optional[int]   = None
+    # 止盈止损（品种独立）
+    exit_rules:            Optional[ExitRulesPatch] = None
+    exit_rules_quick:      Optional[ExitRulesPatch] = None
 
 
 async def _load_symbol_history(sym: str):
@@ -700,6 +716,16 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
     if body.multiplier  is not None: st.params.multiplier = max(0.1, body.multiplier)
+
+    # 品种独立止盈止损
+    if body.exit_rules is not None:
+        err = _apply_exit_patch(st.exit_rules, body.exit_rules)
+        if err:
+            return {"ok": False, "error": err}
+    if body.exit_rules_quick is not None:
+        err = _apply_exit_patch(st.exit_rules_quick, body.exit_rules_quick)
+        if err:
+            return {"ok": False, "error": err}
 
     # ER 参数或过滤器改变后重扫该品种历史信号
     if any(x is not None for x in [body.er_hide_below, body.er_min, body.er_weak_min,

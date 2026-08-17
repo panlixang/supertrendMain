@@ -18,6 +18,10 @@ ER（Efficiency Ratio，Kaufman）= |收盘净位移| / 逐根路径长度总和
     2. 信号等级 ∈ allow_grades      默认只做 A/B，C 是逆 MTF Bias 的
     3. 强度 score ≥ min_score       翻转本身要干脆
     4. tf ∈ allow_tfs               小周期噪声大，默认只做 15m 以上
+
+ER < er_hide_below 默认彻底静默（不弹窗、图表不画、也不下单）。例外：
+交易周期上强度 ≥ min_score 的翻转视为「突破启动」——大趋势常从磨盘爆出，
+60 根 ER / ATR / ADX 此时仍滞后。图上出箭头和自动下单用同一套判定，不拆开。
 """
 
 from __future__ import annotations
@@ -82,7 +86,7 @@ class TradeConfig:
     amount_usdt:  float = 10.0         # 每笔保证金，名义价值 = 它 × 杠杆
     price_offset: float = 0.05         # 限价单偏移 %：买单挂在触发价下方，卖单上方
     # ── 闸门 ──
-    er_hide_below: float = 0.10        # ER < 此值时信号静默（仍存db但不弹窗、不提醒、面板灰显）
+    er_hide_below: float = 0.10        # ER < 此值时默认静默；交易周期+强度够的翻转视为突破启动（显示并下单）
     er_weak_min:   float = 0.12        # 弱档下界：ER ∈ [er_weak_min, er_min) 走「快进快出」规则
     er_min:        float = 0.15        # 标准档下界：ER ≥ 此值走「吃波段」那套规则
     er_trend:      float = 0.30        # 趋势判定：ER ≥ 此值升级为趋势行情（较少触发快进快出）
@@ -113,25 +117,31 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
     返回 {"trade": bool, "regime": {...}, "reasons": [...], "hidden": bool,
             "filters": {...}}，
     reasons 是所有未通过项，会原样显示在 UI 和推送里 —— 用户要看得到为什么没下单。
-    hidden=True 表示 ER 过低，信号静默（不弹窗、不提醒、前端灰显）。
+    hidden=True 表示 ER 过低且不够干脆，信号静默（不弹窗、不提醒、图表不画、不下单）。
+    交易周期上强度够的翻转视为突破启动：显示和下单同步，ER/ATR/ADX 滞后不拦。
     filters 包含所有过滤器的详细检测结果，供调试和展示。
     """
     er = efficiency_ratio(candles)
     regime = classify(er, cfg.er_min, cfg.er_trend, cfg.er_weak_min, cfg.quick_enabled)
 
-    # ER 太低的信号彻底静默（不弹窗、不推送、前端灰显）
-    hidden = er is not None and er < cfg.er_hide_below
+    # ER 太低默认静默。交易周期上足够干脆的翻转 = 突破启动：
+    # 图上出箭头，自动下单也走同一条路径（ER/ATR/ADX 窗口此时还没跟上）。
+    low_er = er is not None and er < cfg.er_hide_below
+    quality_flip = (sig.get("score") or 0) >= cfg.min_score
+    on_trade_tf = sig.get("tf") in cfg.allow_tfs
+    breakout_start = bool(low_er and quality_flip and on_trade_tf)
+    hidden = bool(low_er and not breakout_start)
     if hidden:
         return {"trade": False, "regime": regime, "reasons": [], "hidden": True,
                 "filters": {"er": er}}
 
     reasons = []
-    filters = {"er": er}
+    filters = {"er": er, "breakout_start": breakout_start}
 
-    # 1. ER 基础检查（保留原有逻辑）
+    # 1. ER 基础检查（突破启动时 ER 滞后，不拦）
     if not cfg.enabled:
         reasons.append("自动挂单未开启")
-    if not regime["tradable"]:
+    if not regime["tradable"] and not breakout_start:
         if er is None:
             reasons.append("K线不足，无法判定行情状态")
         elif regime["regime"] == "edge":
@@ -149,7 +159,8 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
     if cfg.atr_filter_enabled:
         atr_vol = atr_volatility(candles)
         filters["atr_vol"] = atr_vol
-        if atr_vol is not None and atr_vol < cfg.atr_vol_min:
+        if (not breakout_start and atr_vol is not None
+                and atr_vol < cfg.atr_vol_min):
             reasons.append(f"ATR萎缩（{atr_vol:.2f} < {cfg.atr_vol_min}），疑似震荡")
 
     # 3. 区间震荡过滤
@@ -158,8 +169,9 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
         range_check = range_bound(candles)
         filters["range_check"] = range_check
         # 区间小且触边次数多 → 震荡
-        if (range_check["range_size_pct"] < cfg.range_size_max * 100 and
-            range_check["touches"] >= cfg.range_touches_min):
+        if (not breakout_start
+                and range_check["range_size_pct"] < cfg.range_size_max * 100
+                and range_check["touches"] >= cfg.range_touches_min):
             reasons.append(
                 f"区间震荡（范围{range_check['range_size_pct']:.1f}%，"
                 f"{range_check['touches']}次触边）"
@@ -181,7 +193,8 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
     if cfg.adx_filter_enabled:
         adx_val = adx_latest(candles, cfg.adx_period)
         filters["adx"] = adx_val
-        if adx_val is not None and adx_val < cfg.adx_min:
+        if (not breakout_start and adx_val is not None
+                and adx_val < cfg.adx_min):
             reasons.append(f"ADX过低（{adx_val:.1f} < {cfg.adx_min}），无趋势")
 
     # 6. 原有 grade/score/tf 检查
@@ -192,13 +205,14 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
     if sig.get("tf") not in cfg.allow_tfs:
         reasons.append(f"周期 {sig.get('tf')} 不在允许范围")
 
-    # profile 只在真要下单时才有意义 —— 被拦的信号不该带着档位往下传，
-    # 免得 executor 拿到一个「该用弱档规则但其实不下单」的矛盾状态
+    # 突破启动按标准档吃波段；被拦的信号不带档位，避免执行器和闸门矛盾
+    profile = "normal" if breakout_start else regime.get("profile")
     return {
         "trade": not reasons,
         "regime": regime,
         "reasons": reasons,
-        "profile": regime.get("profile") if not reasons else None,
+        "hidden": False,
+        "profile": profile if not reasons else None,
         "filters": filters
     }
 

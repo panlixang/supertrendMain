@@ -233,7 +233,7 @@ export default function CandleChart() {
     }
 
     // plotshape：Buy 标签打在 up 上，Sell 打在 dn 上
-    // hidden=true → 完全不显示（ER 过低）
+    // hidden=true → 完全不显示（ER 过低且不够干脆的噪声）
     // will_trade===false 且非 hidden → 灰色半透明（被过滤器拦住，仍显示供参考）
     if (opts.showSignals) {
       r.candle.setMarkers(

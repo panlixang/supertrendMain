@@ -410,6 +410,9 @@ class OKXFeed:
                                              candles_by_tf=st_store.all_candles(),
                                              p=st_store.params)
                         s["hidden"] = gate.get("hidden", False)
+                        s["will_trade"] = gate.get("trade", False)
+                        s["gate_reasons"] = gate.get("reasons", [])
+                        s["regime"] = gate.get("regime")
                         s["filters"] = gate.get("filters", {})
                         out.append(s)
                 except Exception as e:
@@ -431,6 +434,8 @@ class OKXFeed:
             "positions": {sym: st.position.to_dict(st.ticker.last)
                           for sym, st in s.stores.items() if st.position},
             "symbols":   [{**vars(st.cfg), "params": vars(st.params),
+                           "exit_rules": vars(st.exit_rules),
+                           "exit_rules_quick": vars(st.exit_rules_quick),
                            "last": st.ticker.last, "history_loaded": st.history_loaded}
                           for st in s.stores.values() if st.cfg],
         })

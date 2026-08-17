@@ -791,23 +791,23 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
     setAdxPeriod(c.adx_period ?? 14);
   }, [c.atr_filter_enabled, c.range_filter_enabled, c.mtf_filter_enabled, c.adx_filter_enabled]);
   useEffect(() => {
-    if (c.exit_rules) {
-      setTp1(c.exit_rules.tp1_pct ?? 2);
-      setTpRatio(c.exit_rules.tp1_ratio ?? 70);
-      setSlPct(c.exit_rules.sl_pct ?? 2);
-      setMoveSlToEntry(c.exit_rules.move_sl_to_entry ?? true);
-      setTrailWithSt(c.exit_rules.trail_with_st ?? true);
-    }
-  }, [c.exit_rules]);
+    if (!c.exit_rules) return;
+    setTp1(c.exit_rules.tp1_pct ?? 2);
+    setTpRatio(c.exit_rules.tp1_ratio ?? 70);
+    setSlPct(c.exit_rules.sl_pct ?? 2);
+    setMoveSlToEntry(c.exit_rules.move_sl_to_entry ?? true);
+    setTrailWithSt(c.exit_rules.trail_with_st ?? true);
+  }, [c.exit_rules?.tp1_pct, c.exit_rules?.tp1_ratio, c.exit_rules?.sl_pct,
+      c.exit_rules?.move_sl_to_entry, c.exit_rules?.trail_with_st]);
   useEffect(() => {
-    if (c.exit_rules_quick) {
-      setQTp(c.exit_rules_quick.tp1_pct ?? 1);
-      setQTpRatio(c.exit_rules_quick.tp1_ratio ?? 100);
-      setQSl(c.exit_rules_quick.sl_pct ?? 1);
-      setQMoveSlToEntry(c.exit_rules_quick.move_sl_to_entry ?? false);
-      setQTrailWithSt(c.exit_rules_quick.trail_with_st ?? true);
-    }
-  }, [c.exit_rules_quick]);
+    if (!c.exit_rules_quick) return;
+    setQTp(c.exit_rules_quick.tp1_pct ?? 1);
+    setQTpRatio(c.exit_rules_quick.tp1_ratio ?? 100);
+    setQSl(c.exit_rules_quick.sl_pct ?? 1);
+    setQMoveSlToEntry(c.exit_rules_quick.move_sl_to_entry ?? false);
+    setQTrailWithSt(c.exit_rules_quick.trail_with_st ?? true);
+  }, [c.exit_rules_quick?.tp1_pct, c.exit_rules_quick?.tp1_ratio, c.exit_rules_quick?.sl_pct,
+      c.exit_rules_quick?.move_sl_to_entry, c.exit_rules_quick?.trail_with_st]);
 
   return (
     <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
@@ -884,7 +884,7 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                      style={{ ...sty.input, width: 48 }} />
             </div>
           </Row>
-          <Row label="ER 阈值" hint="隐藏/弱信号/标准档最低值">
+          <Row label="ER 阈值" hint="隐藏/弱档/标准档。交易周期上强度够的翻转：图上有箭头就会下单">
             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
               <input type="number" min={0} max={1} step={0.01} value={erHide}
                      onChange={(e) => setErHide(+e.target.value)}

@@ -54,7 +54,7 @@ export default function SignalList() {
                }}>
             <div style={sty.head}>
               <span style={{ ...sty.badge, background: col + '22', color: buy ? '#00c9a7' : '#e05263', borderColor: col + '66' }}>
-                {buy ? '▲ BUY' : '▼ SELL'}
+                {buy ? '▲ BUY' : '▼ SELL'}{s.will_trade === false ? ' ✕' : ''}
               </span>
               <span style={{ ...sty.grade, background: gradeColor(s.grade) + '22',
                              color: gradeColor(s.grade), borderColor: gradeColor(s.grade) + '66' }}>

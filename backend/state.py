@@ -98,6 +98,9 @@ class SymbolTradeConfig:
     margin_usdt: float = 10.0
     leverage:    int   = 3
     allow_tfs:   list  = field(default_factory=lambda: ["15m", "30m", "1h", "4h", "1d"])
+    # ── 仓位计算模式 ──
+    sizing_mode: str   = "fixed"    # "fixed"=固定金额 / "equity_pct"=净值百分比
+    equity_pct:  float = 100.0      # 净值百分比模式：每次开仓用净值的X%（1-100）
     # ── ER 闸门（品种独立）──
     er_hide_below: float = 0.10
     er_weak_min:   float = 0.12
