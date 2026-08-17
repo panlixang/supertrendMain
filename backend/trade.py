@@ -404,15 +404,23 @@ async def query_order(inst_id: str, order_id: str, category: str = "SWAP",
     return {"ok": r.get("code") == "0", "data": _first(r), "error": None if r.get("code") == "0" else _err(r)}
 
 
-async def ping() -> dict:
+async def ping(sim: bool | None = None) -> dict:
     """连通性 + 密钥有效性自检：查账户余额。"""
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥（OKX_API_KEY / SECRET / PASSPHRASE）"}
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET", BALANCE, None, None)
+    r = await loop.run_in_executor(None, _request, "GET", BALANCE, None, sim)
     if r.get("code") == "0":
         row = _first(r)
         usdt = next((d for d in row.get("details", []) if d.get("ccy") == "USDT"), {})
-        return {"ok": True, "paper": SIMULATED,
-                "equity": row.get("totalEq"), "usdt_avail": usdt.get("availBal")}
-    return {"ok": False, "paper": SIMULATED, "error": _err(r)}
+
+        def _num(x) -> float:
+            try:
+                return float(x) if x not in (None, "") else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        return {"ok": True, "paper": SIMULATED if sim is None else sim,
+                "equity": round(_num(row.get("totalEq")), 4),
+                "usdt_avail": round(_num(usdt.get("availBal")), 4)}
+    return {"ok": False, "paper": SIMULATED if sim is None else sim, "error": _err(r)}

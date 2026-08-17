@@ -359,7 +359,7 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
           </>
         )}
 
-        <Row label="每笔保证金" hint={swap ? `× ${cfg.leverage}x = 名义 ${(amount * cfg.leverage).toFixed(0)} USDT` : 'USDT'}>
+        <Row label="每笔保证金" hint="新品种默认固定金额；各品种可改成净值百分比">
           <div style={{ display: 'flex', gap: 4 }}>
             <input type="number" min={1} step={1} value={amount}
                    onChange={(e) => setAmount(+e.target.value)} style={sty.input} />
@@ -736,6 +736,8 @@ function Mini({ k, v, sub, color }) {
 function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [open, setOpen] = useState(false);
   const [margin, setMargin] = useState(c.margin_usdt);
+  const [sizingMode, setSizingMode] = useState(c.sizing_mode || 'fixed');
+  const [eqPct, setEqPct] = useState(c.equity_pct ?? 10);
   const [periods, setPeriods] = useState(c.params?.periods ?? 15);
   const [mult, setMult] = useState(c.params?.multiplier ?? 9.1);
   // ER 阈值
@@ -768,6 +770,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [qTrailWithSt, setQTrailWithSt] = useState(c.exit_rules_quick?.trail_with_st ?? true);
 
   useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
+  useEffect(() => { setSizingMode(c.sizing_mode || 'fixed'); }, [c.sizing_mode]);
+  useEffect(() => { setEqPct(c.equity_pct ?? 10); }, [c.equity_pct]);
   useEffect(() => {
     setPeriods(c.params?.periods ?? 15);
     setMult(c.params?.multiplier ?? 9.1);
@@ -831,7 +835,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
         </div>
       </div>
       <div style={{ fontSize: 9, color: '#4a5058' }}>
-        {c.margin_usdt}U × {c.leverage}x　·　{(c.allow_tfs || []).join('/')}　·
+        {c.sizing_mode === 'equity_pct'
+          ? `净值 ${c.equity_pct ?? 10}%`
+          : `${c.margin_usdt}U`} × {c.leverage}x　·　{(c.allow_tfs || []).join('/')}　·
         参数 {c.params?.periods}×{c.params?.multiplier}　·
         ER {c.er_hide_below ?? 0.10}/{c.er_weak_min ?? 0.12}/{c.er_min ?? 0.15}
       </div>
@@ -839,15 +845,48 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
       {open && (
         <div style={{ borderTop: '1px solid #1e1e1e', paddingTop: 6,
                       display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <Row label="每笔保证金" hint={swap ? `× ${c.leverage}x = 名义 ${(margin * c.leverage).toFixed(0)}U` : 'USDT'}>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <input type="number" min={1} step={1} value={margin}
-                     onChange={(e) => setMargin(+e.target.value)} style={sty.input} />
-              <button onClick={() => onPatch({ margin_usdt: margin }, `${c.symbol} 保证金改为 ${margin}U`)}
-                      disabled={margin === c.margin_usdt}
-                      style={{ ...sty.smallBtn, opacity: margin === c.margin_usdt ? 0.3 : 1 }}>改</button>
+          <Row label="仓位大小" hint={sizingMode === 'equity_pct'
+            ? '每次开仓用账户净值的 X% 作保证金，不超过 USDT 可用'
+            : (swap ? `× ${c.leverage}x = 名义 ${(margin * c.leverage).toFixed(0)}U` : 'USDT')}>
+            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {[['fixed', '固定金额'], ['equity_pct', '净值%']].map(([v, l]) => (
+                <button key={v}
+                        onClick={() => {
+                          setSizingMode(v);
+                          onPatch({ sizing_mode: v, equity_pct: v === 'equity_pct' ? eqPct : c.equity_pct },
+                            v === 'equity_pct' ? `${c.symbol} 改为净值 ${eqPct}%` : `${c.symbol} 改为固定金额`);
+                        }}
+                        style={{ ...sty.chip, opacity: sizingMode === v ? 1 : 0.3 }}>{l}</button>
+              ))}
             </div>
           </Row>
+          {sizingMode === 'equity_pct' ? (
+            <Row label="净值比例 %" hint={`开仓保证金 = 账户净值 × ${eqPct}%`}>
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {[5, 10, 20, 50, 100].map((n) => (
+                  <button key={n} onClick={() => { setEqPct(n); onPatch({ sizing_mode: 'equity_pct', equity_pct: n }, `${c.symbol} 净值比例 ${n}%`); }}
+                          style={{ ...sty.chip, fontSize: 10, padding: '2px 7px',
+                                   opacity: eqPct === n ? 1 : 0.3 }}>{n}%</button>
+                ))}
+                <input type="number" min={1} max={100} step={1} value={eqPct}
+                       onChange={(e) => setEqPct(+e.target.value)}
+                       style={{ ...sty.input, width: 48 }} />
+                <button onClick={() => onPatch({ sizing_mode: 'equity_pct', equity_pct: eqPct }, `${c.symbol} 净值比例 ${eqPct}%`)}
+                        disabled={eqPct === c.equity_pct && c.sizing_mode === 'equity_pct'}
+                        style={{ ...sty.smallBtn, opacity: eqPct === c.equity_pct && c.sizing_mode === 'equity_pct' ? 0.3 : 1 }}>改</button>
+              </div>
+            </Row>
+          ) : (
+            <Row label="每笔保证金" hint={swap ? `× ${c.leverage}x = 名义 ${(margin * c.leverage).toFixed(0)}U` : 'USDT'}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <input type="number" min={1} step={1} value={margin}
+                       onChange={(e) => setMargin(+e.target.value)} style={sty.input} />
+                <button onClick={() => onPatch({ sizing_mode: 'fixed', margin_usdt: margin }, `${c.symbol} 保证金改为 ${margin}U`)}
+                        disabled={margin === c.margin_usdt && c.sizing_mode !== 'equity_pct'}
+                        style={{ ...sty.smallBtn, opacity: margin === c.margin_usdt && c.sizing_mode !== 'equity_pct' ? 0.3 : 1 }}>改</button>
+              </div>
+            </Row>
+          )}
           {swap && (
             <Row label="杠杆倍数">
               <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -1088,6 +1127,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
           </div>
           <button onClick={() => onPatch({
                     margin_usdt: margin,
+                    sizing_mode: sizingMode,
+                    equity_pct: eqPct,
                     leverage: c.leverage,
                     periods,
                     multiplier: mult,

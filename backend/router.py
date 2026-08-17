@@ -605,6 +605,8 @@ class SymbolCfgIn(BaseModel):
     margin_usdt: Optional[float] = None
     leverage:    Optional[int]   = None
     allow_tfs:   Optional[list]  = None
+    sizing_mode: Optional[str]   = None   # fixed / equity_pct
+    equity_pct:  Optional[float] = None   # 1~100，净值百分比模式用
     # ER 闸门品种独立
     er_hide_below: Optional[float] = None
     er_weak_min:   Optional[float] = None
@@ -689,6 +691,11 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if body.margin_usdt is not None: c.margin_usdt = max(1.0, body.margin_usdt)
     if body.leverage    is not None: c.leverage    = max(1, min(125, body.leverage))
     if body.allow_tfs   is not None: c.allow_tfs   = [t for t in body.allow_tfs if t in TF_CONFIG]
+    if body.sizing_mode is not None:
+        if body.sizing_mode not in ("fixed", "equity_pct"):
+            return {"ok": False, "error": "sizing_mode 仅支持 fixed（固定金额）/ equity_pct（净值百分比）"}
+        c.sizing_mode = body.sizing_mode
+    if body.equity_pct  is not None: c.equity_pct  = max(1.0, min(100.0, body.equity_pct))
 
     # ER 闸门品种独立
     if body.er_hide_below is not None: c.er_hide_below = max(0.0, min(1.0, body.er_hide_below))

@@ -109,26 +109,60 @@ class Executor:
                 return None
             return await self._open(sig, gate.get("profile") or "normal")
 
+    async def _resolve_margin(self) -> tuple[float | None, str]:
+        """开仓保证金。fixed=固定金额；equity_pct=账户净值的 X%，且不超过 USDT 可用。"""
+        cfg = self.cfg
+        sc = self.store.cfg
+        mode = getattr(sc, "sizing_mode", None) or "fixed"
+        if mode != "equity_pct":
+            m = float(cfg.amount_usdt)
+            return m, f"{m}U × {cfg.leverage}x"
+
+        info = await trade.ping(sim=cfg.paper)
+        if not info.get("ok"):
+            return None, info.get("error") or "查询账户净值失败"
+        eq = float(info.get("equity") or 0)
+        avail = float(info.get("usdt_avail") or 0)
+        pct = max(1.0, min(100.0, float(getattr(sc, "equity_pct", 10) or 10)))
+        want = eq * pct / 100.0
+        cap = avail if avail > 0 else want
+        margin = round(min(want, cap), 4)
+        if margin < 1:
+            return None, (
+                f"按净值 {pct:.0f}% 算出 {margin}U，不足 1U"
+                f"（净值 {eq:.2f} / 可用 {avail:.2f}）"
+            )
+        note = f"净值 {eq:.2f}U × {pct:.0f}% = {margin}U × {cfg.leverage}x"
+        if avail > 0 and want > avail + 1e-6:
+            note += f"（可用 {avail:.2f}U 封顶）"
+        return margin, note
+
     async def _open(self, sig: dict, profile: str = "normal") -> dict | None:
         cfg, symbol = self.cfg, self.store.symbol
-        rules = self.state.rules_for(profile)
+        rules = self.state.rules_for(profile, self.store.symbol)
         await self._ensure_leverage(symbol)
 
         px = regime.limit_price(sig, cfg)
         side = "buy" if sig["type"] == "buy" else "sell"
+        extra = {
+            "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
+            "sig_type": sig["type"], "grade": sig.get("grade"), "trigger": sig["price"],
+            "profile": profile,
+        }
+        margin, how = await self._resolve_margin()
+        if margin is None:
+            logger.warning(f"[跳过开仓] {symbol} {how}")
+            return await self._record({"ok": False, "error": how, "price": px}, extra)
+
         r = await trade.place_order(
             symbol, side, px,
-            margin_usdt=cfg.amount_usdt, leverage=cfg.leverage,
+            margin_usdt=margin, leverage=cfg.leverage,
             category=cfg.category, mgn_mode=cfg.margin_mode,
             client_oid=f"o{sig['tf']}{sig['ts']}",
             sim=cfg.paper,
             ref_price=self.store.ticker.last or sig["price"],
         )
-        order = await self._record(r, {
-            "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
-            "sig_type": sig["type"], "grade": sig.get("grade"), "trigger": sig["price"],
-            "profile": profile,
-        })
+        order = await self._record(r, extra)
         if not r.get("ok"):
             return order
 
@@ -146,11 +180,11 @@ class Executor:
         self.store.position.log(
             "open",
             f"开{'多' if side == 'buy' else '空'} {r['qty']}{unit} @ {r['price']}"
-            f"（保证金 {cfg.amount_usdt}U × {cfg.leverage}x，止损 {stop}，{tag}"
+            f"（保证金 {how}，止损 {stop}，{tag}"
             f" 止盈 {rules.tp1_pct}% 平 {rules.tp1_ratio:.0f}%）",
         )
         logger.info(f"[持仓建立] {symbol} {self.store.position.side} @ {r['price']} "
-                    f"止损 {stop} 档位 {profile}")
+                    f"保证金 {how} 止损 {stop} 档位 {profile}")
         await self._push_position()
         return order
 
