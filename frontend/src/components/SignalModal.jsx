@@ -117,7 +117,7 @@ export default function SignalModal() {
         {traded ? (
           <div style={{ ...sty.order, borderColor: '#00c9a766', background: '#00c9a712' }}>
             <div style={{ fontWeight: 800, color: '#00c9a7', fontSize: 12 }}>
-              ✅ 已挂限价单{order.paper ? '（模拟盘）' : '（⚠️ 实盘）'}
+              ✅ 已成交{order.paper ? '（模拟盘）' : '（⚠️ 实盘）'}
             </div>
             <div style={{ fontSize: 11, color: '#c8ccd4', fontFamily: 'var(--font-mono)' }}>
               {fmt.price(order.price)} × {order.qty} ≈ {order.amount} USDT
@@ -126,7 +126,9 @@ export default function SignalModal() {
           </div>
         ) : order && !order.ok ? (
           <div style={{ ...sty.order, borderColor: '#c2185b66', background: '#8b000022' }}>
-            <div style={{ fontWeight: 800, color: '#e05263', fontSize: 12 }}>❌ 挂单失败</div>
+            <div style={{ fontWeight: 800, color: '#e05263', fontSize: 12 }}>
+              {String(order.error || '').includes('未成交') ? '⏸ 未成交已撤' : '❌ 挂单失败'}
+            </div>
             <div style={{ fontSize: 11, color: '#c8ccd4' }}>{order.error}</div>
           </div>
         ) : (

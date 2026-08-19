@@ -51,6 +51,7 @@ BASE_URL = os.environ.get("OKX_BASE_URL", "https://www.okx.com").rstrip("/")
 PLACE_ORDER   = "/api/v5/trade/order"
 CANCEL_ORDER  = "/api/v5/trade/cancel-order"
 ORDER_INFO    = "/api/v5/trade/order"
+PENDING_ORDERS = "/api/v5/trade/orders-pending"
 POSITIONS     = "/api/v5/account/positions"
 SET_LEVERAGE  = "/api/v5/account/set-leverage"
 BALANCE       = "/api/v5/account/balance"
@@ -212,6 +213,13 @@ def _fmt(v: float, step: float) -> str:
     return f"{v:.{_dec(step)}f}"
 
 
+def _num(x) -> float:
+    try:
+        return float(x) if x not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # ─── 下单 ────────────────────────────────────────────────────────
 
 async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
@@ -228,6 +236,54 @@ async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
     return {"ok": ok, "leverage": leverage, "error": None if ok else _err(r)}
 
 
+_LIMIT_TYPES = ("limit", "ioc", "fok", "post_only")
+_DEAD_STATES = ("canceled", "mmp_canceled", "expired")
+
+
+async def confirm_fill(
+    inst_id: str,
+    order_id: str,
+    category: str = "SWAP",
+    sim: bool | None = None,
+    attempts: int = 8,
+    delay: float = 0.3,
+    cancel_on_timeout: bool = False,
+) -> dict:
+    """轮询订单直到终态。返回 filled / avg_px / fill_sz / state。
+
+    开仓必须等成交确认：OKX 下单成功只代表委托进簿，不代表成交。
+    """
+    last: dict = {}
+    for _ in range(max(1, attempts)):
+        qr = await query_order(inst_id, order_id, category, sim=sim)
+        d = qr.get("data") or {}
+        last = d
+        state = (d.get("state") or "").lower()
+        acc = _num(d.get("accFillSz"))
+        avg = _num(d.get("avgPx"))
+        if state == "filled" or (acc > 0 and state in _DEAD_STATES):
+            return {"filled": True, "avg_px": avg or None, "fill_sz": acc or None,
+                    "state": state, "data": d}
+        if state in _DEAD_STATES and acc <= 0:
+            return {"filled": False, "avg_px": None, "fill_sz": 0.0,
+                    "state": state, "data": d}
+        await asyncio.sleep(delay)
+
+    if cancel_on_timeout and order_id:
+        await cancel(inst_id, order_id, category, sim=sim)
+        qr = await query_order(inst_id, order_id, category, sim=sim)
+        last = qr.get("data") or last
+
+    acc = _num(last.get("accFillSz"))
+    avg = _num(last.get("avgPx"))
+    state = (last.get("state") or ("canceled" if cancel_on_timeout else "")).lower()
+    if acc > 0:
+        return {"filled": True, "avg_px": avg or None, "fill_sz": acc,
+                "state": state, "data": last}
+    return {"filled": False, "avg_px": None, "fill_sz": 0.0,
+            "state": state or "timeout", "data": last}
+
+
 async def place_order(
     inst_id: str,
     side: str,                          # buy / sell
@@ -236,13 +292,15 @@ async def place_order(
     margin_usdt: float | None = None,   # 或按保证金开仓，内部换算
     leverage: int = 1,
     category: str = "SWAP",             # SWAP 合约 / SPOT 现货
-    order_type: str = "limit",          # limit / market
+    order_type: str = "limit",          # limit / market / ioc
     reduce_only: bool = False,
     pos_side: str | None = None,        # 双向持仓模式才需要
     mgn_mode: str = "cross",            # cross 全仓 / isolated 逐仓
     client_oid: str | None = None,
     sim: bool | None = None,
     ref_price: float | None = None,
+    wait_fill: bool = False,
+    wait_sec: float = 8.0,
 ) -> dict:
     """统一下单入口。
 
@@ -250,6 +308,7 @@ async def place_order(
           名义价值 = 保证金 × 杠杆
           合约张数 = 名义价值 / 价格 / ctVal   ← ctVal 这一步别漏
     平仓：传 sz + reduce_only=True
+    wait_fill=True 时轮询成交；超时撤剩余，未成交返回 ok=False（不记持仓）。
     """
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥"}
@@ -260,9 +319,9 @@ async def place_order(
     if spec.get("state") not in (None, "live", "unknown"):
         return {"ok": False, "error": f"{iid} 状态 {spec.get('state')}，不可交易"}
 
-    # 定价
+    # 定价。ioc/fok 也是限价（立刻成交或撤销），必须带 px。
     px = None
-    if order_type == "limit":
+    if order_type in _LIMIT_TYPES:
         if not price or price <= 0:
             return {"ok": False, "error": f"限价单委托价非法: {price}"}
         px = _snap(price, spec["tick_sz"])
@@ -298,7 +357,7 @@ async def place_order(
         "ordType": order_type,
         "sz":      _fmt(q, spec["lot_sz"]),
     }
-    if order_type == "limit":
+    if order_type in _LIMIT_TYPES:
         payload["px"] = _fmt(px, spec["tick_sz"])
     if is_swap:
         if pos_side:                     # 双向持仓模式
@@ -318,24 +377,36 @@ async def place_order(
     row = _first(r)
     if r.get("code") == "0" and row.get("sCode") == "0":
         fill_px, fill_sz = None, None
-        if order_type == "market" and row.get("ordId"):
-            # 市价单的即时响应里没有成交价，ref_price 只是下单瞬间的参考价 ——
-            # 拿它记账出过真实事故（持仓期间 ticker 换了品种，止盈价被记成 0.3255，
-            # 已实现盈亏虚高 70 倍）。必须反查订单拿真实 avgPx。
-            for _ in range(3):
-                qr = await query_order(iid, row["ordId"], category, sim=sim)
-                d = qr.get("data") or {}
-                if qr.get("ok") and d.get("avgPx"):
-                    try:
-                        fill_px = float(d["avgPx"])
-                        fill_sz = float(d.get("accFillSz") or 0) or None
-                    except (TypeError, ValueError):
-                        fill_px = None
-                    if fill_px:
-                        break
-                await asyncio.sleep(0.25)
-            if not fill_px:
-                logger.warning(f"[市价单成交价未查到] {iid} ordId={row['ordId']}，"
+        fill_state = None
+        oid = row.get("ordId")
+        # 市价 / 要求等成交：即时响应里没有 avgPx，必须反查。
+        # 拿 ref_price 记账出过真实事故（ticker 串品种，盈亏虚高几十倍）。
+        if oid and (order_type == "market" or wait_fill):
+            delay = 0.3
+            attempts = max(3, int(wait_sec / delay)) if wait_fill else 3
+            info = await confirm_fill(
+                iid, oid, category, sim=sim,
+                attempts=attempts, delay=delay,
+                cancel_on_timeout=bool(wait_fill),
+            )
+            fill_px = info.get("avg_px")
+            fill_sz = info.get("fill_sz") or None
+            fill_state = info.get("state")
+            if wait_fill and not info.get("filled"):
+                logger.warning(
+                    f"[未成交已撤销({env})] {iid} {side} ordId={oid} "
+                    f"state={fill_state}"
+                )
+                return {
+                    "ok": False,
+                    "error": f"未成交已撤销（{fill_state or 'timeout'}）",
+                    "orderId": oid, "clientOid": row.get("clOrdId"),
+                    "symbol": iid, "side": side, "price": px or calc_px, "qty": q,
+                    "paper": use_sim, "ts": int(time.time() * 1000),
+                    "fill_confirmed": False, "fill_state": fill_state,
+                }
+            if order_type == "market" and not fill_px:
+                logger.warning(f"[市价单成交价未查到] {iid} ordId={oid}，"
                                f"退回参考价 {calc_px} 记账（盈亏统计可能不准）")
         eff_px = fill_px or px or calc_px
         eff_q = fill_sz or q
@@ -344,10 +415,11 @@ async def place_order(
         logger.info(
             f"[下单成功({env})] {iid} {side}{'(平仓)' if reduce_only else ''} "
             f"{payload['sz']}{'张' if is_swap else ''} @ "
-            f"{fill_px or payload.get('px', '市价')} → ordId={row.get('ordId')}"
+            f"{fill_px or payload.get('px', '市价')} → ordId={oid}"
+            f"{' 已成交' if fill_px else ''}"
         )
         return {
-            "ok": True, "orderId": row.get("ordId"), "clientOid": row.get("clOrdId"),
+            "ok": True, "orderId": oid, "clientOid": row.get("clOrdId"),
             "symbol": iid, "side": side, "price": eff_px,
             "qty": eff_q,                                # 张数（合约）/ 币数（现货）
             "coin_qty": eff_q * spec["ct_val"] * spec["ct_mult"] if is_swap else eff_q,
@@ -355,7 +427,8 @@ async def place_order(
             "margin": round(notional / max(1, leverage), 4),
             "leverage": leverage, "reduce_only": reduce_only, "category": category,
             "ct_val": spec["ct_val"], "paper": use_sim, "ts": int(time.time() * 1000),
-            "fill_confirmed": bool(fill_px),
+            "fill_confirmed": bool(fill_px) or bool(wait_fill and fill_sz),
+            "fill_state": fill_state,
         }
 
     logger.warning(f"[下单失败] {payload} → {_err(r)}")
@@ -389,6 +462,41 @@ async def cancel(inst_id: str, order_id: str, category: str = "SWAP",
     r = await loop.run_in_executor(None, _request, "POST", CANCEL_ORDER, payload, sim)
     ok = r.get("code") == "0" and _first(r).get("sCode") == "0"
     return {"ok": ok, "error": None if ok else _err(r)}
+
+
+async def list_pending(inst_id: str, category: str = "SWAP",
+                       sim: bool | None = None) -> dict:
+    """该品种当前未成交委托。"""
+    if not configured:
+        return {"ok": False, "error": "未配置 OKX API 密钥", "data": []}
+    iid = to_swap(inst_id) if category == "SWAP" else to_spot(inst_id)
+    path = f"{PENDING_ORDERS}?instType={category}&instId={iid}"
+    loop = asyncio.get_event_loop()
+    r = await loop.run_in_executor(None, _request, "GET", path, None, sim)
+    ok = r.get("code") == "0"
+    return {"ok": ok, "data": r.get("data") or [],
+            "error": None if ok else _err(r)}
+
+
+async def cancel_pending(inst_id: str, category: str = "SWAP",
+                         sim: bool | None = None) -> dict:
+    """撤销该品种全部未成交委托，避免旧限价单事后成交变成幽灵仓。"""
+    listed = await list_pending(inst_id, category, sim=sim)
+    if not listed.get("ok"):
+        return {"ok": False, "cancelled": [], "error": listed.get("error")}
+    cancelled, errors = [], []
+    for row in listed.get("data") or []:
+        oid = row.get("ordId")
+        if not oid:
+            continue
+        r = await cancel(inst_id, oid, category, sim=sim)
+        if r.get("ok"):
+            cancelled.append(oid)
+        else:
+            errors.append(f"{oid}: {r.get('error')}")
+    if cancelled:
+        logger.info(f"[撤销未成交] {inst_id} {len(cancelled)} 笔 {cancelled}")
+    return {"ok": True, "cancelled": cancelled, "errors": errors}
 
 
 async def query_order(inst_id: str, order_id: str, category: str = "SWAP",

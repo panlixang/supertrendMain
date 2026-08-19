@@ -91,9 +91,10 @@ async def push_signal(symbol: str, sig: dict, order: dict | None = None) -> bool
     prof_label = {"quick": "快进快出档", "normal": "标准档"}.get(prof)
 
     if traded:
-        tag = "已挂单" + ("(模拟)" if order.get("paper") else "(实盘)")
+        tag = "已成交" + ("(模拟)" if order.get("paper") else "(实盘)")
     elif order and not order.get("ok"):
-        tag = "挂单失败"
+        err = str(order.get("error") or "")
+        tag = "未成交已撤" if "未成交" in err else "挂单失败"
     else:
         tag = "仅提醒"
 
@@ -120,8 +121,8 @@ async def push_signal(symbol: str, sig: dict, order: dict | None = None) -> bool
 
     if traded:
         rows += [
-            "### ✅ 已挂限价单",
-            f"- 委托价：**{order.get('price')}**　数量：**{order.get('qty')}**",
+            "### ✅ 已成交",
+            f"- 成交价：**{order.get('price')}**　数量：**{order.get('qty')}**",
             f"- 金额：约 **{order.get('amount')} USDT**",
             f"- 订单号：`{order.get('orderId')}`",
             f"- 环境：**{'模拟盘' if order.get('paper') else '⚠️ 实盘'}**",
@@ -130,7 +131,11 @@ async def push_signal(symbol: str, sig: dict, order: dict | None = None) -> bool
             # 两档的出场规则完全不同，推送里要说清这单按哪套跑
             rows.append(f"- 出场档位：**{prof_label}**")
     elif order and not order.get("ok"):
-        rows += ["### ❌ 挂单失败", f"- 原因：{order.get('error')}", "- 信号本身有效，请手动处理"]
+        err = str(order.get("error") or "")
+        if "未成交" in err:
+            rows += ["### ⏸ 未成交已撤", f"- 原因：{err}", "- 价格离开盘口，没有记成持仓，不会止损"]
+        else:
+            rows += ["### ❌ 挂单失败", f"- 原因：{err}", "- 信号本身有效，请手动处理"]
     else:
         reasons = sig.get("gate_reasons") or []
         rows += ["### ⏸ 未挂单，原因："] + [f"- {r}" for r in reasons[:4]]

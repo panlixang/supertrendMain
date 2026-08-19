@@ -368,7 +368,7 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
                     style={{ ...sty.smallBtn, opacity: amount === cfg.amount_usdt ? 0.3 : 1 }}>改</button>
           </div>
         </Row>
-        <Row label="限价偏移 %" hint="买单挂低、卖单挂高，争取被动成交">
+        <Row label="追价偏移 %" hint="买单略高于现价、卖单略低于现价，IOC 立刻成交；吃不到自动撤，不记持仓">
           <div style={{ display: 'flex', gap: 4 }}>
             <input type="number" min={0} max={2} step={0.01} value={offset}
                    onChange={(e) => setOffset(+e.target.value)} style={sty.input} />
@@ -635,9 +635,17 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
               <div style={{ fontSize: 10, color: '#c8ccd4', fontFamily: 'var(--font-mono)' }}>
                 {fmt.price(o.price)} × {o.qty}{o.category === 'SWAP' ? '张' : ''}
                 {o.notional ? ` ≈ ${o.notional}U` : ''}
+                {o.kind === 'open' && (
+                  <span style={{ ...sty.tag, marginLeft: 6,
+                                  color: o.fill_confirmed ? '#00c9a7' : '#f5a623' }}>
+                    {o.fill_confirmed ? '已成交' : '成交未确认'}
+                  </span>
+                )}
               </div>
             ) : (
-              <div style={{ fontSize: 10, color: '#e05263' }}>失败：{o.error}</div>
+              <div style={{ fontSize: 10, color: '#e05263' }}>
+                {String(o.error || '').includes('未成交') ? '未成交已撤：' : '失败：'}{o.error}
+              </div>
             )}
             {o.reason && <div style={{ fontSize: 9, color: '#5a6270' }}>{o.reason}</div>}
           </div>

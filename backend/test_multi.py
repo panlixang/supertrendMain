@@ -20,7 +20,7 @@ CALLS = []
 async def fake_place_order(symbol, side, price, sz=None, margin_usdt=None,
                            leverage=1, category="SWAP", order_type="limit",
                            reduce_only=False, pos_side=None, mgn_mode="cross",
-                           client_oid=None, sim=None, ref_price=None):
+                           client_oid=None, sim=None, ref_price=None, **_):
     px = price or ref_price
     qty = sz if sz is not None else round(margin_usdt * max(1, leverage) / px / 0.01, 2)
     CALLS.append((symbol, side, "reduce" if reduce_only else "open", qty, px))
@@ -41,9 +41,14 @@ async def fake_set_lev(*a, **k):
     return {"ok": True}
 
 
+async def fake_cancel_pending(*a, **k):
+    return {"ok": True, "cancelled": [], "errors": []}
+
+
 trade.place_order = fake_place_order
 trade.get_spec = fake_get_spec
 trade.set_leverage = fake_set_lev
+trade.cancel_pending = fake_cancel_pending
 trade.configured = True
 
 from state import SymbolStore, SymbolTradeConfig, state  # noqa: E402
@@ -119,6 +124,11 @@ async def main():
        not state.cfg_for("AAA-USDT").enabled and not state.cfg_for("BBB-USDT").enabled)
     ok("合并视图带品种参数", state.cfg_for("BBB-USDT").leverage == 3
        and state.cfg_for("BBB-USDT").amount_usdt == 10)
+
+    from regime import limit_price, TradeConfig
+    lp = TradeConfig(price_offset=0.05)
+    ok("买单追价（高于现价）", limit_price({"type": "buy", "price": 100}, lp) > 100)
+    ok("卖单追价（低于现价）", limit_price({"type": "sell", "price": 100}, lp) < 100)
 
     print("\n下单流水:")
     for c in CALLS:

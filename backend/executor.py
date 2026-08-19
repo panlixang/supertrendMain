@@ -142,7 +142,16 @@ class Executor:
         rules = self.state.rules_for(profile, self.store.symbol)
         await self._ensure_leverage(symbol)
 
-        px = regime.limit_price(sig, cfg)
+        # 先清掉该品种残留挂单，避免旧限价事后成交叠成两笔
+        try:
+            stale = await trade.cancel_pending(symbol, cfg.category, sim=cfg.paper)
+            if stale.get("cancelled"):
+                logger.warning(f"[开仓前清挂单] {symbol} {stale['cancelled']}")
+        except Exception as e:
+            logger.warning(f"[开仓前清挂单失败] {symbol}: {e}")
+
+        last = self.store.ticker.last or sig["price"]
+        px = regime.limit_price(sig, cfg, last)
         side = "buy" if sig["type"] == "buy" else "sell"
         extra = {
             "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
@@ -158,15 +167,20 @@ class Executor:
             symbol, side, px,
             margin_usdt=margin, leverage=cfg.leverage,
             category=cfg.category, mgn_mode=cfg.margin_mode,
+            order_type="ioc",
             client_oid=f"o{sig['tf']}{sig['ts']}",
             sim=cfg.paper,
-            ref_price=self.store.ticker.last or sig["price"],
+            ref_price=last,
+            wait_fill=True,
+            wait_sec=8.0,
         )
         order = await self._record(r, extra)
-        if not r.get("ok"):
+        if not r.get("ok") or not r.get("qty"):
             return order
 
-        stop = position.initial_stop(sig, rules)
+        # 止损按真实成交价算，避免追价后用信号价把止损放错边
+        filled = {**sig, "price": r["price"]}
+        stop = position.initial_stop(filled, rules)
         # 用交易所返回的 instId（已是 BTC-USDT-SWAP 这种合约形式），
         # 后续查规格/平仓都直接用它，避免现货/合约 form 混淆
         self.store.position = position.Position(
@@ -184,7 +198,7 @@ class Executor:
             f" 止盈 {rules.tp1_pct}% 平 {rules.tp1_ratio:.0f}%）",
         )
         logger.info(f"[持仓建立] {symbol} {self.store.position.side} @ {r['price']} "
-                    f"保证金 {how} 止损 {stop} 档位 {profile}")
+                    f"保证金 {how} 止损 {stop} 档位 {profile} 成交确认={r.get('fill_confirmed')}")
         await self._push_position()
         return order
 
@@ -242,14 +256,53 @@ class Executor:
         self.store.closed = self.store.closed[-50:]
         self.store.position = None
 
+    def _exchange_qty(self, rows, inst_id: str) -> float:
+        tot = 0.0
+        want = (inst_id or "").upper()
+        for row in rows or []:
+            if (row.get("instId") or "").upper() != want:
+                continue
+            try:
+                tot += abs(float(row.get("pos") or 0))
+            except (TypeError, ValueError):
+                pass
+        return tot
+
     async def _close(self, pos, reason: str, price: float | None = None):
         if not pos or pos.qty <= 0:
             return
         r = await self._reduce(pos, pos.qty, price or self.store.ticker.last, "平仓")
         if not r.get("ok"):
-            logger.warning(f"[平仓失败] {r.get('error')} — 请到交易所手动处理")
-            await self._record(r, {"kind": "close", "tf": pos.tf, "reason": reason})
-            return
+            # 可能是开仓限价根本没成交：本地有仓、交易所没有。
+            # 撤掉残留挂单，再对一下真仓；没有真仓就丢掉假持仓，不要记成止损。
+            try:
+                if pos.order_id:
+                    await trade.cancel(pos.symbol, pos.order_id,
+                                       self.cfg.category, sim=self.cfg.paper)
+                await trade.cancel_pending(pos.symbol, self.cfg.category, sim=self.cfg.paper)
+            except Exception as e:
+                logger.warning(f"[平仓时撤挂单失败] {e}")
+            real = {"ok": False, "data": []}
+            try:
+                real = await trade.get_positions(pos.symbol, self.cfg.category, sim=self.cfg.paper)
+            except Exception as e:
+                logger.warning(f"[平仓时查仓失败] {e}")
+            if real.get("ok") and self._exchange_qty(real.get("data"), pos.symbol) > 0:
+                r = await self._reduce(pos, pos.qty, price or self.store.ticker.last, "平仓")
+            if not r.get("ok"):
+                if real.get("ok") and self._exchange_qty(real.get("data"), pos.symbol) <= 0:
+                    logger.warning(f"[清空空仓] {pos.symbol} 交易所无仓，本地持仓作废（{reason}）")
+                    await self._record(
+                        {"ok": True, "price": price, "qty": 0, "fill_confirmed": False},
+                        {"kind": "close", "tf": pos.tf, "reason": "开仓未成交，已撤挂单并清空",
+                         "profile": pos.profile, "realized": 0},
+                    )
+                    self.store.position = None
+                    await self._push_position()
+                    return
+                logger.warning(f"[平仓失败] {r.get('error')} — 请到交易所手动处理")
+                await self._record(r, {"kind": "close", "tf": pos.tf, "reason": reason})
+                return
         position.apply_close(pos, r["price"], r["qty"], reason)
         await self._record(r, {"kind": "close", "tf": pos.tf, "reason": reason,
                                "profile": pos.profile, "realized": round(pos.realized, 4)})

@@ -84,7 +84,7 @@ class TradeConfig:
     leverage:     int   = 3            # 杠杆倍数
     margin_mode:  str   = "cross"      # cross 全仓 / isolated 逐仓
     amount_usdt:  float = 10.0         # 每笔保证金，名义价值 = 它 × 杠杆
-    price_offset: float = 0.05         # 限价单偏移 %：买单挂在触发价下方，卖单上方
+    price_offset: float = 0.05         # 开仓追价 %：买单略高于现价、卖单略低于现价，配合 IOC 立刻成交
     # ── 闸门 ──
     er_hide_below: float = 0.10        # ER < 此值时默认静默；交易周期+强度够的翻转视为突破启动（显示并下单）
     er_weak_min:   float = 0.12        # 弱档下界：ER ∈ [er_weak_min, er_min) 走「快进快出」规则
@@ -289,11 +289,13 @@ def range_bound(candles: list[dict], window: int = 30) -> dict:
     }
 
 
-def limit_price(sig: dict, cfg: TradeConfig) -> float:
-    """限价挂单价：买单挂低一点、卖单挂高一点，争取 maker 成交。
+def limit_price(sig: dict, cfg: TradeConfig, last: float | None = None) -> float:
+    """开仓限价：买单略高于现价、卖单略低于现价，让单立刻可成交。
 
-    偏移方向要对：买单往下挂才可能被动成交，往上挂就直接吃单了。
+    以前往不利方向挂（买单挂低/卖单挂高）是为了吃 maker。SuperTrend 翻转时价格
+    已经朝信号方向走，那种挂法经常不成交；等回撤再成交等于买在反弹、卖在反抽，
+    随后极易止损。不成交由 IOC / 超时撤单兜底，不要把未成交单记成持仓。
     """
-    p = float(sig["price"])
+    p = float(last or sig["price"])
     off = p * cfg.price_offset / 100
-    return p - off if sig["type"] == "buy" else p + off
+    return p + off if sig["type"] == "buy" else p - off
