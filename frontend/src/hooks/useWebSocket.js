@@ -100,6 +100,11 @@ export function useWebSocket() {
           break;
         case 'symbols':
           s.setSymbolCfgs(msg.data);
+          // ER 阈值/过滤器改变后重新拉取图表品种的指标，让 hidden 字段生效
+          if (isChart) {
+            s.clearIndicators();
+            ALL_TFS.forEach((tf) => fetchIndicators(tf, true));
+          }
           break;
         case 'position':
           if (msg.symbol) s.setPositionFor(msg.symbol, msg.data);
