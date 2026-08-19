@@ -21,7 +21,7 @@ cd backend  && pip3 install -r requirements.txt && python3 -m uvicorn main:app -
 cd frontend && npm install && npm run dev
 ```
 
-要求 Python ≥ 3.9、Node ≥ 18。
+要求 Python 3.10–3.13（推荐 3.12）、Node ≥ 18。不要用 3.9。
 
 ---
 

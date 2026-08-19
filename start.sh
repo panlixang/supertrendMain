@@ -41,25 +41,40 @@ fi
 echo ""
 cd "$ROOT/backend" || exit 1
 
-# 后端代码需要 Python 3.10+（系统自带的 /usr/bin/python3 是 3.9，会启动即崩，
-# 前端全部按钮都会报"网络错误"）。优先用项目 venv，没有就现建一个。
+# 后端代码需要 Python 3.10–3.13。系统自带的 python3.9 会启动即崩。
+# 3.13 已支持（requirements 用带官方 wheel 的版本，不必本地编译 Rust）。
 if [ ! -x .venv/bin/python ]; then
-  PY=$(command -v python3.12 || command -v python3.11 || command -v python3.10)
+  PY=$(command -v python3.12 || command -v python3.11 || command -v python3.13 || command -v python3.10)
   if [ -z "$PY" ]; then
-    echo "✗ 未找到 Python 3.10+，请先安装: brew install python@3.11"
+    echo "✗ 未找到 Python 3.10+，请先安装 Python 3.12（不要用 3.9）"
     exit 1
   fi
   echo "[后端] 创建虚拟环境（$("$PY" --version)）…"
   "$PY" -m venv .venv
 fi
+VPY=$(.venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+echo "[后端] 当前 venv Python $VPY"
 
 echo "[后端] 安装依赖…"
 .venv/bin/pip install -r requirements.txt -q
 
+# 重复执行 start.sh 时旧 uvicorn 还占着 8000，会在 _serve 里直接崩
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k 8000/tcp >/dev/null 2>&1 || true
+fi
+pkill -f "uvicorn main:app --port 8000" >/dev/null 2>&1 || true
+sleep 1
+
 echo "[后端] 启动 FastAPI :8000"
-.venv/bin/python -m uvicorn main:app --port 8000 &
+LOG="$ROOT/backend/uvicorn.log"
+.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 >"$LOG" 2>&1 &
 BACKEND_PID=$!
 sleep 2
+if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+  echo "✗ 后端启动失败。完整报错在 $LOG ，末尾如下："
+  tail -n 40 "$LOG"
+  exit 1
+fi
 
 echo ""
 echo "[前端] 安装依赖…"
