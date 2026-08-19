@@ -251,7 +251,7 @@ def _filter_kw(body) -> dict:
     }
 
 
-
+async def _candles_for(tf: str, bars: int):
     """优先用内存 deque；要的根数超出缓存时现拉 REST。"""
     if tf not in TF_CONFIG:
         return []
