@@ -82,6 +82,37 @@ export default function SignalList() {
                 强度 {s.score ?? 0}/3 · {fmt.datetime(s.ts)}
               </span>
             </div>
+
+            {/* 显示未下单原因 */}
+            {s.will_trade === false && s.gate_reasons && s.gate_reasons.length > 0 && (
+              <div style={sty.reasonBox}>
+                <span style={sty.reasonLabel}>❌ 未下单原因：</span>
+                <span style={sty.reasonText}>
+                  {s.gate_reasons.slice(0, 2).join(' · ')}
+                </span>
+              </div>
+            )}
+
+            {/* 显示增强功能的额外信息 */}
+            {s.filters && Object.keys(s.filters).length > 0 && (
+              <div style={sty.filtersBox}>
+                {s.filters.momentum && (
+                  <span style={sty.filterTag}>
+                    🚀 {s.filters.momentum.reason}
+                  </span>
+                )}
+                {s.filters.false_breakout && (
+                  <span style={{ ...sty.filterTag, background: '#7a4a5522', color: '#e05263' }}>
+                    ⚠️ 假突破
+                  </span>
+                )}
+                {s.filters.adaptive && (
+                  <span style={sty.filterTag}>
+                    📊 波动率 {s.filters.adaptive.volatility}%
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
@@ -146,5 +177,36 @@ const sty = {
   footRow: {
     display: 'flex', alignItems: 'center', gap: 8,
     borderTop: '1px solid #1a1a1a', paddingTop: 5,
+  },
+  reasonBox: {
+    marginTop: 4,
+    padding: '6px 8px',
+    background: '#7a4a5515',
+    borderRadius: 3,
+    borderLeft: '2px solid #e05263',
+    fontSize: 9,
+    lineHeight: 1.5,
+  },
+  reasonLabel: {
+    color: '#e05263',
+    fontWeight: 700,
+    marginRight: 4,
+  },
+  reasonText: {
+    color: '#8b93a0',
+  },
+  filtersBox: {
+    marginTop: 4,
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  filterTag: {
+    fontSize: 8.5,
+    padding: '2px 6px',
+    background: '#00c9a722',
+    color: '#00c9a7',
+    borderRadius: 3,
+    fontWeight: 600,
   },
 };

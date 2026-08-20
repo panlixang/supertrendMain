@@ -37,6 +37,7 @@ import strategy
 from history import fetch_candles, load_history
 from indicators import st_signals, super_trend
 from state import AppState, Candle, SymbolStore, Ticker, TF_CONFIG
+from integration import enhanced_signal_handler
 
 logger = logging.getLogger(__name__)
 
@@ -321,12 +322,25 @@ class OKXFeed:
         cfg = self.state.cfg_for(store.symbol)
         candles = store.candles_by_tf(tf)
         try:
-            gate = regime.evaluate(full, candles, cfg,
-                                  candles_by_tf=store.all_candles(),
-                                  p=store.params)
+            # 使用增强版信号评估
+            gate = enhanced_signal_handler(
+                full, candles, cfg,
+                candles_by_tf=store.all_candles(),
+                p=store.params,
+                use_momentum=True,      # 启用动量突破检测
+                use_false_filter=True,  # 启用假突破过滤
+                use_adaptive=True       # 启用自适应阈值
+            )
         except Exception as e:
-            logger.warning(f"[{store.symbol} {tf}] 行情判定失败: {e}")
-            gate = {"trade": False, "regime": {"label": "判定失败"}, "reasons": [str(e)]}
+            logger.warning(f"[{store.symbol} {tf}] 增强版行情判定失败，回退原版: {e}")
+            # 出错时回退到原版
+            try:
+                gate = regime.evaluate(full, candles, cfg,
+                                      candles_by_tf=store.all_candles(),
+                                      p=store.params)
+            except Exception as e2:
+                logger.warning(f"[{store.symbol} {tf}] 行情判定完全失败: {e2}")
+                gate = {"trade": False, "regime": {"label": "判定失败"}, "reasons": [str(e2)]}
 
         full["regime"] = gate["regime"]
         full["gate_reasons"] = gate["reasons"]

@@ -234,7 +234,7 @@ export default function CandleChart() {
 
     // plotshape：Buy 标签打在 up 上，Sell 打在 dn 上
     // hidden=true → 完全不显示（ER 过低且不够干脆的噪声）
-    // will_trade===false 且非 hidden → 灰色半透明（被过滤器拦住，仍显示供参考）
+    // will_trade===false 且非 hidden → 灰色半透明+X标记（被过滤器拦住，仍显示供参考）
     if (opts.showSignals) {
       r.candle.setMarkers(
         (ind.signals || [])
@@ -243,12 +243,34 @@ export default function CandleChart() {
             const blocked = s.will_trade === false;
             const buyColor  = blocked ? '#4a7a6e' : C.buyLabel;
             const sellColor = blocked ? '#7a4a55' : C.sellLabel;
+
+            // 构建标签文本：信号类型 + 等级 + 未下单标记
+            let text = s.type === 'buy' ? 'Buy' : 'Sell';
+            if (s.grade) text += ' ' + s.grade;
+            if (blocked) {
+              text += ' ❌';
+              // 添加未下单原因（取第一个原因）
+              if (s.gate_reasons && s.gate_reasons.length > 0) {
+                const reason = s.gate_reasons[0];
+                // 简化原因显示
+                if (reason.includes('震荡')) text += ' 震荡';
+                else if (reason.includes('ER')) text += ' ER低';
+                else if (reason.includes('等级')) text += ' 等级';
+                else if (reason.includes('周期')) text += ' 周期';
+                else if (reason.includes('假突破')) text += ' 假突破';
+                else if (reason.includes('ATR')) text += ' ATR';
+                else if (reason.includes('ADX')) text += ' ADX';
+                else if (reason.includes('未开启')) text += ' 未开';
+                else text += ' 拦截';
+              }
+            }
+
             return {
               time: toT(s.ts),
               position: s.type === 'buy' ? 'belowBar' : 'aboveBar',
               color: s.type === 'buy' ? buyColor : sellColor,
               shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown',
-              text: `${s.type === 'buy' ? 'Buy' : 'Sell'}${s.grade ? ' ' + s.grade : ''}${blocked ? ' ✕' : ''}`,
+              text: text,
               size: blocked ? 1 : (s.score ?? 0) >= 2 ? 2 : 1.3,
             };
           })

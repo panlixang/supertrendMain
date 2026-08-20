@@ -15,6 +15,7 @@ from feed import OKXFeed
 from history import load_history
 from router import router
 from state import state
+from integration import create_enhanced_executor
 import trade
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -34,7 +35,8 @@ async def lifespan(app: FastAPI):
     feed = OKXFeed(state)
     state.feed = feed
     for sym, st in state.stores.items():
-        state.executors[sym] = Executor(state, st)
+        # 使用增强版执行器（支持三级止盈、智能止损、盈利保护）
+        state.executors[sym] = create_enhanced_executor(state, st)
     # 重启会丢掉内存持仓，但交易所上的旧限价单还在。不撤的话事后成交就变成没人管的仓。
     if trade.configured:
         for sym in list(state.stores):
