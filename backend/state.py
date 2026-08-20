@@ -132,13 +132,39 @@ class SymbolStore:
         self.symbol = symbol                 # 现货形式（BTC-USDT），全程作为字典键
         self.cfg = cfg
         self.params = params or Params()
-        # 止盈止损规则（品种独立）
-        from position import ExitRules
-        self.exit_rules = exit_rules or ExitRules()
-        self.exit_rules_quick = exit_rules_quick or ExitRules(
-            tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
-            sl_mode="pct", sl_pct=1.0, trail_with_st=False,
-        )
+        # 止盈止损规则（品种独立）- 使用增强版
+        try:
+            from position_enhanced import EnhancedExitRules
+            self.exit_rules = exit_rules or EnhancedExitRules(
+                # 三级止盈
+                tp1_pct=1.0, tp1_ratio=30.0,
+                tp2_pct=2.0, tp2_ratio=40.0,
+                tp3_pct=3.5, tp3_ratio=30.0,
+                # 智能止损
+                sl_mode="st", sl_pct=2.0,
+                sl_buffer_atr=0.5, sl_min_pct=1.2,
+                move_sl_to_entry=True, trail_with_st=True,
+                # 盈利保护
+                protect_profit_at=1.5, protect_trail_pct=0.8,
+            )
+            self.exit_rules_quick = exit_rules_quick or EnhancedExitRules(
+                # 快进快出档
+                tp1_pct=0.8, tp1_ratio=100.0,   # 0.8%全平
+                tp2_pct=999, tp2_ratio=0,       # 不使用
+                tp3_pct=999, tp3_ratio=0,       # 不使用
+                sl_mode="pct", sl_pct=1.0,
+                sl_buffer_atr=0.3, sl_min_pct=1.0,
+                move_sl_to_entry=False, trail_with_st=False,
+                protect_profit_at=999, protect_trail_pct=0,
+            )
+        except ImportError:
+            # 如果增强版不存在，回退到原版
+            from position import ExitRules
+            self.exit_rules = exit_rules or ExitRules()
+            self.exit_rules_quick = exit_rules_quick or ExitRules(
+                tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+                sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+            )
         self.candles: dict[str, deque] = {
             tf: deque(maxlen=c["maxlen"]) for tf, c in TF_CONFIG.items()
         }
@@ -170,17 +196,42 @@ class AppState:
         self.clients: set[WebSocket] = set()
         self.current_symbol: str = "BTC-USDT"
         # 自动挂单全局配置 + 已下单记录（记录带 symbol）
-        from position import ExitRules
         from regime import TradeConfig
         self.trade_cfg = TradeConfig()
         # 两套出场规则，开仓时按 ER 落在哪档选一套（见 regime.classify 的 profile）
-        self.exit_rules = ExitRules()                    # 标准档：吃波段
-        self.exit_rules_quick = ExitRules(               # 弱档：快进快出
-            tp1_pct=0.8, tp1_ratio=100.0,   # 0.8% 一到就全平，不留尾仓
-            move_sl_to_entry=False,         # 全平了没有剩余仓位，抬保本无意义
-            sl_mode="pct", sl_pct=1.0,      # 固定 1%，不用超趋线
-            trail_with_st=False,            # 不跟随 —— 这档就是死守 1%
-        )
+        # 使用增强版规则
+        try:
+            from position_enhanced import EnhancedExitRules
+            self.exit_rules = EnhancedExitRules(
+                # 标准档：三级止盈
+                tp1_pct=1.0, tp1_ratio=30.0,
+                tp2_pct=2.0, tp2_ratio=40.0,
+                tp3_pct=3.5, tp3_ratio=30.0,
+                # 智能止损
+                sl_mode="st", sl_pct=2.0,
+                sl_buffer_atr=0.5, sl_min_pct=1.2,
+                move_sl_to_entry=True, trail_with_st=True,
+                # 盈利保护
+                protect_profit_at=1.5, protect_trail_pct=0.8,
+            )
+            self.exit_rules_quick = EnhancedExitRules(
+                # 弱档：快进快出
+                tp1_pct=0.8, tp1_ratio=100.0,   # 0.8%一到就全平
+                tp2_pct=999, tp2_ratio=0,       # 不使用
+                tp3_pct=999, tp3_ratio=0,       # 不使用
+                sl_mode="pct", sl_pct=1.0,
+                sl_buffer_atr=0.3, sl_min_pct=1.0,
+                move_sl_to_entry=False, trail_with_st=False,
+                protect_profit_at=999, protect_trail_pct=0,
+            )
+        except ImportError:
+            # 回退到原版
+            from position import ExitRules
+            self.exit_rules = ExitRules()
+            self.exit_rules_quick = ExitRules(
+                tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+                sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+            )
         self.orders: list[dict] = []
         # 多品种：交易 store + 仅看图 store + 每品种一个执行器
         self.stores: dict[str, SymbolStore] = {}
@@ -360,7 +411,14 @@ class AppState:
 
         entries = data.get("symbols")
         if isinstance(entries, list) and entries:
-            from position import ExitRules
+            # 使用增强版规则
+            try:
+                from position_enhanced import EnhancedExitRules
+                use_enhanced = True
+            except ImportError:
+                from position import ExitRules
+                use_enhanced = False
+
             for e in entries[:MAX_SYMBOLS]:
                 if not isinstance(e, dict) or not e.get("symbol"):
                     continue
@@ -404,17 +462,47 @@ class AppState:
                         setattr(params, k, v)
 
                 # 品种独立止盈止损规则（旧配置没有则用全局默认）
-                exit_rules = ExitRules()
-                for k, v in (e.get("exit_rules") or vars(self.exit_rules)).items():
-                    if hasattr(exit_rules, k):
-                        setattr(exit_rules, k, v)
-                exit_rules_quick = ExitRules(
-                    tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
-                    sl_mode="pct", sl_pct=1.0, trail_with_st=False,
-                )
-                for k, v in (e.get("exit_rules_quick") or vars(self.exit_rules_quick)).items():
-                    if hasattr(exit_rules_quick, k):
-                        setattr(exit_rules_quick, k, v)
+                if use_enhanced:
+                    exit_rules = EnhancedExitRules(
+                        # 从配置读取或使用默认值
+                        tp1_pct=1.0, tp1_ratio=30.0,
+                        tp2_pct=2.0, tp2_ratio=40.0,
+                        tp3_pct=3.5, tp3_ratio=30.0,
+                        sl_mode="st", sl_pct=2.0,
+                        sl_buffer_atr=0.5, sl_min_pct=1.2,
+                        move_sl_to_entry=True, trail_with_st=True,
+                        protect_profit_at=1.5, protect_trail_pct=0.8,
+                    )
+                    # 从保存的配置中覆盖
+                    for k, v in (e.get("exit_rules") or {}).items():
+                        if hasattr(exit_rules, k):
+                            setattr(exit_rules, k, v)
+
+                    exit_rules_quick = EnhancedExitRules(
+                        tp1_pct=0.8, tp1_ratio=100.0,
+                        tp2_pct=999, tp2_ratio=0,
+                        tp3_pct=999, tp3_ratio=0,
+                        sl_mode="pct", sl_pct=1.0,
+                        sl_buffer_atr=0.3, sl_min_pct=1.0,
+                        move_sl_to_entry=False, trail_with_st=False,
+                        protect_profit_at=999, protect_trail_pct=0,
+                    )
+                    for k, v in (e.get("exit_rules_quick") or {}).items():
+                        if hasattr(exit_rules_quick, k):
+                            setattr(exit_rules_quick, k, v)
+                else:
+                    # 原版
+                    exit_rules = ExitRules()
+                    for k, v in (e.get("exit_rules") or vars(self.exit_rules)).items():
+                        if hasattr(exit_rules, k):
+                            setattr(exit_rules, k, v)
+                    exit_rules_quick = ExitRules(
+                        tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+                        sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+                    )
+                    for k, v in (e.get("exit_rules_quick") or vars(self.exit_rules_quick)).items():
+                        if hasattr(exit_rules_quick, k):
+                            setattr(exit_rules_quick, k, v)
 
                 self.stores[symbol] = SymbolStore(
                     symbol, cfg=cfg, params=params,
@@ -422,7 +510,13 @@ class AppState:
                 )
         else:
             # 旧版单品种配置文件：从全局字段合成一条品种配置（enabled 保持 False）
-            from position import ExitRules
+            try:
+                from position_enhanced import EnhancedExitRules
+                use_enhanced = True
+            except ImportError:
+                from position import ExitRules
+                use_enhanced = False
+
             symbol = self.current_symbol
             cfg = SymbolTradeConfig(
                 symbol=symbol,

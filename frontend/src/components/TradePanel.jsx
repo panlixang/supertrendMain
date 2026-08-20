@@ -399,24 +399,123 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             <Toggle on={rules.enabled} onClick={() => patchRules({ enabled: !rules.enabled })} />
           </div>
 
-          <Row label="止盈触发" hint={swap ? `价格幅度，${cfg.leverage}x 下 = 保证金 ${(tp1 * cfg.leverage).toFixed(1)}%` : '价格涨幅 %'}>
-            <div style={{ display: 'flex', gap: 4 }}>
+          {/* 三级止盈 */}
+          <div style={{ fontSize: 10, color: '#f5a623', fontWeight: 600, marginBottom: 6 }}>
+            📊 三级止盈（分批离场）
+          </div>
+
+          <Row label="第一档 %" hint={swap ? `触发价格幅度，${cfg.leverage}x 下 = 保证金 ${(tp1 * cfg.leverage).toFixed(1)}%` : '价格涨幅 %'}>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
               <input type="number" min={0.1} step={0.1} value={tp1}
-                     onChange={(e) => setTp1(+e.target.value)} style={sty.input} />
-              <button onClick={() => patchRules({ tp1_pct: tp1 }, `止盈线改为 ${tp1}%`)}
-                      disabled={tp1 === rules.tp1_pct}
-                      style={{ ...sty.smallBtn, opacity: tp1 === rules.tp1_pct ? 0.3 : 1 }}>改</button>
-            </div>
-          </Row>
-          <Row label="止盈比例 %" hint="触发时平掉多少仓位">
-            <div style={{ display: 'flex', gap: 4 }}>
+                     onChange={(e) => setTp1(+e.target.value)} style={{ ...sty.input, width: 60 }} />
+              <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
               <input type="number" min={1} max={100} step={5} value={tpRatio}
-                     onChange={(e) => setTpRatio(+e.target.value)} style={sty.input} />
-              <button onClick={() => patchRules({ tp1_ratio: tpRatio }, `止盈比例改为 ${tpRatio}%`)}
-                      disabled={tpRatio === rules.tp1_ratio}
-                      style={{ ...sty.smallBtn, opacity: tpRatio === rules.tp1_ratio ? 0.3 : 1 }}>改</button>
+                     onChange={(e) => setTpRatio(+e.target.value)} style={{ ...sty.input, width: 50 }} />
+              <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
+              <button onClick={() => patchRules({ tp1_pct: tp1, tp1_ratio: tpRatio }, `第1档: ${tp1}%平${tpRatio}%`)}
+                      disabled={tp1 === rules.tp1_pct && tpRatio === rules.tp1_ratio}
+                      style={{ ...sty.smallBtn, opacity: (tp1 === rules.tp1_pct && tpRatio === rules.tp1_ratio) ? 0.3 : 1 }}>改</button>
             </div>
           </Row>
+
+          {/* 第二档 */}
+          {rules.tp2_pct !== undefined && (
+            <Row label="第二档 %" hint="第二档止盈触发线">
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                <input type="number" min={0.1} step={0.1}
+                       value={rules.tp2_pct || 2.0}
+                       onChange={(e) => patchRules({ tp2_pct: +e.target.value })}
+                       style={{ ...sty.input, width: 60 }} />
+                <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
+                <input type="number" min={1} max={100} step={5}
+                       value={rules.tp2_ratio || 40}
+                       onChange={(e) => patchRules({ tp2_ratio: +e.target.value })}
+                       style={{ ...sty.input, width: 50 }} />
+                <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
+              </div>
+            </Row>
+          )}
+
+          {/* 第三档 */}
+          {rules.tp3_pct !== undefined && (
+            <Row label="第三档 %" hint="第三档止盈，剩余全平">
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                <input type="number" min={0.1} step={0.1}
+                       value={rules.tp3_pct || 3.5}
+                       onChange={(e) => patchRules({ tp3_pct: +e.target.value })}
+                       style={{ ...sty.input, width: 60 }} />
+                <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 全平</span>
+              </div>
+            </Row>
+          )}
+
+          <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, marginTop: 4, padding: '6px 8px', background: '#00c9a710', borderRadius: 3 }}>
+            💡 三级止盈示例：1%平30% → 2%平40% → 3.5%全平<br/>
+            小盈利快速落袋，大趋势持有更久，心理压力更小
+          </div>
+
+          {/* 智能止损增强 */}
+          {rules.sl_buffer_atr !== undefined && (
+            <>
+              <div style={{ fontSize: 10, color: '#4e8aff', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
+                🛡️ 智能止损（减少震荡扫损）
+              </div>
+              <Row label="ATR缓冲倍数" hint="ST止损线外扩N倍ATR，给震荡留空间">
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input type="number" min={0} max={2} step={0.1}
+                         value={rules.sl_buffer_atr || 0.5}
+                         onChange={(e) => patchRules({ sl_buffer_atr: +e.target.value })}
+                         style={{ ...sty.input, width: 60 }} />
+                  <span style={{ fontSize: 9, color: '#8b93a0' }}>× ATR</span>
+                </div>
+              </Row>
+              <Row label="最小止损距离 %" hint="防止止损过近被秒扫">
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input type="number" min={0.5} max={5} step={0.1}
+                         value={rules.sl_min_pct || 1.2}
+                         onChange={(e) => patchRules({ sl_min_pct: +e.target.value })}
+                         style={{ ...sty.input, width: 60 }} />
+                  <span style={{ fontSize: 9, color: '#8b93a0' }}>%</span>
+                </div>
+              </Row>
+              <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#4e8aff10', borderRadius: 3 }}>
+                智能止损 = max(ST线-ATR缓冲, 开仓价×最小距离%)<br/>
+                避免震荡时被正常波动扫损
+              </div>
+            </>
+          )}
+
+          {/* 盈利保护 */}
+          {rules.protect_profit_at !== undefined && (
+            <>
+              <div style={{ fontSize: 10, color: '#00c9a7', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
+                💎 盈利保护（避免过早离场）
+              </div>
+              <Row label="启动保护 %" hint="浮盈达到此值时启动保护">
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input type="number" min={0.5} max={10} step={0.1}
+                         value={rules.protect_profit_at || 1.5}
+                         onChange={(e) => patchRules({ protect_profit_at: +e.target.value })}
+                         style={{ ...sty.input, width: 60 }} />
+                  <span style={{ fontSize: 9, color: '#8b93a0' }}>%</span>
+                </div>
+              </Row>
+              <Row label="允许回撤 %" hint="从最高点可以回撤多少">
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input type="number" min={0.1} max={5} step={0.1}
+                         value={rules.protect_trail_pct || 0.8}
+                         onChange={(e) => patchRules({ protect_trail_pct: +e.target.value })}
+                         style={{ ...sty.input, width: 60 }} />
+                  <span style={{ fontSize: 9, color: '#8b93a0' }}>%</span>
+                </div>
+              </Row>
+              <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#00c9a710', borderRadius: 3 }}>
+                示例：浮盈达1.5%后，允许回撤0.8%<br/>
+                即从最高点回落超过0.8%才止损，避免短期回调就离场
+              </div>
+            </>
+          )}
+
           <div style={sty.rowBetween}>
             <div>
               <div style={{ fontSize: 11, color: '#c8ccd4' }}>止盈后止损抬到开仓价</div>
