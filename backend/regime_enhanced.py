@@ -192,15 +192,28 @@ def evaluate_enhanced(sig: dict, candles: list[dict], cfg: TradeConfig,
                 "filters": {}
             }
 
-        # 真突破：放行
+        # 真突破：只放行「允许交易的周期/等级」。1m 上 20 根就是 20 分钟噪声，
+        # 以前这里直接 trade=True，等于无视 allow_tfs，中午三笔空单就是这么开出来的。
+        reasons = []
+        if not cfg.enabled:
+            reasons.append("自动挂单未开启")
+        tf = sig.get("tf")
+        if tf not in cfg.allow_tfs:
+            reasons.append(f"周期 {tf} 不在允许范围")
+        grade = sig.get("grade")
+        if grade not in cfg.allow_grades:
+            reasons.append(f"信号等级 {grade} 不在允许范围 {'/'.join(cfg.allow_grades)}")
+        if (sig.get("score") or 0) < cfg.min_score:
+            reasons.append(f"强度 {sig.get('score')}/3 低于阈值 {cfg.min_score}/3")
         return {
-            "trade": True,
-            "regime": {"regime": "momentum", "label": "动量突破"},
-            "reasons": [],
+            "trade": not reasons,
+            "regime": {"regime": "momentum", "label": "动量突破",
+                       "er": efficiency_ratio(candles)},
+            "reasons": reasons,
             "hidden": False,
-            "profile": "normal",
+            "profile": "normal" if not reasons else None,
             "momentum": momentum,
-            "filters": {"momentum_score": momentum["score"]}
+            "filters": {"momentum_score": momentum["score"]},
         }
 
     # 2. 假突破检测：震荡市陷阱

@@ -24,7 +24,7 @@ class EnhancedExitRules(ExitRules):
     tp2_pct: float = 2.0      # 第二档：2%
     tp2_ratio: float = 40.0   # 再平40%（累计70%）
     tp3_pct: float = 3.5      # 第三档：3.5%
-    tp3_ratio: float = 30.0   # 剩余全平
+    tp3_ratio: float = 100.0  # 剩余全平（100% 确保清仓）
 
     # 止损优化
     sl_buffer_atr: float = 0.5   # 止损线外扩0.5倍ATR（避免正常波动扫损）
@@ -106,78 +106,69 @@ def check_enhanced(pos: Position, price: float, rules: EnhancedExitRules,
     """增强版检查：多级止盈 + 盈利保护
 
     改进：
-    1. 三档止盈：1% / 2% / 3.5%（分批离场）
-    2. 盈利保护：浮盈达标后允许适度回撤
-    3. 极端保护止损：避免单次巨额亏损
-    4. 止损优先级仍最高
+    1. 三档止盈按 TP1→TP2→TP3 顺序检查（从低到高，确保分批离场顺序正确）
+    2. 止盈不受 enabled=False 影响（enabled 只控制价格止损）
+    3. 盈利保护：浮盈达标后允许适度回撤
+    4. 极端保护止损：避免单次巨额亏损
     """
-    if not rules.enabled or pos.qty <= 0:
+    if pos.qty <= 0:
         return None
 
     current_pnl = pos.pnl_pct(price)
 
-    # 0. 极端保护止损（最高优先级）
-    if rules.max_loss_enabled and current_pnl <= -rules.max_loss_pct:
+    # ── 止损部分：只在 enabled=True 时检查 ───────────────────────
+    if rules.enabled:
+        # 0. 极端保护止损（最高优先级）
+        if rules.max_loss_enabled and current_pnl <= -rules.max_loss_pct:
+            return {
+                "action": "max_stop",
+                "ratio": 100.0,
+                "reason": f"触及极端保护止损 -{rules.max_loss_pct}%（当前 {current_pnl:.2f}%）",
+            }
+
+        # 1. 止损优先（但要考虑盈利保护）
+        if hit_stop(pos, price):
+            # 如果已有盈利保护，检查是否只是回撤
+            if max_unrealized and max_unrealized >= rules.protect_profit_at:
+                allowed_pullback = max_unrealized - rules.protect_trail_pct
+                if current_pnl >= allowed_pullback:
+                    logger.info(f"盈利保护生效：当前{current_pnl:.2f}%，最高{max_unrealized:.2f}%，"
+                               f"允许回撤至{allowed_pullback:.2f}%")
+                    return None
+
+            return {
+                "action": "stop",
+                "ratio": 100.0,
+                "reason": (f"触及保本止损 {pos.stop}" if pos.breakeven
+                          else f"触及止损 {pos.stop}"),
+            }
+
+    # ── 三档止盈：不受 enabled 影响，按 TP1→TP2→TP3 顺序检查 ────
+    tp2_done = getattr(pos, "tp2_done", False)
+    tp3_done = getattr(pos, "tp3_done", False)
+
+    # 第一档（优先检查，确保分批出场顺序）
+    if not pos.tp1_done and current_pnl >= rules.tp1_pct:
         return {
-            "action": "max_stop",
-            "ratio": 100.0,
-            "reason": f"触及极端保护止损 -{rules.max_loss_pct}%（当前 {current_pnl:.2f}%）",
+            "action": "tp1",
+            "ratio": rules.tp1_ratio,
+            "reason": f"浮盈 {current_pnl:.2f}% ≥ {rules.tp1_pct}%，第一档止盈",
         }
 
-    # 1. 止损优先（但要考虑盈利保护）
-    if hit_stop(pos, price):
-        # 如果已有盈利保护，检查是否只是回撤
-        if max_unrealized and max_unrealized >= rules.protect_profit_at:
-            # 允许从最高点回撤protect_trail_pct
-            allowed_pullback = max_unrealized - rules.protect_trail_pct
-            if current_pnl >= allowed_pullback:
-                # 还在保护范围内，不止损
-                logger.info(f"盈利保护生效：当前{current_pnl:.2f}%，最高{max_unrealized:.2f}%，"
-                           f"允许回撤至{allowed_pullback:.2f}%")
-                return None
-
-        return {
-            "action": "stop",
-            "ratio": 100.0,
-            "reason": (f"触及保本止损 {pos.stop}" if pos.breakeven
-                      else f"触及止损 {pos.stop}"),
-        }
-
-    # 2. 三档止盈
-    if hasattr(pos, "tp2_done"):
-        tp2_done = pos.tp2_done
-    else:
-        pos.tp2_done = False
-        tp2_done = False
-
-    if hasattr(pos, "tp3_done"):
-        tp3_done = pos.tp3_done
-    else:
-        pos.tp3_done = False
-        tp3_done = False
-
-    # 第三档
-    if not tp3_done and current_pnl >= rules.tp3_pct:
-        return {
-            "action": "tp3",
-            "ratio": rules.tp3_ratio,
-            "reason": f"浮盈 {current_pnl:.2f}% ≥ {rules.tp3_pct}%，第三档止盈（剩余全平）",
-        }
-
-    # 第二档
-    if not tp2_done and current_pnl >= rules.tp2_pct:
+    # 第二档（TP1 完成后才触发）
+    if pos.tp1_done and not tp2_done and current_pnl >= rules.tp2_pct:
         return {
             "action": "tp2",
             "ratio": rules.tp2_ratio,
             "reason": f"浮盈 {current_pnl:.2f}% ≥ {rules.tp2_pct}%，第二档止盈",
         }
 
-    # 第一档
-    if not pos.tp1_done and current_pnl >= rules.tp1_pct:
+    # 第三档（TP2 完成后才触发）
+    if tp2_done and not tp3_done and current_pnl >= rules.tp3_pct:
         return {
-            "action": "tp1",
-            "ratio": rules.tp1_ratio,
-            "reason": f"浮盈 {current_pnl:.2f}% ≥ {rules.tp1_pct}%，第一档止盈",
+            "action": "tp3",
+            "ratio": rules.tp3_ratio,
+            "reason": f"浮盈 {current_pnl:.2f}% ≥ {rules.tp3_pct}%，第三档止盈（剩余全平）",
         }
 
     return None

@@ -510,6 +510,10 @@ class ExitRulesPatch(BaseModel):
     enabled:          Optional[bool]  = None
     tp1_pct:          Optional[float] = None
     tp1_ratio:        Optional[float] = None
+    tp2_pct:          Optional[float] = None   # 第二档止盈触发幅度 %
+    tp2_ratio:        Optional[float] = None   # 第二档止盈平仓比例 %
+    tp3_pct:          Optional[float] = None   # 第三档止盈触发幅度 %
+    tp3_ratio:        Optional[float] = None   # 第三档止盈平仓比例 %（建议100全平）
     move_sl_to_entry: Optional[bool]  = None
     sl_mode:          Optional[str]   = None
     sl_pct:           Optional[float] = None
@@ -528,6 +532,10 @@ def _apply_exit_patch(r, patch: ExitRulesPatch):
     if patch.enabled          is not None: r.enabled = patch.enabled
     if patch.tp1_pct          is not None: r.tp1_pct = max(0.1, min(100.0, patch.tp1_pct))
     if patch.tp1_ratio        is not None: r.tp1_ratio = max(1.0, min(100.0, patch.tp1_ratio))
+    if patch.tp2_pct          is not None: r.tp2_pct = max(0.1, min(100.0, patch.tp2_pct))
+    if patch.tp2_ratio        is not None: r.tp2_ratio = max(0.0, min(100.0, patch.tp2_ratio))
+    if patch.tp3_pct          is not None: r.tp3_pct = max(0.1, min(100.0, patch.tp3_pct))
+    if patch.tp3_ratio        is not None: r.tp3_ratio = max(0.0, min(100.0, patch.tp3_ratio))
     if patch.move_sl_to_entry is not None: r.move_sl_to_entry = patch.move_sl_to_entry
     if patch.sl_mode is not None:
         if patch.sl_mode not in ("st", "pct"):

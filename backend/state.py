@@ -139,7 +139,7 @@ class SymbolStore:
                 # 三级止盈
                 tp1_pct=1.0, tp1_ratio=30.0,
                 tp2_pct=2.0, tp2_ratio=40.0,
-                tp3_pct=3.5, tp3_ratio=30.0,
+                tp3_pct=3.5, tp3_ratio=100.0,
                 # 禁用价格止损（只用信号止损）
                 enabled=False,  # ← 关闭价格驱动的止损
                 sl_mode="st", sl_pct=2.0,
@@ -207,7 +207,7 @@ class AppState:
                 # 标准档：三级止盈
                 tp1_pct=1.0, tp1_ratio=30.0,
                 tp2_pct=2.0, tp2_ratio=40.0,
-                tp3_pct=3.5, tp3_ratio=30.0,
+                tp3_pct=3.5, tp3_ratio=100.0,
                 # 禁用价格止损（只用信号止损）
                 enabled=False,  # ← 关闭价格驱动的止损
                 sl_mode="st", sl_pct=2.0,
@@ -477,7 +477,7 @@ class AppState:
                         # 从配置读取或使用默认值
                         tp1_pct=1.0, tp1_ratio=30.0,
                         tp2_pct=2.0, tp2_ratio=40.0,
-                        tp3_pct=3.5, tp3_ratio=30.0,
+                        tp3_pct=3.5, tp3_ratio=100.0,
                         sl_mode="st", sl_pct=2.0,
                         sl_buffer_atr=0.5, sl_min_pct=1.2,
                         move_sl_to_entry=True, trail_with_st=True,
