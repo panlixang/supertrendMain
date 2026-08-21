@@ -303,30 +303,39 @@ def create_enhanced_executor(state, store):
                 self.regime_module = __import__('regime')
 
             async def on_signal(self, sig: dict, gate: dict):
-                """优先使用增强版开仓"""
+                """反向平仓只认开仓周期；开仓可走增强版。"""
+                from executor import _spot_key, should_close_on_reverse
+
                 async with self._lock:
+                    if sig.get("symbol") and _spot_key(sig["symbol"]) != _spot_key(self.store.symbol):
+                        logger.warning(f"[忽略串品种信号] store={self.store.symbol} sig={sig.get('symbol')}")
+                        return None
+
                     pos = self.store.position
                     want = "long" if sig["type"] == "buy" else "short"
 
-                    # 反向平仓
-                    if (pos and pos.qty > 0 and pos.side != want
-                            and (sig["tf"] == pos.tf or gate.get("trade"))):
+                    if should_close_on_reverse(pos, sig):
                         await self._close(pos, f"{sig['tf']} 出现反向信号", sig.get("price"))
+                    elif (pos and pos.qty > 0 and pos.side != want and sig.get("tf") != pos.tf):
+                        logger.info(
+                            f"[忽略异周期反向] {self.store.symbol} 持仓 {pos.tf} {pos.side}，"
+                            f"忽略 {sig.get('tf')} {want}（不平仓、不开新仓）"
+                        )
+                        return None
 
-                    # 检查同向
                     pos = self.store.position
                     if pos and pos.qty > 0 and pos.side == want:
                         logger.info(f"[跳过开仓] {self.store.symbol} 已持有同向 {want} 仓位")
+                        return None
+                    if pos and pos.qty > 0:
                         return None
 
                     if not gate.get("trade"):
                         return None
 
-                    # 使用增强开仓
                     if self._should_use_enhanced():
                         return await self._open_enhanced(sig, gate.get("profile") or "normal")
-                    else:
-                        return await self._open(sig, gate.get("profile") or "normal")
+                    return await self._open(sig, gate.get("profile") or "normal")
 
             async def on_price(self, price: float):
                 """优先使用增强版价格处理"""

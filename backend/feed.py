@@ -351,9 +351,17 @@ class OKXFeed:
         full["symbol"] = store.symbol
 
         store.add_signal(full)
-        # ER太低的信号不弹窗、不提醒、静默入库
+        # ER太低的信号不弹窗、不提醒、静默入库。
+        # 但若正好是当前持仓的开仓周期反向，仍要交给执行器平仓，否则 15m 仓会一直挂着。
         if gate.get("hidden"):
             logger.info(f"[静默信号] {store.symbol} {tf} ER {full.get('er', '?')} < {cfg.er_hide_below}")
+            ex = self.state.executors.get(store.symbol)
+            pos = store.position
+            if ex and pos and pos.tf == tf:
+                try:
+                    await ex.on_signal(full, {**gate, "trade": False})
+                except Exception as e:
+                    logger.error(f"[{store.symbol} 静默反向平仓异常] {e}")
             return
         prof = {"quick": " 弱档", "normal": " 标准档"}.get(gate.get("profile"), "")
         logger.info(

@@ -3,6 +3,8 @@
 桩掉 trade.place_order / get_spec / set_leverage，驱动两个品种并发验证：
   1. 双品种各自开仓，互不覆盖
   2. 同品种 1m 噪声反向信号（未过闸门）不平自己的 15m 仓
+  2b. 异周期反向即使过闸门也不平 15m 仓、不开反向
+  2c. 串到 A 执行器的 BBB 信号被丢弃
   3. on_price 各吃各的 ticker：A 止盈+保本时 B 纹丝不动
   4. B 独立触发止损全平、落 closed 历史
   5. 同品种同周期反向信号平掉剩余仓位
@@ -94,6 +96,18 @@ async def main():
     # 2. 同品种 1m 噪声反向信号（未过闸门、周期不同）不平仓
     await exA.on_signal({"type": "sell", "tf": "1m", "ts": 2, "price": 101.0}, GATE_NO)
     ok("A 的 1m 噪声翻转没有平掉 15m 仓位", A.position and A.position.qty > 0)
+
+    # 2b. 异周期反向即使过闸门也不平仓、不开反向仓（1h 不能动 15m 仓）
+    n_calls = len(CALLS)
+    await exA.on_signal({"type": "sell", "tf": "1h", "ts": 21, "price": 99.0, "line": 102.0,
+                         "grade": "A", "score": 3, "symbol": "AAA-USDT"}, GATE_OK)
+    ok("A 的 1h 反向过闸门也没有平掉 15m 仓", A.position and A.position.side == "long")
+    ok("异周期反向没有额外下单", len(CALLS) == n_calls)
+
+    # 2c. 串品种信号直接忽略
+    await exA.on_signal({"type": "sell", "tf": "15m", "ts": 22, "price": 99.0,
+                         "symbol": "BBB-USDT"}, GATE_OK)
+    ok("A 忽略打到自己执行器上的 BBB 信号", A.position and A.position.side == "long")
 
     # 3. A 止盈：+2% ≥ 1.5%，平 70% 并保本；B 完全不受影响
     b_qty = B.position.qty

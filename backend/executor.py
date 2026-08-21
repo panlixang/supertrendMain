@@ -35,6 +35,18 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _spot_key(sym: str) -> str:
+    return (sym or "").upper().replace("-SWAP", "")
+
+
+def should_close_on_reverse(pos, sig: dict) -> bool:
+    """反向平仓只认开仓周期。1m/5m/1h 的翻转即使过闸门也不能平 15m 仓。"""
+    if not pos or getattr(pos, "qty", 0) <= 0:
+        return False
+    want = "long" if sig.get("type") == "buy" else "short"
+    return pos.side != want and sig.get("tf") == pos.tf
+
+
 class Executor:
     """一个品种一个实例。store 是该品种的 SymbolStore，持仓/价格/冷却都在里面 ——
     品种之间互不串行（各自有锁），品种内 on_price 与 on_signal 互斥。"""
@@ -102,20 +114,30 @@ class Executor:
     async def on_signal(self, sig: dict, gate: dict) -> dict | None:
         """返回本次产生的开仓单（没下单则 None）。平仓单单独广播。"""
         async with self._lock:
+            # 防御：信号品种对不上这个执行器，直接丢（品种间互不干扰）
+            if sig.get("symbol") and _spot_key(sig["symbol"]) != _spot_key(self.store.symbol):
+                logger.warning(f"[忽略串品种信号] store={self.store.symbol} sig={sig.get('symbol')}")
+                return None
+
             pos = self.store.position
             want = "long" if sig["type"] == "buy" else "short"
 
-            # 1) 反向信号平仓：只认「与持仓同周期」或「自身通过闸门要下单」的信号。
-            #    不加限制的话，1m 噪声翻转（不在允许周期、仅提醒级别）也会把
-            #    15m 的仓位随手平掉 —— 实盘已出现过一次。
-            if (pos and pos.qty > 0 and pos.side != want
-                    and (sig["tf"] == pos.tf or gate.get("trade"))):
+            # 反向平仓：只认开仓周期。其它周期过闸门也不平、不开反向仓。
+            if should_close_on_reverse(pos, sig):
                 await self._close(pos, f"{sig['tf']} 出现反向信号", sig.get("price"))
+            elif (pos and pos.qty > 0 and pos.side != want and sig.get("tf") != pos.tf):
+                logger.info(
+                    f"[忽略异周期反向] {self.store.symbol} 持仓 {pos.tf} {pos.side}，"
+                    f"忽略 {sig.get('tf')} {want}（不平仓、不开新仓）"
+                )
+                return None
 
-            # 2) 同向已有仓位就不加仓，避免信号密集时越滚越大
+            # 同向已有仓位就不加仓，避免信号密集时越滚越大
             pos = self.store.position
             if pos and pos.qty > 0 and pos.side == want:
                 logger.info(f"[跳过开仓] {self.store.symbol} 已持有同向 {want} 仓位")
+                return None
+            if pos and pos.qty > 0:
                 return None
 
             if not gate.get("trade"):
@@ -199,8 +221,9 @@ class Executor:
             # 计算ATR用于止损外扩
             atr = self._calc_atr(sig.get("tf", "15m"))
             stop = enhanced_initial_stop(filled, rules, atr, cfg.leverage)
-            logger.info(f"[止损计算] 杠杆{cfg.leverage}x，ATR={atr:.2f if atr else None}，"
-                       f"止损距离={(abs(r['price']-stop)/r['price']*100):.2f}%")
+            atr_s = f"{atr:.2f}" if atr else "None"
+            dist = abs(r["price"] - stop) / r["price"] * 100
+            logger.info(f"[止损计算] 杠杆{cfg.leverage}x，ATR={atr_s}，止损距离={dist:.2f}%")
         else:
             stop = position.initial_stop(filled, rules)
 
@@ -352,7 +375,8 @@ class Executor:
         # 止盈比例 100%（弱档就是）会把仓位一次平光。不在这里收尾的话，
         # state.position 会挂着一个 qty=0 的空壳、这笔也不会进 closed 历史。
         if pos.qty <= 0:
-            self._finalize(pos, r["price"], f"第{{'tp1': 1, 'tp2': 2, 'tp3': 3}.get(act['action'], 1)}档止盈全平")
+            stage_n = {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)
+            self._finalize(pos, r["price"], f"第{stage_n}档止盈全平")
         await self._push_position()
 
     def _finalize(self, pos, price: float, reason: str):
@@ -431,6 +455,7 @@ class Executor:
     # ── 超趋线更新 → 移动止损 ───────────────────────────────────
     async def on_st_line(self, tf: str, line: float | None):
         pos = self.store.position
+        # 只跟随开仓周期的超趋线。1m/5m 的轨再贴也不能去改 15m 仓的止损。
         if not pos or pos.qty <= 0 or pos.tf != tf or line is None:
             return
         # 已保本的仓位不再下调止损（trail 内部只朝有利方向移，这里是双保险）。
