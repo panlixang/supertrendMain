@@ -140,7 +140,8 @@ class SymbolStore:
                 tp1_pct=1.0, tp1_ratio=30.0,
                 tp2_pct=2.0, tp2_ratio=40.0,
                 tp3_pct=3.5, tp3_ratio=30.0,
-                # 智能止损
+                # 禁用价格止损（只用信号止损）
+                enabled=False,  # ← 关闭价格驱动的止损
                 sl_mode="st", sl_pct=2.0,
                 sl_buffer_atr=0.5, sl_min_pct=1.2,
                 move_sl_to_entry=True, trail_with_st=True,
@@ -207,22 +208,31 @@ class AppState:
                 tp1_pct=1.0, tp1_ratio=30.0,
                 tp2_pct=2.0, tp2_ratio=40.0,
                 tp3_pct=3.5, tp3_ratio=30.0,
-                # 智能止损
+                # 禁用价格止损（只用信号止损）
+                enabled=False,  # ← 关闭价格驱动的止损
                 sl_mode="st", sl_pct=2.0,
                 sl_buffer_atr=0.5, sl_min_pct=1.2,
                 move_sl_to_entry=True, trail_with_st=True,
                 # 盈利保护
                 protect_profit_at=1.5, protect_trail_pct=0.8,
+                # 极端保护止损（新增）
+                max_loss_enabled=True,   # 启用极端保护
+                max_loss_pct=10.0,       # 最大亏损10%
             )
             self.exit_rules_quick = EnhancedExitRules(
                 # 弱档：快进快出
                 tp1_pct=0.8, tp1_ratio=100.0,   # 0.8%一到就全平
                 tp2_pct=999, tp2_ratio=0,       # 不使用
                 tp3_pct=999, tp3_ratio=0,       # 不使用
+                # 禁用价格止损（只用信号止损）
+                enabled=False,  # ← 关闭价格驱动的止损
                 sl_mode="pct", sl_pct=1.0,
                 sl_buffer_atr=0.3, sl_min_pct=1.0,
                 move_sl_to_entry=False, trail_with_st=False,
                 protect_profit_at=999, protect_trail_pct=0,
+                # 极端保护止损（新增）
+                max_loss_enabled=True,   # 启用极端保护
+                max_loss_pct=8.0,        # 快进快出档用更紧的8%
             )
         except ImportError:
             # 回退到原版

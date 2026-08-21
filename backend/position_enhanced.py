@@ -34,23 +34,46 @@ class EnhancedExitRules(ExitRules):
     protect_profit_at: float = 1.5   # 浮盈达1.5%时启动保护
     protect_trail_pct: float = 0.8   # 保护模式：允许回撤0.8%
 
+    # 极端保护止损（新增）
+    max_loss_enabled: bool = False   # 是否启用最大亏损止损
+    max_loss_pct: float = 10.0       # 最大亏损百分比（默认10%）
 
-def enhanced_initial_stop(sig: dict, rules: EnhancedExitRules, atr: float = None) -> float:
+
+def enhanced_initial_stop(sig: dict, rules: EnhancedExitRules, atr: float = None, leverage: int = 1) -> float:
     """增强版初始止损：避免过近
 
     改进：
     1. ST止损线外扩0.5倍ATR（给震荡留空间）
-    2. 最小止损距离1.2%（防止秒扫）
+    2. 最小止损距离根据杠杆自适应（高杠杆需要更宽的止损）
     3. ATR止损与百分比止损取较远者
+
+    杠杆自适应逻辑：
+    - 1-3x: 使用配置的 sl_min_pct（如1.2%）
+    - 5x: 1.2% × 1.5 = 1.8%
+    - 10x: 1.2% × 2.5 = 3.0%
+    - 20x: 1.2% × 4.0 = 4.8%
+    防止高杠杆时正常波动就扫损
     """
     entry = float(sig["price"])
     is_long = sig["type"] == "buy"
 
-    # 1. 百分比止损（保底）
-    pct_stop = entry * (1 - rules.sl_pct / 100) if is_long else entry * (1 + rules.sl_pct / 100)
+    # 杠杆自适应系数
+    if leverage >= 20:
+        lev_factor = 4.0
+    elif leverage >= 10:
+        lev_factor = 2.5
+    elif leverage >= 5:
+        lev_factor = 1.5
+    else:
+        lev_factor = 1.0
 
-    # 2. 最小距离止损
-    min_dist = entry * rules.sl_min_pct / 100
+    # 1. 百分比止损（保底）- 根据杠杆调整
+    adjusted_sl_pct = rules.sl_pct * lev_factor
+    pct_stop = entry * (1 - adjusted_sl_pct / 100) if is_long else entry * (1 + adjusted_sl_pct / 100)
+
+    # 2. 最小距离止损 - 根据杠杆调整
+    adjusted_min_pct = rules.sl_min_pct * lev_factor
+    min_dist = entry * adjusted_min_pct / 100
     min_stop = (entry - min_dist) if is_long else (entry + min_dist)
 
     # 3. ST线 + ATR缓冲
@@ -59,9 +82,9 @@ def enhanced_initial_stop(sig: dict, rules: EnhancedExitRules, atr: float = None
         line = float(sig["line"])
         # 检查方向正确
         if (is_long and line < entry) or (not is_long and line > entry):
-            # 外扩ATR缓冲
+            # 外扩ATR缓冲（高杠杆时加大缓冲）
             if atr and atr > 0:
-                buffer = atr * rules.sl_buffer_atr
+                buffer = atr * rules.sl_buffer_atr * lev_factor
                 st_stop = (line - buffer) if is_long else (line + buffer)
             else:
                 st_stop = line
@@ -85,12 +108,21 @@ def check_enhanced(pos: Position, price: float, rules: EnhancedExitRules,
     改进：
     1. 三档止盈：1% / 2% / 3.5%（分批离场）
     2. 盈利保护：浮盈达标后允许适度回撤
-    3. 止损优先级仍最高
+    3. 极端保护止损：避免单次巨额亏损
+    4. 止损优先级仍最高
     """
     if not rules.enabled or pos.qty <= 0:
         return None
 
     current_pnl = pos.pnl_pct(price)
+
+    # 0. 极端保护止损（最高优先级）
+    if rules.max_loss_enabled and current_pnl <= -rules.max_loss_pct:
+        return {
+            "action": "max_stop",
+            "ratio": 100.0,
+            "reason": f"触及极端保护止损 -{rules.max_loss_pct}%（当前 {current_pnl:.2f}%）",
+        }
 
     # 1. 止损优先（但要考虑盈利保护）
     if hit_stop(pos, price):

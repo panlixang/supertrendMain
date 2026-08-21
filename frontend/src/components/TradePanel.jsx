@@ -46,6 +46,11 @@ export default function TradePanel() {
   // 弱档（快进快出）规则的本地输入
   const [qTp, setQTp] = useState(0.8);
   const [qSl, setQSl] = useState(1);
+  // 极端保护止损
+  const [maxLossPct, setMaxLossPct] = useState(10.0);
+  const [maxLossEnabled, setMaxLossEnabled] = useState(true);
+  const [qMaxLossPct, setQMaxLossPct] = useState(8.0);
+  const [qMaxLossEnabled, setQMaxLossEnabled] = useState(true);
   const [msg, setMsg] = useState('');
   const [ping, setPing] = useState(null);
   const [regime, setRegime] = useState(null);
@@ -62,13 +67,17 @@ export default function TradePanel() {
     setTp1(rules.tp1_pct);
     setTpRatio(rules.tp1_ratio);
     setSlPct(rules.sl_pct);
-  }, [rules?.tp1_pct, rules?.tp1_ratio, rules?.sl_pct]);
+    setMaxLossPct(rules.max_loss_pct ?? 10.0);
+    setMaxLossEnabled(rules.max_loss_enabled ?? true);
+  }, [rules?.tp1_pct, rules?.tp1_ratio, rules?.sl_pct, rules?.max_loss_pct, rules?.max_loss_enabled]);
 
   useEffect(() => {
     if (!quick) return;
     setQTp(quick.tp1_pct);
     setQSl(quick.sl_pct);
-  }, [quick?.tp1_pct, quick?.sl_pct]);
+    setQMaxLossPct(quick.max_loss_pct ?? 8.0);
+    setQMaxLossEnabled(quick.max_loss_enabled ?? true);
+  }, [quick?.tp1_pct, quick?.sl_pct, quick?.max_loss_pct, quick?.max_loss_enabled]);
 
   // 当前周期的行情状态，让用户直观看到「现在下不下得了单」
   useEffect(() => {
@@ -552,6 +561,43 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             <Toggle on={rules.trail_with_st}
                     onClick={() => patchRules({ trail_with_st: !rules.trail_with_st })} />
           </div>
+
+          {/* 极端保护止损 */}
+          <div style={{ fontSize: 10, color: '#e05263', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
+            🚨 极端保护止损（兜底保护）
+          </div>
+          <div style={sty.rowBetween}>
+            <div>
+              <div style={{ fontSize: 11, color: '#c8ccd4' }}>启用极端保护</div>
+              <div style={{ fontSize: 8.5, color: '#4a5058' }}>亏损达到指定幅度强制平仓</div>
+            </div>
+            <Toggle on={maxLossEnabled}
+                    onClick={() => {
+                      const newVal = !maxLossEnabled;
+                      setMaxLossEnabled(newVal);
+                      patchRules({ max_loss_enabled: newVal }, newVal ? '极端保护已启用' : '极端保护已关闭');
+                    }} />
+          </div>
+          {maxLossEnabled && (
+            <>
+              <Row label="最大亏损 %" hint="价格亏损达此幅度立即止损">
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input type="number" min={1} max={20} step={0.5}
+                         value={maxLossPct}
+                         onChange={(e) => setMaxLossPct(+e.target.value)}
+                         style={sty.input} />
+                  <button onClick={() => patchRules({ max_loss_pct: maxLossPct }, `极端保护止损改为 ${maxLossPct}%`)}
+                          disabled={maxLossPct === rules.max_loss_pct}
+                          style={{ ...sty.smallBtn, opacity: maxLossPct === rules.max_loss_pct ? 0.3 : 1 }}>改</button>
+                </div>
+              </Row>
+              <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#e0526320', borderRadius: 3 }}>
+                极端保护 = 最高优先级止损，优先于反向信号<br/>
+                适用场景：信号系统失效、闪崩、趋势判断错误<br/>
+                {cfg?.leverage ? `当前杠杆 ${cfg.leverage}x，价格亏损 ${maxLossPct}% ≈ 保证金亏损 ${(maxLossPct * cfg.leverage).toFixed(0)}%` : ''}
+              </div>
+            </>
+          )}
         </Section>
       )}
 
@@ -631,6 +677,42 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
                 : <>超趋线止损时盈亏比不固定（取决于开仓时离线多远）。</>}
               {' '}止盈比例 / 保本已按「快进快出」定义写死（100% / 关）。
             </div>
+
+            {/* 弱档极端保护止损 */}
+            <div style={{ fontSize: 10, color: '#e05263', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
+              🚨 弱档极端保护止损
+            </div>
+            <div style={sty.rowBetween}>
+              <div>
+                <div style={{ fontSize: 11, color: '#c8ccd4' }}>启用极端保护</div>
+                <div style={{ fontSize: 8.5, color: '#4a5058' }}>弱档信号更激进，保护更严格</div>
+              </div>
+              <Toggle on={qMaxLossEnabled}
+                      onClick={() => {
+                        const newVal = !qMaxLossEnabled;
+                        setQMaxLossEnabled(newVal);
+                        patchRules({ profile: 'quick', max_loss_enabled: newVal }, newVal ? '弱档极端保护已启用' : '弱档极端保护已关闭');
+                      }} />
+            </div>
+            {qMaxLossEnabled && (
+              <>
+                <Row label="最大亏损 %" hint="价格亏损达此幅度立即止损">
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <input type="number" min={1} max={20} step={0.5}
+                           value={qMaxLossPct}
+                           onChange={(e) => setQMaxLossPct(+e.target.value)}
+                           style={sty.input} />
+                    <button onClick={() => patchRules({ profile: 'quick', max_loss_pct: qMaxLossPct }, `弱档极端保护止损改为 ${qMaxLossPct}%`)}
+                            disabled={qMaxLossPct === quick.max_loss_pct}
+                            style={{ ...sty.smallBtn, opacity: qMaxLossPct === quick.max_loss_pct ? 0.3 : 1 }}>改</button>
+                  </div>
+                </Row>
+                <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#e0526320', borderRadius: 3 }}>
+                  弱档极端保护优先级最高<br/>
+                  {cfg?.leverage ? `当前杠杆 ${cfg.leverage}x，价格亏损 ${qMaxLossPct}% ≈ 保证金亏损 ${(qMaxLossPct * cfg.leverage).toFixed(0)}%` : ''}
+                </div>
+              </>
+            )}
           </div>
         </Section>
       )}
@@ -869,12 +951,16 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [slPct, setSlPct] = useState(c.exit_rules?.sl_pct ?? 2);
   const [moveSlToEntry, setMoveSlToEntry] = useState(c.exit_rules?.move_sl_to_entry ?? true);
   const [trailWithSt, setTrailWithSt] = useState(c.exit_rules?.trail_with_st ?? true);
+  const [maxLossPct, setMaxLossPct] = useState(c.exit_rules?.max_loss_pct ?? 10.0);
+  const [maxLossEnabled, setMaxLossEnabled] = useState(c.exit_rules?.max_loss_enabled ?? true);
   // 快档止盈止损
   const [qTp, setQTp] = useState(c.exit_rules_quick?.tp1_pct ?? 1);
   const [qTpRatio, setQTpRatio] = useState(c.exit_rules_quick?.tp1_ratio ?? 100);
   const [qSl, setQSl] = useState(c.exit_rules_quick?.sl_pct ?? 1);
   const [qMoveSlToEntry, setQMoveSlToEntry] = useState(c.exit_rules_quick?.move_sl_to_entry ?? false);
   const [qTrailWithSt, setQTrailWithSt] = useState(c.exit_rules_quick?.trail_with_st ?? true);
+  const [qMaxLossPct, setQMaxLossPct] = useState(c.exit_rules_quick?.max_loss_pct ?? 8.0);
+  const [qMaxLossEnabled, setQMaxLossEnabled] = useState(c.exit_rules_quick?.max_loss_enabled ?? true);
 
   useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
   useEffect(() => { setSizingMode(c.sizing_mode || 'fixed'); }, [c.sizing_mode]);
@@ -908,8 +994,11 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
     setSlPct(c.exit_rules.sl_pct ?? 2);
     setMoveSlToEntry(c.exit_rules.move_sl_to_entry ?? true);
     setTrailWithSt(c.exit_rules.trail_with_st ?? true);
+    setMaxLossPct(c.exit_rules.max_loss_pct ?? 10.0);
+    setMaxLossEnabled(c.exit_rules.max_loss_enabled ?? true);
   }, [c.exit_rules?.tp1_pct, c.exit_rules?.tp1_ratio, c.exit_rules?.sl_pct,
-      c.exit_rules?.move_sl_to_entry, c.exit_rules?.trail_with_st]);
+      c.exit_rules?.move_sl_to_entry, c.exit_rules?.trail_with_st,
+      c.exit_rules?.max_loss_pct, c.exit_rules?.max_loss_enabled]);
   useEffect(() => {
     if (!c.exit_rules_quick) return;
     setQTp(c.exit_rules_quick.tp1_pct ?? 1);
@@ -917,8 +1006,11 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
     setQSl(c.exit_rules_quick.sl_pct ?? 1);
     setQMoveSlToEntry(c.exit_rules_quick.move_sl_to_entry ?? false);
     setQTrailWithSt(c.exit_rules_quick.trail_with_st ?? true);
+    setQMaxLossPct(c.exit_rules_quick.max_loss_pct ?? 8.0);
+    setQMaxLossEnabled(c.exit_rules_quick.max_loss_enabled ?? true);
   }, [c.exit_rules_quick?.tp1_pct, c.exit_rules_quick?.tp1_ratio, c.exit_rules_quick?.sl_pct,
-      c.exit_rules_quick?.move_sl_to_entry, c.exit_rules_quick?.trail_with_st]);
+      c.exit_rules_quick?.move_sl_to_entry, c.exit_rules_quick?.trail_with_st,
+      c.exit_rules_quick?.max_loss_pct, c.exit_rules_quick?.max_loss_enabled]);
 
   return (
     <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
@@ -1202,6 +1294,16 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                        onChange={(e) => setTrailWithSt(e.target.checked)} />
                 跟踪
               </label>
+              <span style={{ fontSize: 9, color: '#6a7280' }}>极端</span>
+              <input type="number" min={0} max={20} step={0.5} value={maxLossPct}
+                     onChange={(e) => setMaxLossPct(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#c8ccd4', cursor: 'pointer' }}>
+                <input type="checkbox" checked={maxLossEnabled}
+                       onChange={(e) => setMaxLossEnabled(e.target.checked)} />
+                启用
+              </label>
             </div>
           </div>
           <div style={{ padding: '2px 0' }}>
@@ -1229,6 +1331,16 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 <input type="checkbox" checked={qTrailWithSt}
                        onChange={(e) => setQTrailWithSt(e.target.checked)} />
                 跟踪
+              </label>
+              <span style={{ fontSize: 9, color: '#6a7280' }}>极端</span>
+              <input type="number" min={0} max={20} step={0.5} value={qMaxLossPct}
+                     onChange={(e) => setQMaxLossPct(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#c8ccd4', cursor: 'pointer' }}>
+                <input type="checkbox" checked={qMaxLossEnabled}
+                       onChange={(e) => setQMaxLossEnabled(e.target.checked)} />
+                启用
               </label>
             </div>
           </div>
@@ -1262,6 +1374,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                       sl_mode: 'st',
                       sl_pct: slPct,
                       trail_with_st: trailWithSt,
+                      max_loss_pct: maxLossPct,
+                      max_loss_enabled: maxLossEnabled,
                     },
                     exit_rules_quick: {
                       enabled: true,
@@ -1271,6 +1385,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                       sl_mode: 'st',
                       sl_pct: qSl,
                       trail_with_st: qTrailWithSt,
+                      max_loss_pct: qMaxLossPct,
+                      max_loss_enabled: qMaxLossEnabled,
                     },
                   }, `${c.symbol} 配置已更新`)}
                   style={{ ...sty.smallBtn, alignSelf: 'flex-end', borderColor: '#00c9a755', color: '#00c9a7' }}>

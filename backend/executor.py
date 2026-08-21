@@ -19,6 +19,19 @@ import position
 import regime
 import trade
 
+# 尝试导入增强版，失败则用原版
+try:
+    from position_enhanced import (
+        EnhancedExitRules, EnhancedPosition,
+        enhanced_initial_stop, check_enhanced,
+        apply_tp_enhanced, trail_enhanced
+    )
+    USE_ENHANCED = True
+except ImportError:
+    USE_ENHANCED = False
+    EnhancedExitRules = None
+    EnhancedPosition = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -180,34 +193,102 @@ class Executor:
 
         # 止损按真实成交价算，避免追价后用信号价把止损放错边
         filled = {**sig, "price": r["price"]}
-        stop = position.initial_stop(filled, rules)
-        # 用交易所返回的 instId（已是 BTC-USDT-SWAP 这种合约形式），
-        # 后续查规格/平仓都直接用它，避免现货/合约 form 混淆
-        self.store.position = position.Position(
-            symbol=r.get("symbol") or symbol, side="long" if side == "buy" else "short",
-            tf=sig["tf"], entry=r["price"], qty=r["qty"], init_qty=r["qty"],
-            stop=stop, leverage=cfg.leverage, entry_ts=r["ts"], order_id=r.get("orderId", ""),
-            ct_val=r.get("ct_val", 1), profile=profile,
-        )
+
+        # 使用增强版止损计算（带ATR外扩和最小距离保护，根据杠杆自适应）
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            # 计算ATR用于止损外扩
+            atr = self._calc_atr(sig.get("tf", "15m"))
+            stop = enhanced_initial_stop(filled, rules, atr, cfg.leverage)
+            logger.info(f"[止损计算] 杠杆{cfg.leverage}x，ATR={atr:.2f if atr else None}，"
+                       f"止损距离={(abs(r['price']-stop)/r['price']*100):.2f}%")
+        else:
+            stop = position.initial_stop(filled, rules)
+
+        # 使用增强版持仓类（跟踪最高盈利）
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            self.store.position = EnhancedPosition(
+                symbol=r.get("symbol") or symbol, side="long" if side == "buy" else "short",
+                tf=sig["tf"], entry=r["price"], qty=r["qty"], init_qty=r["qty"],
+                stop=stop, leverage=cfg.leverage, entry_ts=r["ts"], order_id=r.get("orderId", ""),
+                ct_val=r.get("ct_val", 1), profile=profile,
+            )
+        else:
+            self.store.position = position.Position(
+                symbol=r.get("symbol") or symbol, side="long" if side == "buy" else "short",
+                tf=sig["tf"], entry=r["price"], qty=r["qty"], init_qty=r["qty"],
+                stop=stop, leverage=cfg.leverage, entry_ts=r["ts"], order_id=r.get("orderId", ""),
+                ct_val=r.get("ct_val", 1), profile=profile,
+            )
+
         unit = "张" if cfg.category == "SWAP" else ""
         tag = "快进快出档" if profile == "quick" else "标准档"
+        tp_desc = f"止盈 {rules.tp1_pct}%"
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            tp_desc = f"三级止盈 {rules.tp1_pct}%/{rules.tp2_pct}%/{rules.tp3_pct}%"
         self.store.position.log(
             "open",
             f"开{'多' if side == 'buy' else '空'} {r['qty']}{unit} @ {r['price']}"
-            f"（保证金 {how}，止损 {stop}，{tag}"
-            f" 止盈 {rules.tp1_pct}% 平 {rules.tp1_ratio:.0f}%）",
+            f"（保证金 {how}，止损 {stop}，{tag} {tp_desc}）",
         )
         logger.info(f"[持仓建立] {symbol} {self.store.position.side} @ {r['price']} "
                     f"保证金 {how} 止损 {stop} 档位 {profile} 成交确认={r.get('fill_confirmed')}")
         await self._push_position()
         return order
 
+    def _calc_atr(self, tf: str) -> float | None:
+        """计算当前ATR，用于止损外扩"""
+        try:
+            candles = list(self.store.candles.get(tf, []))
+            if len(candles) < 15:
+                return None
+            # 简单TR平均（最近14根）
+            trs = []
+            for i in range(1, min(15, len(candles))):
+                c = candles[-i]
+                prev = candles[-i-1]
+                tr = max(
+                    c.h - c.l,
+                    abs(c.h - prev.c),
+                    abs(c.l - prev.c)
+                )
+                trs.append(tr)
+            return sum(trs) / len(trs) if trs else None
+        except Exception as e:
+            logger.warning(f"计算ATR失败: {e}")
+            return None
+
     # ── 价格入口（止盈止损） ────────────────────────────────────
     async def on_price(self, price: float):
         pos = self.store.position
         if not pos or pos.qty <= 0 or not price:
             return
-        act = position.check(pos, price, self.rules_of(pos))
+
+        rules = self.rules_of(pos)
+
+        # 如果止损规则被禁用，只处理止盈，不处理止损
+        if not rules.enabled:
+            # 只检查止盈，不检查止损
+            if USE_ENHANCED and isinstance(rules, EnhancedExitRules) and isinstance(pos, EnhancedPosition):
+                pos.update_max_unrealized(price)
+                # 只检查止盈部分
+                act = check_enhanced(pos, price, rules, pos.max_unrealized_pct)
+                if act and act.get("action") == "stop":
+                    # 规则禁用时忽略止损信号
+                    logger.debug(f"[止损忽略] 价格触及止损线但规则已禁用，等待反向信号")
+                    return
+            else:
+                act = position.check(pos, price, rules)
+                if act and act.get("action") == "stop":
+                    logger.debug(f"[止损忽略] 价格触及止损线但规则已禁用，等待反向信号")
+                    return
+        else:
+            # 正常流程：检查止盈和止损
+            if USE_ENHANCED and isinstance(rules, EnhancedExitRules) and isinstance(pos, EnhancedPosition):
+                pos.update_max_unrealized(price)
+                act = check_enhanced(pos, price, rules, pos.max_unrealized_pct)
+            else:
+                act = position.check(pos, price, rules)
+
         if not act:
             return
         async with self._lock:
@@ -215,11 +296,24 @@ class Executor:
             pos = self.store.position
             if not pos or pos.qty <= 0:
                 return
-            act = position.check(pos, price, self.rules_of(pos))
+
+            # 再次检查
+            rules = self.rules_of(pos)
+            if USE_ENHANCED and isinstance(rules, EnhancedExitRules) and isinstance(pos, EnhancedPosition):
+                pos.update_max_unrealized(price)
+                act = check_enhanced(pos, price, rules, pos.max_unrealized_pct)
+            else:
+                act = position.check(pos, price, rules)
+
             if not act:
                 return
-            if act["action"] == "tp1":
+
+            # 处理三级止盈和极端保护止损
+            if act["action"] in ("tp1", "tp2", "tp3"):
                 await self._take_profit(pos, price, act)
+            elif act["action"] == "max_stop":
+                # 极端保护止损
+                await self._close(pos, act["reason"], price)
             else:
                 await self._close(pos, act["reason"], price)
 
@@ -237,16 +331,28 @@ class Executor:
         r = await self._reduce(pos, qty, price, f"止盈 {act['ratio']:.0f}%")
         if not r.get("ok"):
             logger.warning(f"[止盈失败] {r.get('error')}")
-            await self._record(r, {"kind": "tp1", "tf": pos.tf, "reason": act["reason"]})
+            kind = act["action"] if act["action"] in ("tp1", "tp2", "tp3") else "tp1"
+            await self._record(r, {"kind": kind, "tf": pos.tf, "reason": act["reason"]})
             return
-        position.apply_tp1(pos, r["price"], r["qty"], self.rules_of(pos))
-        await self._record(r, {"kind": "tp1", "tf": pos.tf, "reason": act["reason"],
-                               "profile": pos.profile})
-        logger.info(f"[止盈] {pos.symbol} 平 {r['qty']} @ {r['price']}，止损→{pos.stop}")
+
+        # 使用增强版止盈处理（支持三级止盈）
+        rules = self.rules_of(pos)
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            stage = {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)
+            apply_tp_enhanced(pos, r["price"], r["qty"], rules, stage)
+            logger.info(f"[第{stage}档止盈] {pos.symbol} 平 {r['qty']} @ {r['price']}，止损→{pos.stop}")
+        else:
+            position.apply_tp1(pos, r["price"], r["qty"], rules)
+            logger.info(f"[止盈] {pos.symbol} 平 {r['qty']} @ {r['price']}，止损→{pos.stop}")
+
+        kind = act["action"] if act["action"] in ("tp1", "tp2", "tp3") else "tp1"
+        await self._record(r, {"kind": kind, "tf": pos.tf, "reason": act["reason"],
+                               "profile": pos.profile, "stage": {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)})
+
         # 止盈比例 100%（弱档就是）会把仓位一次平光。不在这里收尾的话，
         # state.position 会挂着一个 qty=0 的空壳、这笔也不会进 closed 历史。
         if pos.qty <= 0:
-            self._finalize(pos, r["price"], "止盈全平")
+            self._finalize(pos, r["price"], f"第{{'tp1': 1, 'tp2': 2, 'tp3': 3}.get(act['action'], 1)}档止盈全平")
         await self._push_position()
 
     def _finalize(self, pos, price: float, reason: str):
@@ -329,7 +435,13 @@ class Executor:
             return
         # 已保本的仓位不再下调止损（trail 内部只朝有利方向移，这里是双保险）。
         # 弱档 trail_with_st=False，trail() 会直接返回 False，不用额外分支。
-        if position.trail(pos, line, self.rules_of(pos)):
+        rules = self.rules_of(pos)
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            changed = trail_enhanced(pos, line, rules, self.store.ticker.last)
+        else:
+            changed = position.trail(pos, line, rules)
+
+        if changed:
             await self._push_position()
 
     async def close_manual(self, reason: str = "手动平仓") -> dict:
