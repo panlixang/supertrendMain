@@ -177,8 +177,20 @@ def evaluate_enhanced(sig: dict, candles: list[dict], cfg: TradeConfig,
     1. 优先检测动量突破（大行情启动）
     2. 过滤假突破（震荡陷阱）
     3. 自适应阈值调整
+
+    非 allow_tfs 周期一律不能开仓（动量/假突破捷径也不能绕过）。
     """
-    # 1. 动量突破优先：即使ER低也放行
+    # 0. 周期硬闸门：先于动量检测，1m 噪声再像突破也不能下单
+    if sig.get("tf") not in cfg.allow_tfs:
+        result = regime.evaluate(sig, candles, cfg, candles_by_tf, p)
+        result["trade"] = False
+        if f"周期 {sig.get('tf')} 不在允许范围" not in (result.get("reasons") or []):
+            result.setdefault("reasons", []).append(
+                f"周期 {sig.get('tf')} 不在允许范围")
+        result["profile"] = None
+        return result
+
+    # 1. 动量突破优先：即使ER低也放行（仍须过等级/强度，上面已过周期）
     momentum = detect_momentum_breakout(candles, sig, lookback=20)
     if momentum:
         # 但仍需检查假突破

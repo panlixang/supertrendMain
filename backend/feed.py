@@ -351,18 +351,33 @@ class OKXFeed:
         full["symbol"] = store.symbol
 
         store.add_signal(full)
+        # 非允许周期：只提醒、不进执行器。唯一例外是手里还捏着这个周期的残留仓
+        # （例如曾经被动量捷径误开的 1m），允许同周期反向把它平掉。
+        tf_ok = tf in (cfg.allow_tfs or [])
+        pos = store.position
+        leftover = bool(pos and pos.qty > 0 and pos.tf == tf and not tf_ok)
+
+        if not tf_ok:
+            full["will_trade"] = False
+            gate = {**gate, "trade": False}
+            reason = f"周期 {tf} 不在允许范围"
+            if reason not in (full.get("gate_reasons") or []):
+                full["gate_reasons"] = list(full.get("gate_reasons") or []) + [reason]
+
         # ER太低的信号不弹窗、不提醒、静默入库。
-        # 但若正好是当前持仓的开仓周期反向，仍要交给执行器平仓，否则 15m 仓会一直挂着。
-        if gate.get("hidden"):
+        # 但若正好是当前持仓的开仓周期反向，仍要交给执行器平仓。
+        if gate.get("hidden") and not leftover:
             logger.info(f"[静默信号] {store.symbol} {tf} ER {full.get('er', '?')} < {cfg.er_hide_below}")
             ex = self.state.executors.get(store.symbol)
-            pos = store.position
-            if ex and pos and pos.tf == tf:
+            if ex and pos and pos.tf == tf and tf_ok:
                 try:
                     await ex.on_signal(full, {**gate, "trade": False})
                 except Exception as e:
                     logger.error(f"[{store.symbol} 静默反向平仓异常] {e}")
             return
+        if gate.get("hidden") and leftover:
+            logger.info(f"[残留仓平仓] {store.symbol} {tf} 非允许周期残留持仓，同周期反向离场")
+
         prof = {"quick": " 弱档", "normal": " 标准档"}.get(gate.get("profile"), "")
         logger.info(
             f"[{'BUY ' if full['type'] == 'buy' else 'SELL'}] {store.symbol} {tf} "
@@ -381,9 +396,11 @@ class OKXFeed:
                 full["gate_reasons"] = [f"冷却中（{cfg.cooldown_sec}s 内已下过单）"]
                 gate = {**gate, "trade": False}
 
-        # 交给该品种的执行器：反向信号会先平仓，再按闸门决定是否开新仓
+        # 非允许周期且没有该周期残留仓：不进执行器
         ex = self.state.executors.get(store.symbol)
-        if ex:
+        need_exec = bool(ex) and (gate.get("trade") or leftover
+                                  or (pos and pos.qty > 0 and pos.tf == tf and tf_ok))
+        if need_exec:
             try:
                 order = await ex.on_signal(full, gate)
                 if order and order.get("ok"):

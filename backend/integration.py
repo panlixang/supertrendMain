@@ -96,6 +96,17 @@ class EnhancedExecutorMixin:
 
             # 复用原有开仓逻辑，只替换止损计算
             cfg, symbol = self.cfg, self.store.symbol
+            from executor import tf_allowed
+            extra = {
+                "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
+                "sig_type": sig["type"], "grade": sig.get("grade"),
+                "trigger": sig["price"], "profile": profile,
+            }
+            if not tf_allowed(cfg, sig.get("tf")):
+                err = f"周期 {sig.get('tf')} 不在允许范围 {cfg.allow_tfs}"
+                logger.warning(f"[拒绝开仓] {symbol} {err}")
+                return await self._record({"ok": False, "error": err, "price": sig.get("price")}, extra)
+
             rules = self.state.rules_for(profile, self.store.symbol)
 
             # 转换为增强规则（如果需要）
@@ -119,12 +130,6 @@ class EnhancedExecutorMixin:
             last = self.store.ticker.last or sig["price"]
             px = self.regime_module.limit_price(sig, cfg, last)
             side = "buy" if sig["type"] == "buy" else "sell"
-
-            extra = {
-                "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
-                "sig_type": sig["type"], "grade": sig.get("grade"),
-                "trigger": sig["price"], "profile": profile,
-            }
 
             margin, how = await self._resolve_margin()
             if margin is None:
@@ -303,39 +308,11 @@ def create_enhanced_executor(state, store):
                 self.regime_module = __import__('regime')
 
             async def on_signal(self, sig: dict, gate: dict):
-                """反向平仓只认开仓周期；开仓可走增强版。"""
-                from executor import _spot_key, should_close_on_reverse
-
+                """与原版同一套周期硬闸门，开仓可走增强版。"""
                 async with self._lock:
-                    if sig.get("symbol") and _spot_key(sig["symbol"]) != _spot_key(self.store.symbol):
-                        logger.warning(f"[忽略串品种信号] store={self.store.symbol} sig={sig.get('symbol')}")
-                        return None
-
-                    pos = self.store.position
-                    want = "long" if sig["type"] == "buy" else "short"
-
-                    if should_close_on_reverse(pos, sig):
-                        await self._close(pos, f"{sig['tf']} 出现反向信号", sig.get("price"))
-                    elif (pos and pos.qty > 0 and pos.side != want and sig.get("tf") != pos.tf):
-                        logger.info(
-                            f"[忽略异周期反向] {self.store.symbol} 持仓 {pos.tf} {pos.side}，"
-                            f"忽略 {sig.get('tf')} {want}（不平仓、不开新仓）"
-                        )
-                        return None
-
-                    pos = self.store.position
-                    if pos and pos.qty > 0 and pos.side == want:
-                        logger.info(f"[跳过开仓] {self.store.symbol} 已持有同向 {want} 仓位")
-                        return None
-                    if pos and pos.qty > 0:
-                        return None
-
-                    if not gate.get("trade"):
-                        return None
-
-                    if self._should_use_enhanced():
-                        return await self._open_enhanced(sig, gate.get("profile") or "normal")
-                    return await self._open(sig, gate.get("profile") or "normal")
+                    opener = (self._open_enhanced if self._should_use_enhanced()
+                              else self._open)
+                    return await self._handle_signal(sig, gate, opener)
 
             async def on_price(self, price: float):
                 """优先使用增强版价格处理"""

@@ -47,6 +47,11 @@ def should_close_on_reverse(pos, sig: dict) -> bool:
     return pos.side != want and sig.get("tf") == pos.tf
 
 
+def tf_allowed(cfg, tf: str) -> bool:
+    """品种配置的允许周期。闸门/执行器共用，避免某一层漏检。"""
+    return bool(tf) and tf in list(getattr(cfg, "allow_tfs", None) or [])
+
+
 class Executor:
     """一个品种一个实例。store 是该品种的 SymbolStore，持仓/价格/冷却都在里面 ——
     品种之间互不串行（各自有锁），品种内 on_price 与 on_signal 互斥。"""
@@ -110,39 +115,58 @@ class Executor:
             # 设置失败不阻断下单：可能账户已是该杠杆，或该品种不支持
             logger.warning(f"设置杠杆未成功（继续下单）: {r.get('error')}")
 
+    def _tf_ok(self, tf: str | None) -> bool:
+        return tf_allowed(self.cfg, tf or "")
+
     # ── 信号入口 ────────────────────────────────────────────────
     async def on_signal(self, sig: dict, gate: dict) -> dict | None:
         """返回本次产生的开仓单（没下单则 None）。平仓单单独广播。"""
         async with self._lock:
-            # 防御：信号品种对不上这个执行器，直接丢（品种间互不干扰）
-            if sig.get("symbol") and _spot_key(sig["symbol"]) != _spot_key(self.store.symbol):
-                logger.warning(f"[忽略串品种信号] store={self.store.symbol} sig={sig.get('symbol')}")
-                return None
+            return await self._handle_signal(sig, gate, self._open)
 
-            pos = self.store.position
-            want = "long" if sig["type"] == "buy" else "short"
+    async def _handle_signal(self, sig: dict, gate: dict, opener) -> dict | None:
+        """开仓/反向平仓只走品种 allow_tfs。闸门被绕过时这里仍硬拦。
 
-            # 反向平仓：只认开仓周期。其它周期过闸门也不平、不开反向仓。
-            if should_close_on_reverse(pos, sig):
-                await self._close(pos, f"{sig['tf']} 出现反向信号", sig.get("price"))
-            elif (pos and pos.qty > 0 and pos.side != want and sig.get("tf") != pos.tf):
-                logger.info(
-                    f"[忽略异周期反向] {self.store.symbol} 持仓 {pos.tf} {pos.side}，"
-                    f"忽略 {sig.get('tf')} {want}（不平仓、不开新仓）"
-                )
-                return None
+        opener: 真正下开仓单的协程（原版 _open / 增强 _open_enhanced）。
+        """
+        # 防御：信号品种对不上这个执行器，直接丢（品种间互不干扰）
+        if sig.get("symbol") and _spot_key(sig["symbol"]) != _spot_key(self.store.symbol):
+            logger.warning(f"[忽略串品种信号] store={self.store.symbol} sig={sig.get('symbol')}")
+            return None
 
-            # 同向已有仓位就不加仓，避免信号密集时越滚越大
-            pos = self.store.position
-            if pos and pos.qty > 0 and pos.side == want:
-                logger.info(f"[跳过开仓] {self.store.symbol} 已持有同向 {want} 仓位")
-                return None
-            if pos and pos.qty > 0:
-                return None
+        tf = sig.get("tf")
+        allowed = self._tf_ok(tf)
+        pos = self.store.position
+        want = "long" if sig["type"] == "buy" else "short"
 
-            if not gate.get("trade"):
+        # 反向平仓：必须同周期。允许周期正常离场；非允许周期只用来清掉误开的残留仓。
+        if should_close_on_reverse(pos, sig):
+            leftover = pos and not self._tf_ok(pos.tf)
+            if allowed or leftover:
+                await self._close(pos, f"{tf} 出现反向信号", sig.get("price"))
+            else:
+                logger.info(f"[忽略非允许周期反向] {self.store.symbol} {tf} 不在 {self.cfg.allow_tfs}")
                 return None
-            return await self._open(sig, gate.get("profile") or "normal")
+        elif pos and pos.qty > 0 and pos.side != want and sig.get("tf") != pos.tf:
+            logger.info(
+                f"[忽略异周期反向] {self.store.symbol} 持仓 {pos.tf} {pos.side}，"
+                f"忽略 {tf} {want}（不平仓、不开新仓）"
+            )
+            return None
+
+        pos = self.store.position
+        if pos and pos.qty > 0 and pos.side == want:
+            logger.info(f"[跳过开仓] {self.store.symbol} 已持有同向 {want} 仓位")
+            return None
+        if pos and pos.qty > 0:
+            return None
+
+        if not allowed:
+            logger.info(f"[拒绝开仓] {self.store.symbol} 周期 {tf} 不在允许范围 {self.cfg.allow_tfs}")
+            return None
+        if not gate.get("trade"):
+            return None
+        return await opener(sig, gate.get("profile") or "normal")
 
     async def _resolve_margin(self) -> tuple[float | None, str]:
         """开仓保证金。fixed=固定金额；equity_pct=账户净值的 X%，且不超过 USDT 可用。"""
@@ -174,6 +198,16 @@ class Executor:
 
     async def _open(self, sig: dict, profile: str = "normal") -> dict | None:
         cfg, symbol = self.cfg, self.store.symbol
+        extra = {
+            "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
+            "sig_type": sig["type"], "grade": sig.get("grade"), "trigger": sig["price"],
+            "profile": profile,
+        }
+        if not tf_allowed(cfg, sig.get("tf")):
+            err = f"周期 {sig.get('tf')} 不在允许范围 {cfg.allow_tfs}"
+            logger.warning(f"[拒绝开仓] {symbol} {err}")
+            return await self._record({"ok": False, "error": err, "price": sig.get("price")}, extra)
+
         rules = self.state.rules_for(profile, self.store.symbol)
         await self._ensure_leverage(symbol)
 
@@ -188,11 +222,6 @@ class Executor:
         last = self.store.ticker.last or sig["price"]
         px = regime.limit_price(sig, cfg, last)
         side = "buy" if sig["type"] == "buy" else "sell"
-        extra = {
-            "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
-            "sig_type": sig["type"], "grade": sig.get("grade"), "trigger": sig["price"],
-            "profile": profile,
-        }
         margin, how = await self._resolve_margin()
         if margin is None:
             logger.warning(f"[跳过开仓] {symbol} {how}")

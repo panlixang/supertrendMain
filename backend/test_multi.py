@@ -82,6 +82,13 @@ async def main():
     exA, exB = state.executors["AAA-USDT"], state.executors["BBB-USDT"]
     A.ticker.last, B.ticker.last = 100.0, 50.0
 
+    # 0. 非允许周期即使闸门放行也不开仓（防动量捷径）
+    n0 = len(CALLS)
+    await exA.on_signal({"type": "buy", "tf": "1m", "ts": 0, "price": 100.0, "line": 95.0,
+                         "grade": "A", "score": 3, "symbol": "AAA-USDT"}, GATE_OK)
+    ok("1m 不在 allow_tfs，GATE_OK 也不开仓", A.position is None)
+    ok("1m 没有产生下单", len(CALLS) == n0)
+
     # 1. 双品种各自开仓
     await exA.on_signal({"type": "buy", "tf": "15m", "ts": 1, "price": 100.0, "line": 95.0,
                          "grade": "A", "score": 3}, GATE_OK)
@@ -127,6 +134,16 @@ async def main():
     await exA.on_signal({"type": "sell", "tf": "15m", "ts": 3, "price": 103.0}, GATE_NO)
     ok("A 的 15m 反向信号平掉剩余仓位（闸门不通过也要离场）",
        A.position is None and len(A.closed) == 1)
+
+    # 5b. 误开的非允许周期残留仓，同周期反向仍能平掉
+    from position import Position
+    A.position = Position(
+        symbol="AAA-USDT-SWAP", side="short", tf="1m", entry=100.0, qty=1.0,
+        init_qty=1.0, stop=110.0, leverage=3, entry_ts=1,
+    )
+    await exA.on_signal({"type": "buy", "tf": "1m", "ts": 4, "price": 101.0,
+                         "symbol": "AAA-USDT"}, GATE_NO)
+    ok("1m 残留仓可被 1m 反向清掉", A.position is None)
 
     # 6. cfg_for 合并视图：品种关 → enabled False；总开关关 → 全 False
     A2 = state.stores["AAA-USDT"]
