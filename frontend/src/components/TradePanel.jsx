@@ -40,8 +40,12 @@ export default function TradePanel() {
 
   const [amount, setAmount] = useState(10);
   const [offset, setOffset] = useState(0.05);
-  const [tp1, setTp1] = useState(1.5);
-  const [tpRatio, setTpRatio] = useState(70);
+  const [tp1, setTp1] = useState(1.0);
+  const [tpRatio, setTpRatio] = useState(30);
+  const [tp2, setTp2] = useState(2.0);
+  const [tp2Ratio, setTp2Ratio] = useState(40);
+  const [tp3, setTp3] = useState(3.5);
+  const [tp3Ratio, setTp3Ratio] = useState(30);
   const [slPct, setSlPct] = useState(2);
   // 弱档（快进快出）规则的本地输入
   const [qTp, setQTp] = useState(0.8);
@@ -66,10 +70,15 @@ export default function TradePanel() {
     if (!rules) return;
     setTp1(rules.tp1_pct);
     setTpRatio(rules.tp1_ratio);
+    setTp2(rules.tp2_pct ?? 2.0);
+    setTp2Ratio(rules.tp2_ratio ?? 40);
+    setTp3(rules.tp3_pct ?? 3.5);
+    setTp3Ratio(rules.tp3_ratio ?? 30);
     setSlPct(rules.sl_pct);
     setMaxLossPct(rules.max_loss_pct ?? 10.0);
     setMaxLossEnabled(rules.max_loss_enabled ?? true);
-  }, [rules?.tp1_pct, rules?.tp1_ratio, rules?.sl_pct, rules?.max_loss_pct, rules?.max_loss_enabled]);
+  }, [rules?.tp1_pct, rules?.tp1_ratio, rules?.tp2_pct, rules?.tp2_ratio,
+      rules?.tp3_pct, rules?.tp3_ratio, rules?.sl_pct, rules?.max_loss_pct, rules?.max_loss_enabled]);
 
   useEffect(() => {
     if (!quick) return;
@@ -392,15 +401,10 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
       {rules && (
         <Section title="止盈止损 · 标准档（ER ≥ 标准线）">
           <div style={sty.rulesFlow}>
-            开仓 → 浮盈 <b style={{ color: '#00c9a7' }}>{rules.tp1_pct}%</b> 止盈{' '}
-            <b style={{ color: '#00c9a7' }}>{rules.tp1_ratio}%</b> 仓位
-            {rules.move_sl_to_entry && ' → 止损抬到开仓价（保本）'}
-            {rules.tp1_ratio < 100 && (
-              <>
-                {' → 剩余 '}<b style={{ color: '#00c9a7' }}>{(100 - rules.tp1_ratio).toFixed(0)}%</b>
-                {' 等反向信号全平'}
-              </>
-            )}
+            开仓 → {rules.tp1_pct}% 平 {rules.tp1_ratio}%
+            {rules.tp2_pct != null && <> → {rules.tp2_pct}% 平 {rules.tp2_ratio}%</>}
+            {rules.tp3_pct != null && <> → {rules.tp3_pct}% 平 {rules.tp3_ratio}%</>}
+            {rules.move_sl_to_entry && ' → 一档后止损抬保本'}
           </div>
 
           <div style={sty.rowBetween}>
@@ -421,46 +425,41 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
               <input type="number" min={1} max={100} step={5} value={tpRatio}
                      onChange={(e) => setTpRatio(+e.target.value)} style={{ ...sty.input, width: 50 }} />
               <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
-              <button onClick={() => patchRules({ tp1_pct: tp1, tp1_ratio: tpRatio }, `第1档: ${tp1}%平${tpRatio}%`)}
-                      disabled={tp1 === rules.tp1_pct && tpRatio === rules.tp1_ratio}
-                      style={{ ...sty.smallBtn, opacity: (tp1 === rules.tp1_pct && tpRatio === rules.tp1_ratio) ? 0.3 : 1 }}>改</button>
             </div>
           </Row>
 
-          {/* 第二档 */}
-          {rules.tp2_pct !== undefined && (
-            <Row label="第二档 %" hint="第二档止盈触发线">
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <input type="number" min={0.1} step={0.1}
-                       value={rules.tp2_pct || 2.0}
-                       onChange={(e) => patchRules({ tp2_pct: +e.target.value })}
-                       style={{ ...sty.input, width: 60 }} />
-                <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
-                <input type="number" min={1} max={100} step={5}
-                       value={rules.tp2_ratio || 40}
-                       onChange={(e) => patchRules({ tp2_ratio: +e.target.value })}
-                       style={{ ...sty.input, width: 50 }} />
-                <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
-              </div>
-            </Row>
-          )}
+          <Row label="第二档 %" hint="第一档完成后才检查">
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input type="number" min={0.1} step={0.1} value={tp2}
+                     onChange={(e) => setTp2(+e.target.value)} style={{ ...sty.input, width: 60 }} />
+              <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
+              <input type="number" min={0} max={100} step={5} value={tp2Ratio}
+                     onChange={(e) => setTp2Ratio(+e.target.value)} style={{ ...sty.input, width: 50 }} />
+              <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
+            </div>
+          </Row>
 
-          {/* 第三档 */}
-          {rules.tp3_pct !== undefined && (
-            <Row label="第三档 %" hint="第三档止盈，剩余全平">
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <input type="number" min={0.1} step={0.1}
-                       value={rules.tp3_pct || 3.5}
-                       onChange={(e) => patchRules({ tp3_pct: +e.target.value })}
-                       style={{ ...sty.input, width: 60 }} />
-                <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 全平</span>
-              </div>
-            </Row>
-          )}
+          <Row label="第三档 %" hint="第二档完成后，剩余仓位">
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input type="number" min={0.1} step={0.1} value={tp3}
+                     onChange={(e) => setTp3(+e.target.value)} style={{ ...sty.input, width: 60 }} />
+              <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
+              <input type="number" min={0} max={100} step={5} value={tp3Ratio}
+                     onChange={(e) => setTp3Ratio(+e.target.value)} style={{ ...sty.input, width: 50 }} />
+              <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
+              <button
+                onClick={() => patchRules({
+                  tp1_pct: tp1, tp1_ratio: tpRatio,
+                  tp2_pct: tp2, tp2_ratio: tp2Ratio,
+                  tp3_pct: tp3, tp3_ratio: tp3Ratio,
+                }, `三档止盈 ${tp1}%×${tpRatio}% → ${tp2}%×${tp2Ratio}% → ${tp3}%×${tp3Ratio}%`)}
+                style={sty.smallBtn}>改</button>
+            </div>
+          </Row>
 
           <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, marginTop: 4, padding: '6px 8px', background: '#00c9a710', borderRadius: 3 }}>
-            💡 三级止盈示例：1%平30% → 2%平40% → 3.5%全平<br/>
-            小盈利快速落袋，大趋势持有更久，心理压力更小
+            这是新品种的默认规则。已加进列表的品种以「交易品种」里保存的为准。<br/>
+            推荐：1% 平 30% → 2% 平 40% → 3.5% 平剩余
           </div>
 
           {/* 智能止损增强 */}
@@ -883,8 +882,8 @@ function withLivePnl(p, price) {
   };
 }
 
-const KIND_LABEL = { open: '开仓', tp1: '止盈', close: '平仓', test: '测试' };
-const KIND_COLOR = { open: '#00c9a7', tp1: '#f5a623', close: '#8b93a0', test: '#6c7480' };
+const KIND_LABEL = { open: '开仓', tp1: '止盈1', tp2: '止盈2', tp3: '止盈3', close: '平仓', test: '测试' };
+const KIND_COLOR = { open: '#00c9a7', tp1: '#f5a623', tp2: '#f5a623', tp3: '#f5a623', close: '#8b93a0', test: '#6c7480' };
 const EVT_COLOR = {
   open: '#8b93a0', tp1: '#f5a623', breakeven: '#00c9a7',
   trail: '#4e8aff', close: '#8b93a0',
@@ -946,8 +945,12 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [adxMin, setAdxMin] = useState(c.adx_min ?? 20);
   const [adxPeriod, setAdxPeriod] = useState(c.adx_period ?? 14);
   // 标准档止盈止损
-  const [tp1, setTp1] = useState(c.exit_rules?.tp1_pct ?? 2);
-  const [tpRatio, setTpRatio] = useState(c.exit_rules?.tp1_ratio ?? 70);
+  const [tp1, setTp1] = useState(c.exit_rules?.tp1_pct ?? 1);
+  const [tpRatio, setTpRatio] = useState(c.exit_rules?.tp1_ratio ?? 30);
+  const [tp2, setTp2] = useState(c.exit_rules?.tp2_pct ?? 2);
+  const [tp2Ratio, setTp2Ratio] = useState(c.exit_rules?.tp2_ratio ?? 40);
+  const [tp3, setTp3] = useState(c.exit_rules?.tp3_pct ?? 3.5);
+  const [tp3Ratio, setTp3Ratio] = useState(c.exit_rules?.tp3_ratio ?? 30);
   const [slPct, setSlPct] = useState(c.exit_rules?.sl_pct ?? 2);
   const [moveSlToEntry, setMoveSlToEntry] = useState(c.exit_rules?.move_sl_to_entry ?? true);
   const [trailWithSt, setTrailWithSt] = useState(c.exit_rules?.trail_with_st ?? true);
@@ -989,14 +992,19 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   }, [c.atr_filter_enabled, c.range_filter_enabled, c.mtf_filter_enabled, c.adx_filter_enabled]);
   useEffect(() => {
     if (!c.exit_rules) return;
-    setTp1(c.exit_rules.tp1_pct ?? 2);
-    setTpRatio(c.exit_rules.tp1_ratio ?? 70);
+    setTp1(c.exit_rules.tp1_pct ?? 1);
+    setTpRatio(c.exit_rules.tp1_ratio ?? 30);
+    setTp2(c.exit_rules.tp2_pct ?? 2);
+    setTp2Ratio(c.exit_rules.tp2_ratio ?? 40);
+    setTp3(c.exit_rules.tp3_pct ?? 3.5);
+    setTp3Ratio(c.exit_rules.tp3_ratio ?? 30);
     setSlPct(c.exit_rules.sl_pct ?? 2);
     setMoveSlToEntry(c.exit_rules.move_sl_to_entry ?? true);
     setTrailWithSt(c.exit_rules.trail_with_st ?? true);
     setMaxLossPct(c.exit_rules.max_loss_pct ?? 10.0);
     setMaxLossEnabled(c.exit_rules.max_loss_enabled ?? true);
-  }, [c.exit_rules?.tp1_pct, c.exit_rules?.tp1_ratio, c.exit_rules?.sl_pct,
+  }, [c.exit_rules?.tp1_pct, c.exit_rules?.tp1_ratio, c.exit_rules?.tp2_pct, c.exit_rules?.tp2_ratio,
+      c.exit_rules?.tp3_pct, c.exit_rules?.tp3_ratio, c.exit_rules?.sl_pct,
       c.exit_rules?.move_sl_to_entry, c.exit_rules?.trail_with_st,
       c.exit_rules?.max_loss_pct, c.exit_rules?.max_loss_enabled]);
   useEffect(() => {
@@ -1269,15 +1277,31 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
             </div>
           </div>
           <div style={{ padding: '2px 0' }}>
-            <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>标准档止盈止损</div>
+            <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>标准档三级止盈（价格幅度）</div>
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span style={{ fontSize: 9, color: '#6a7280' }}>TP1</span>
+              <span style={{ fontSize: 9, color: '#6a7280' }}>1档</span>
               <input type="number" min={0} step={0.1} value={tp1}
                      onChange={(e) => setTp1(+e.target.value)}
                      style={{ ...sty.input, width: 42 }} />
               <span style={{ fontSize: 9, color: '#6a7280' }}>%×</span>
               <input type="number" min={0} max={100} step={1} value={tpRatio}
                      onChange={(e) => setTpRatio(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%　2档</span>
+              <input type="number" min={0} step={0.1} value={tp2}
+                     onChange={(e) => setTp2(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%×</span>
+              <input type="number" min={0} max={100} step={1} value={tp2Ratio}
+                     onChange={(e) => setTp2Ratio(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%　3档</span>
+              <input type="number" min={0} step={0.1} value={tp3}
+                     onChange={(e) => setTp3(+e.target.value)}
+                     style={{ ...sty.input, width: 42 }} />
+              <span style={{ fontSize: 9, color: '#6a7280' }}>%×</span>
+              <input type="number" min={0} max={100} step={1} value={tp3Ratio}
+                     onChange={(e) => setTp3Ratio(+e.target.value)}
                      style={{ ...sty.input, width: 42 }} />
               <span style={{ fontSize: 9, color: '#6a7280' }}>%　SL</span>
               <input type="number" min={0} step={0.1} value={slPct}
@@ -1370,6 +1394,10 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                       enabled: true,
                       tp1_pct: tp1,
                       tp1_ratio: tpRatio,
+                      tp2_pct: tp2,
+                      tp2_ratio: tp2Ratio,
+                      tp3_pct: tp3,
+                      tp3_ratio: tp3Ratio,
                       move_sl_to_entry: moveSlToEntry,
                       sl_mode: 'st',
                       sl_pct: slPct,

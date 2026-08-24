@@ -309,6 +309,15 @@ class Executor:
             logger.warning(f"计算ATR失败: {e}")
             return None
 
+    def _exit_action(self, pos, price: float, rules):
+        """三档止盈按 EnhancedExitRules 检查；普通 Position 也能跑（不要求 EnhancedPosition）。"""
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            if isinstance(pos, EnhancedPosition):
+                pos.update_max_unrealized(price)
+            max_unreal = getattr(pos, "max_unrealized_pct", None)
+            return check_enhanced(pos, price, rules, max_unreal)
+        return position.check(pos, price, rules)
+
     # ── 价格入口（止盈止损） ────────────────────────────────────
     async def on_price(self, price: float):
         pos = self.store.position
@@ -316,30 +325,11 @@ class Executor:
             return
 
         rules = self.rules_of(pos)
+        act = self._exit_action(pos, price, rules)
 
-        # 如果止损规则被禁用，只处理止盈，不处理止损
-        if not rules.enabled:
-            # 只检查止盈，不检查止损
-            if USE_ENHANCED and isinstance(rules, EnhancedExitRules) and isinstance(pos, EnhancedPosition):
-                pos.update_max_unrealized(price)
-                # 只检查止盈部分
-                act = check_enhanced(pos, price, rules, pos.max_unrealized_pct)
-                if act and act.get("action") == "stop":
-                    # 规则禁用时忽略止损信号
-                    logger.debug(f"[止损忽略] 价格触及止损线但规则已禁用，等待反向信号")
-                    return
-            else:
-                act = position.check(pos, price, rules)
-                if act and act.get("action") == "stop":
-                    logger.debug(f"[止损忽略] 价格触及止损线但规则已禁用，等待反向信号")
-                    return
-        else:
-            # 正常流程：检查止盈和止损
-            if USE_ENHANCED and isinstance(rules, EnhancedExitRules) and isinstance(pos, EnhancedPosition):
-                pos.update_max_unrealized(price)
-                act = check_enhanced(pos, price, rules, pos.max_unrealized_pct)
-            else:
-                act = position.check(pos, price, rules)
+        if not rules.enabled and act and act.get("action") in ("stop", "max_stop"):
+            logger.debug("[止损忽略] 价格触及止损线但规则已禁用，等待反向信号")
+            return
 
         if not act:
             return
@@ -351,11 +341,9 @@ class Executor:
 
             # 再次检查
             rules = self.rules_of(pos)
-            if USE_ENHANCED and isinstance(rules, EnhancedExitRules) and isinstance(pos, EnhancedPosition):
-                pos.update_max_unrealized(price)
-                act = check_enhanced(pos, price, rules, pos.max_unrealized_pct)
-            else:
-                act = position.check(pos, price, rules)
+            act = self._exit_action(pos, price, rules)
+            if not rules.enabled and act and act.get("action") in ("stop", "max_stop"):
+                return
 
             if not act:
                 return
@@ -374,12 +362,20 @@ class Executor:
         # 注意 instId 要用合约form（BTC-USDT-SWAP），拿现货 form 会查不到规格、
         # 退回默认 lot_sz=1，把止盈量吸附成 0 —— 表现为止盈静默不执行。
         spec = await self._spec_of(pos)
-        qty = trade._snap(pos.qty * act["ratio"] / 100, spec["lot_sz"])
-        # 吸附后可能为 0（仓位太小），或反而超过持仓，两头都要夹住
+        # 比例按开仓数量算：1%平30% → 2%平40% → 3.5%平30%，三档合计 100%
+        # 第三档直接平剩余，避免手数吸附后留残仓。
+        if act["action"] == "tp3":
+            qty = pos.qty
+        else:
+            base = pos.init_qty if getattr(pos, "init_qty", 0) else pos.qty
+            qty = trade._snap(base * act["ratio"] / 100, spec["lot_sz"])
+            qty = min(qty, pos.qty)
+            leftover = round(pos.qty - qty, 10) if qty > 0 else pos.qty
+            if leftover > 0 and leftover < spec["lot_sz"]:
+                qty = pos.qty
         if qty <= 0:
             logger.info(f"[跳过止盈] 应平 {act['ratio']:.0f}% 不足最小变动单位 {spec['lot_sz']}")
             return
-        qty = min(qty, pos.qty)
         r = await self._reduce(pos, qty, price, f"止盈 {act['ratio']:.0f}%")
         if not r.get("ok"):
             logger.warning(f"[止盈失败] {r.get('error')}")
