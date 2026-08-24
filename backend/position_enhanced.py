@@ -23,8 +23,9 @@ class EnhancedExitRules(ExitRules):
     tp1_ratio: float = 30.0   # 平30%
     tp2_pct: float = 2.0      # 第二档：2%
     tp2_ratio: float = 40.0   # 再平40%（累计70%）
-    tp3_pct: float = 3.5      # 第三档：3.5%
+    tp3_pct: float = 3.5      # 第三档：3.5%（tp3_mode=pct 时生效）
     tp3_ratio: float = 100.0  # 剩余全平（100% 确保清仓）
+    tp3_mode: str = "pct"     # pct=按幅度 | reverse_signal=同周期反向可下单信号全平
 
     # 止损优化
     sl_buffer_atr: float = 0.5   # 止损线外扩0.5倍ATR（避免正常波动扫损）
@@ -163,8 +164,10 @@ def check_enhanced(pos: Position, price: float, rules: EnhancedExitRules,
             "reason": f"浮盈 {current_pnl:.2f}% ≥ {rules.tp2_pct}%，第二档止盈",
         }
 
-    # 第三档（TP2 完成后才触发）
-    if tp2_done and not tp3_done and current_pnl >= rules.tp3_pct:
+    # 第三档（TP2 完成后才触发；reverse_signal 模式在 executor 信号入口处理）
+    tp3_mode = getattr(rules, "tp3_mode", "pct")
+    if (tp2_done and not tp3_done and tp3_mode == "pct"
+            and current_pnl >= rules.tp3_pct):
         return {
             "action": "tp3",
             "ratio": rules.tp3_ratio,

@@ -55,16 +55,17 @@ class Candle:
 
 
 # maxlen / OKX bar / OKX WS channel / 前端显示名
+# 展示窗口：15m≈3个月，1h/4h/1d≈6个月；更短周期仍用较短缓存控内存
 TF_CONFIG = {
-    "1m":  {"maxlen": 600, "okx_bar": "1m",  "okx_channel": "candle1m",  "label": "1m"},
-    "5m":  {"maxlen": 600, "okx_bar": "5m",  "okx_channel": "candle5m",  "label": "5m"},
-    "15m": {"maxlen": 800, "okx_bar": "15m", "okx_channel": "candle15m", "label": "15m"},
-    "30m": {"maxlen": 800, "okx_bar": "30m", "okx_channel": "candle30m", "label": "30m"},
-    "1h":  {"maxlen": 800, "okx_bar": "1H",  "okx_channel": "candle1H",  "label": "1H"},
-    "4h":  {"maxlen": 800, "okx_bar": "4H",  "okx_channel": "candle4H",  "label": "4H"},
-    "1d":  {"maxlen": 600, "okx_bar": "1D",  "okx_channel": "candle1D",  "label": "1D"},
-    "1w":  {"maxlen": 300, "okx_bar": "1W",  "okx_channel": "candle1W",  "label": "1W"},
-    "1M":  {"maxlen": 200, "okx_bar": "1M",  "okx_channel": "candle1M",  "label": "1M"},
+    "1m":  {"maxlen": 600,  "okx_bar": "1m",  "okx_channel": "candle1m",  "label": "1m"},
+    "5m":  {"maxlen": 600,  "okx_bar": "5m",  "okx_channel": "candle5m",  "label": "5m"},
+    "15m": {"maxlen": 9000, "okx_bar": "15m", "okx_channel": "candle15m", "label": "15m"},  # ~3个月
+    "30m": {"maxlen": 800,  "okx_bar": "30m", "okx_channel": "candle30m", "label": "30m"},
+    "1h":  {"maxlen": 4500, "okx_bar": "1H",  "okx_channel": "candle1H",  "label": "1H"},   # ~6个月
+    "4h":  {"maxlen": 1200, "okx_bar": "4H",  "okx_channel": "candle4H",  "label": "4H"},   # ~6个月
+    "1d":  {"maxlen": 220,  "okx_bar": "1D",  "okx_channel": "candle1D",  "label": "1D"},   # ~6个月
+    "1w":  {"maxlen": 300,  "okx_bar": "1W",  "okx_channel": "candle1W",  "label": "1W"},
+    "1M":  {"maxlen": 200,  "okx_bar": "1M",  "okx_channel": "candle1M",  "label": "1M"},
 }
 
 TFS = list(TF_CONFIG.keys())

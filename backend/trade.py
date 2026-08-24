@@ -66,10 +66,158 @@ SIMULATED = os.environ.get("OKX_SIMULATED", "1").strip() != "0"
 
 configured = bool(API_KEY and API_SECRET and PASSPHRASE)
 
+# 前端可改 Key / 交易所；落盘与 settings.json 分开，且永不经 WebSocket 下发明文。
+CRED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".okx_credentials.json")
+EXCHANGES = (
+    {"id": "okx", "label": "OKX", "enabled": True},
+    {"id": "bitget", "label": "Bitget", "enabled": True},
+)
+exchange = "okx"
+_store: dict = {
+    "okx": {"api_key": API_KEY, "api_secret": API_SECRET, "passphrase": PASSPHRASE},
+    "bitget": {
+        "api_key": os.environ.get("BITGET_API_KEY", "").strip(),
+        "api_secret": os.environ.get("BITGET_API_SECRET", "").strip(),
+        "passphrase": os.environ.get("BITGET_API_PASSPHRASE", "").strip(),
+    },
+}
+
+
+def _mask_key(s: str) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    if len(s) <= 8:
+        return "••••"
+    return f"{s[:4]}••••{s[-4:]}"
+
+
+def _active_bucket() -> dict:
+    return _store.get(exchange) or _store["okx"]
+
+
+def _sync_active_globals():
+    """把当前交易所的密钥同步到模块级变量（OKX 路径直接读这些）。"""
+    global API_KEY, API_SECRET, PASSPHRASE, configured
+    b = _active_bucket()
+    API_KEY = (b.get("api_key") or "").strip()
+    API_SECRET = (b.get("api_secret") or "").strip()
+    PASSPHRASE = (b.get("passphrase") or "").strip()
+    configured = bool(API_KEY and API_SECRET and PASSPHRASE)
+    if exchange == "bitget":
+        try:
+            import bitget_trade
+            bitget_trade.configure(API_KEY, API_SECRET, PASSPHRASE, SIMULATED)
+        except Exception as e:
+            logger.warning(f"同步 Bitget 密钥失败: {e}")
+
+
+def credentials_public() -> dict:
+    b = _active_bucket()
+    return {
+        "exchange": exchange,
+        "exchanges": [dict(x) for x in EXCHANGES],
+        "configured": bool((b.get("api_key") and b.get("api_secret") and b.get("passphrase"))),
+        "key_hint": _mask_key(b.get("api_key") or ""),
+        "has_secret": bool(b.get("api_secret")),
+        "has_passphrase": bool(b.get("passphrase")),
+        "env_paper": SIMULATED,
+    }
+
+
+def apply_credentials(api_key: str | None = None, api_secret: str | None = None,
+                      passphrase: str | None = None, persist: bool = True,
+                      exchange_id: str | None = None) -> dict:
+    """运行时替换密钥。空字符串表示不改该项。exchange_id 同时切换下单通道。"""
+    global exchange
+    ex = (exchange_id or exchange or "okx").strip().lower()
+    if ex not in ("okx", "bitget"):
+        raise ValueError(f"不支持的交易所: {ex}")
+    exchange = ex
+    if ex not in _store:
+        _store[ex] = {"api_key": "", "api_secret": "", "passphrase": ""}
+    b = _store[ex]
+    if api_key is not None and str(api_key).strip():
+        b["api_key"] = str(api_key).strip()
+    if api_secret is not None and str(api_secret).strip():
+        b["api_secret"] = str(api_secret).strip()
+    if passphrase is not None and str(passphrase).strip():
+        b["passphrase"] = str(passphrase).strip()
+    _sync_active_globals()
+    if persist and configured:
+        _save_credentials()
+    return credentials_public()
+
+
+def set_exchange(exchange_id: str, persist: bool = True) -> dict:
+    """只切换交易所（沿用该所已保存的密钥）。"""
+    return apply_credentials(exchange_id=exchange_id, persist=persist)
+
+
+def _save_credentials():
+    data = {
+        "exchange": exchange,
+        "okx": dict(_store.get("okx") or {}),
+        "bitget": dict(_store.get("bitget") or {}),
+        # 兼容旧单层字段（= 当前激活交易所）
+        "api_key": API_KEY,
+        "api_secret": API_SECRET,
+        "passphrase": PASSPHRASE,
+    }
+    tmp = CRED_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, CRED_FILE)
+    try:
+        os.chmod(CRED_FILE, 0o600)
+    except Exception:
+        pass
+    logger.info(f"{exchange.upper()} 密钥已更新（仅服务器保存，前端只显示掩码）")
+
+
+def load_saved_credentials():
+    """面板保存的密钥覆盖 .env。文件不存在则继续用环境变量。"""
+    global exchange
+    if not os.path.exists(CRED_FILE):
+        _sync_active_globals()
+        return
+    try:
+        with open(CRED_FILE) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return
+        if isinstance(data.get("okx"), dict):
+            for k in ("api_key", "api_secret", "passphrase"):
+                if data["okx"].get(k):
+                    _store["okx"][k] = data["okx"][k]
+        if isinstance(data.get("bitget"), dict):
+            for k in ("api_key", "api_secret", "passphrase"):
+                if data["bitget"].get(k):
+                    _store["bitget"][k] = data["bitget"][k]
+        # 旧格式：单层 key 视为 OKX
+        if data.get("api_key") and not (data.get("okx") or {}).get("api_key"):
+            _store["okx"]["api_key"] = data.get("api_key") or ""
+            _store["okx"]["api_secret"] = data.get("api_secret") or ""
+            _store["okx"]["passphrase"] = data.get("passphrase") or ""
+        ex = (data.get("exchange") or "okx").strip().lower()
+        if ex in ("okx", "bitget"):
+            exchange = ex
+        _sync_active_globals()
+    except Exception as e:
+        logger.warning(f"读取面板密钥失败，改用环境变量: {e}")
+        _sync_active_globals()
+
+
+load_saved_credentials()
+
 if configured:
-    logger.info(f"OKX 交易已配置（{'模拟盘' if SIMULATED else '⚠️ 实盘'}）")
+    logger.info(f"{exchange.upper()} 交易已配置（{'模拟盘' if SIMULATED else '⚠️ 实盘'}，Key {_mask_key(API_KEY)}）")
 else:
-    logger.info("OKX 交易未配置（缺 OKX_API_KEY / SECRET / PASSPHRASE），自动挂单不可用")
+    logger.info("交易未配置（可在自动下单页填写 OKX / Bitget Key）")
+
+
+def _use_bitget() -> bool:
+    return exchange == "bitget"
 
 
 def _ts() -> str:
@@ -183,6 +331,9 @@ def _fetch_specs(inst_type: str) -> dict:
 
 async def get_spec(inst_id: str, inst_type: str = "SWAP") -> dict:
     """取合约规格，带缓存。取不到时给保守默认值。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.get_spec(inst_id, inst_type)
     if inst_type not in _spec_ts or time.time() - _spec_ts.get(inst_type, 0) > _SPEC_TTL:
         loop = asyncio.get_event_loop()
         new = await loop.run_in_executor(None, _fetch_specs, inst_type)
@@ -225,6 +376,9 @@ def _num(x) -> float:
 async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
                        sim: bool | None = None) -> dict:
     """设置杠杆。开仓前调一次，重复设同一值不报错。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.set_leverage(inst_id, leverage, mgn_mode, sim=sim)
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     payload = {"instId": to_swap(inst_id), "lever": str(leverage), "mgnMode": mgn_mode}
@@ -310,6 +464,14 @@ async def place_order(
     平仓：传 sz + reduce_only=True
     wait_fill=True 时轮询成交；超时撤剩余，未成交返回 ok=False（不记持仓）。
     """
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.place_order(
+            inst_id, side, price, sz=sz, margin_usdt=margin_usdt, leverage=leverage,
+            category=category, order_type=order_type, reduce_only=reduce_only,
+            pos_side=pos_side, mgn_mode=mgn_mode, client_oid=client_oid, sim=sim,
+            ref_price=ref_price, wait_fill=wait_fill, wait_sec=wait_sec,
+        )
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥"}
 
@@ -442,6 +604,9 @@ async def place_order(
 async def get_positions(inst_id: str | None = None, category: str = "SWAP",
                         sim: bool | None = None) -> dict:
     """查交易所实际持仓，用于和本地状态机对账。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.get_positions(inst_id, category, sim=sim)
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     path = f"{POSITIONS}?instType={category}"
@@ -454,6 +619,9 @@ async def get_positions(inst_id: str | None = None, category: str = "SWAP",
 
 async def cancel(inst_id: str, order_id: str, category: str = "SWAP",
                  sim: bool | None = None) -> dict:
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.cancel(inst_id, order_id, category, sim=sim)
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     iid = to_swap(inst_id) if category == "SWAP" else to_spot(inst_id)
@@ -467,6 +635,9 @@ async def cancel(inst_id: str, order_id: str, category: str = "SWAP",
 async def list_pending(inst_id: str, category: str = "SWAP",
                        sim: bool | None = None) -> dict:
     """该品种当前未成交委托。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.list_pending(inst_id, category, sim=sim)
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥", "data": []}
     iid = to_swap(inst_id) if category == "SWAP" else to_spot(inst_id)
@@ -481,6 +652,9 @@ async def list_pending(inst_id: str, category: str = "SWAP",
 async def cancel_pending(inst_id: str, category: str = "SWAP",
                          sim: bool | None = None) -> dict:
     """撤销该品种全部未成交委托，避免旧限价单事后成交变成幽灵仓。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.cancel_pending(inst_id, category, sim=sim)
     listed = await list_pending(inst_id, category, sim=sim)
     if not listed.get("ok"):
         return {"ok": False, "cancelled": [], "error": listed.get("error")}
@@ -502,6 +676,9 @@ async def cancel_pending(inst_id: str, category: str = "SWAP",
 async def query_order(inst_id: str, order_id: str, category: str = "SWAP",
                       sim: bool | None = None) -> dict:
     """反查订单状态。超时/未知错误后用这个确认到底成没成。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.query_order(inst_id, order_id, category, sim=sim)
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     iid = to_swap(inst_id) if category == "SWAP" else to_spot(inst_id)
@@ -514,6 +691,9 @@ async def query_order(inst_id: str, order_id: str, category: str = "SWAP",
 
 async def ping(sim: bool | None = None) -> dict:
     """连通性 + 密钥有效性自检：查账户余额。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.ping(sim=sim)
     if not configured:
         return {"ok": False, "error": "未配置 OKX API 密钥（OKX_API_KEY / SECRET / PASSPHRASE）"}
     loop = asyncio.get_event_loop()
@@ -530,5 +710,7 @@ async def ping(sim: bool | None = None) -> dict:
 
         return {"ok": True, "paper": SIMULATED if sim is None else sim,
                 "equity": round(_num(row.get("totalEq")), 4),
-                "usdt_avail": round(_num(usdt.get("availBal")), 4)}
-    return {"ok": False, "paper": SIMULATED if sim is None else sim, "error": _err(r)}
+                "usdt_avail": round(_num(usdt.get("availBal")), 4),
+                "exchange": "okx"}
+    return {"ok": False, "paper": SIMULATED if sim is None else sim, "error": _err(r),
+            "exchange": "okx"}

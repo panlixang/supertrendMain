@@ -39,8 +39,7 @@ export function useWebSocket() {
     }
 
     async function fetchFullCandles(tf) {
-      // snapshot 每周期只带 500 根，指标是按完整 deque 算的，
-      // 这里补齐长度，否则末尾对齐后前段会缺一截
+      // snapshot 只带近期几百根；15m/1h/4h/1d 展示窗口更长，这里拉满内存 deque
       try {
         const r = await fetch(`${API}/api/candles?tf=${tf}`);
         const d = await r.json();
@@ -48,6 +47,15 @@ export function useWebSocket() {
           useStore.getState().setCandles(tf, d);
         }
       } catch {}
+    }
+
+    // 长窗口周期优先拉满，短周期稍后，避免首屏卡顿
+    const LONG_TFS = new Set(['15m', '1h', '4h', '1d']);
+    async function fetchCandlesPreferLong() {
+      const long = ALL_TFS.filter((tf) => LONG_TFS.has(tf));
+      const short = ALL_TFS.filter((tf) => !LONG_TFS.has(tf));
+      await Promise.all(long.map((tf) => fetchFullCandles(tf)));
+      short.forEach((tf) => fetchFullCandles(tf));
     }
 
     function handle(msg) {
@@ -73,9 +81,8 @@ export function useWebSocket() {
           }
           s.setSignals(msg.signals || []);
           s.clearIndicators();
-          ALL_TFS.forEach((tf) => {
-            fetchFullCandles(tf);
-            fetchIndicators(tf, true);
+          fetchCandlesPreferLong().then(() => {
+            ALL_TFS.forEach((tf) => fetchIndicators(tf, true));
           });
           fetchOverview();
           break;

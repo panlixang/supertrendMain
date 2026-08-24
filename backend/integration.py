@@ -243,7 +243,10 @@ class EnhancedExecutorMixin:
 
             # 计算平仓量
             spec = await self._spec_of(pos)
-            qty = trade._snap(pos.qty * act["ratio"] / 100, spec["lot_sz"])
+            if act["action"] == "tp3":
+                qty = pos.qty
+            else:
+                qty = trade._snap(pos.qty * act["ratio"] / 100, spec["lot_sz"])
 
             if qty <= 0:
                 logger.info(f"[跳过止盈] 应平 {act['ratio']:.0f}% 不足最小变动单位")

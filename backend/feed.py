@@ -38,6 +38,7 @@ from history import fetch_candles, load_history
 from indicators import st_signals, super_trend
 from state import AppState, Candle, SymbolStore, Ticker, TF_CONFIG
 from integration import enhanced_signal_handler
+import candle_store
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +262,11 @@ class OKXFeed:
             })
 
         if candle.confirm:
+            if candle_store.should_persist(tf):
+                try:
+                    candle_store.save_one(store.symbol, tf, candle)
+                except Exception as e:
+                    logger.warning(f"[{store.symbol} {tf}] K线落盘失败: {e}")
             await self._check_flip(store, tf, candle.ts)
             # 收盘后超趋线已定，跟随它移动止损
             ex = self.state.executors.get(store.symbol)
@@ -461,11 +467,17 @@ class OKXFeed:
 
     async def push_snapshot(self):
         s = self.state
+        # 与 WS 首连一致：快照只带近期，完整长窗口由前端 GET /api/candles 拉
+        SNAPSHOT_CAP = 500
+        candles = {
+            tf: (lst[-SNAPSHOT_CAP:] if len(lst) > SNAPSHOT_CAP else lst)
+            for tf, lst in s.all_candles().items()
+        }
         await s.broadcast({
             "type":    "snapshot",
             "symbol":  s.current_symbol,
             "ticker":  vars(s.ticker),
-            "candles": s.all_candles(),
+            "candles": candles,
             "signals": s.signals,
             "params":  vars(s.params),
             # 多品种视图（旧前端会忽略这些键）

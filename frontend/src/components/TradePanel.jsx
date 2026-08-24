@@ -15,11 +15,6 @@ const LEVERAGES = [1, 2, 3, 5, 10, 20];
 export default function TradePanel() {
   const cfg = useStore((s) => s.tradeConfig);
   const setCfg = useStore((s) => s.setTradeConfig);
-  const allRules = useStore((s) => s.exitRules);
-  const setRules = useStore((s) => s.setExitRules);
-  // 双档：normal 标准档 / quick 快进快出档（弱档信号用）
-  const rules = allRules?.normal;
-  const quick = allRules?.quick;
   const orders = useStore((s) => s.orders);
   const closed = useStore((s) => s.closed);
   const tf = useStore((s) => s.tf);
@@ -38,55 +33,20 @@ export default function TradePanel() {
     })
     .filter(([, p]) => p && p.qty > 0);
 
-  const [amount, setAmount] = useState(10);
   const [offset, setOffset] = useState(0.05);
-  const [tp1, setTp1] = useState(1.0);
-  const [tpRatio, setTpRatio] = useState(30);
-  const [tp2, setTp2] = useState(2.0);
-  const [tp2Ratio, setTp2Ratio] = useState(40);
-  const [tp3, setTp3] = useState(3.5);
-  const [tp3Ratio, setTp3Ratio] = useState(30);
-  const [slPct, setSlPct] = useState(2);
-  // 弱档（快进快出）规则的本地输入
-  const [qTp, setQTp] = useState(0.8);
-  const [qSl, setQSl] = useState(1);
-  // 极端保护止损
-  const [maxLossPct, setMaxLossPct] = useState(10.0);
-  const [maxLossEnabled, setMaxLossEnabled] = useState(true);
-  const [qMaxLossPct, setQMaxLossPct] = useState(8.0);
-  const [qMaxLossEnabled, setQMaxLossEnabled] = useState(true);
   const [msg, setMsg] = useState('');
   const [ping, setPing] = useState(null);
   const [regime, setRegime] = useState(null);
   const [confirmLive, setConfirmLive] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [apiSecret, setApiSecret] = useState('');
+  const [apiPhrase, setApiPhrase] = useState('');
+  const [savingKey, setSavingKey] = useState(false);
 
   useEffect(() => {
     if (!cfg) return;
-    setAmount(cfg.amount_usdt);
     setOffset(cfg.price_offset);
-  }, [cfg?.amount_usdt, cfg?.price_offset]);
-
-  useEffect(() => {
-    if (!rules) return;
-    setTp1(rules.tp1_pct);
-    setTpRatio(rules.tp1_ratio);
-    setTp2(rules.tp2_pct ?? 2.0);
-    setTp2Ratio(rules.tp2_ratio ?? 40);
-    setTp3(rules.tp3_pct ?? 3.5);
-    setTp3Ratio(rules.tp3_ratio ?? 30);
-    setSlPct(rules.sl_pct);
-    setMaxLossPct(rules.max_loss_pct ?? 10.0);
-    setMaxLossEnabled(rules.max_loss_enabled ?? true);
-  }, [rules?.tp1_pct, rules?.tp1_ratio, rules?.tp2_pct, rules?.tp2_ratio,
-      rules?.tp3_pct, rules?.tp3_ratio, rules?.sl_pct, rules?.max_loss_pct, rules?.max_loss_enabled]);
-
-  useEffect(() => {
-    if (!quick) return;
-    setQTp(quick.tp1_pct);
-    setQSl(quick.sl_pct);
-    setQMaxLossPct(quick.max_loss_pct ?? 8.0);
-    setQMaxLossEnabled(quick.max_loss_enabled ?? true);
-  }, [quick?.tp1_pct, quick?.sl_pct, quick?.max_loss_pct, quick?.max_loss_enabled]);
+  }, [cfg?.price_offset]);
 
   // 当前周期的行情状态，让用户直观看到「现在下不下得了单」
   useEffect(() => {
@@ -116,16 +76,74 @@ export default function TradePanel() {
     } catch { flash('网络错误'); }
   }
 
-  async function patchRules(body, note) {
+  async function saveCredentials() {
+    const key = apiKey.trim();
+    const secret = apiSecret.trim();
+    const phrase = apiPhrase.trim();
+    const ex = (cfg.exchange || 'okx').toLowerCase() === 'bitget' ? 'bitget' : 'okx';
+    if (!cfg.configured && !(key && secret && phrase)) {
+      flash('首次配置需填写 Key、Secret、Passphrase');
+      return;
+    }
+    if (cfg.configured && !(key || secret || phrase)) {
+      flash('没有要更新的字段');
+      return;
+    }
+    setSavingKey(true);
     try {
-      const r = await fetch(`${API}/api/trade/exit-rules`, {
+      const r = await fetch(`${API}/api/trade/credentials`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          exchange: ex,
+          api_key: key,
+          api_secret: secret,
+          passphrase: phrase,
+        }),
       });
       const d = await r.json();
-      if (d.ok) { setRules(d.rules); flash(note || '规则已更新'); }
-      else flash(d.error || '保存失败');
-    } catch { flash('网络错误'); }
+      if (d.ok) {
+        if (d.config) setCfg(d.config);
+        setApiKey('');
+        setApiSecret('');
+        setApiPhrase('');
+        if (d.ping) setPing(d.ping);
+        const name = (d.config?.exchange || ex).toUpperCase();
+        flash(d.ping?.ok
+          ? `${name} 密钥已保存 · ${d.ping.paper ? '模拟盘' : '实盘'} 权益 ${d.ping.equity ?? '—'}U`
+          : `${name} 密钥已保存，但查账户失败：${d.ping?.error || '未知'}`);
+      } else {
+        flash(d.error || '保存失败');
+      }
+    } catch {
+      flash('网络错误');
+    } finally {
+      setSavingKey(false);
+    }
+  }
+
+  async function switchExchange(ex) {
+    setSavingKey(true);
+    try {
+      const r = await fetch(`${API}/api/trade/credentials`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ exchange: ex }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        if (d.config) setCfg(d.config);
+        setApiKey('');
+        setApiSecret('');
+        setApiPhrase('');
+        if (d.ping) setPing(d.ping);
+        flash(d.config?.configured
+          ? `已切换到 ${(ex || '').toUpperCase()}（沿用已存密钥）`
+          : `已切换到 ${(ex || '').toUpperCase()}，请填写该所密钥`);
+      } else flash(d.error || '切换失败');
+    } catch {
+      flash('网络错误');
+    } finally {
+      setSavingKey(false);
+    }
   }
 
   async function doPing() {
@@ -187,31 +205,12 @@ export default function TradePanel() {
 
   if (!cfg) return <div style={sty.empty}>加载中…</div>;
 
-  if (!cfg.configured) {
-    return (
-      <div style={sty.wrap}>
-        <div style={sty.warn}>
-          <b style={{ color: '#f5a623' }}>未配置 OKX API 密钥</b>
-          <div style={{ marginTop: 6, lineHeight: 1.8, color: '#8b93a0' }}>
-            自动挂单不可用，信号仍会正常提醒 + 推送。启用步骤：
-          </div>
-          <ol style={{ margin: '8px 0 0 16px', lineHeight: 1.9, color: '#8b93a0' }}>
-            <li>项目根目录 <code style={sty.inline}>cp .env.example .env</code></li>
-            <li>把 .env 里的 key / secret / passphrase 换成你自己的</li>
-            <li>OKX 模拟盘 key：交易 → 模拟交易 → 个人中心 → 模拟盘API</li>
-            <li>重新 <code style={sty.inline}>bash start.sh</code></li>
-          </ol>
-          <pre style={sty.code}>{`OKX_API_KEY=你的key
-OKX_API_SECRET=你的secret
-OKX_API_PASSPHRASE=你的密码
-OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
-        </div>
-      </div>
-    );
-  }
-
   const live = !cfg.paper;
   const swap = cfg.category === 'SWAP';
+  const exchanges = cfg.exchanges || [
+    { id: 'okx', label: 'OKX', enabled: true },
+    { id: 'bitget', label: 'Bitget', enabled: false },
+  ];
 
   return (
     <div style={sty.wrap}>
@@ -287,8 +286,14 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             </div>
           </div>
           <Toggle on={cfg.enabled} color={live ? '#c2185b' : '#00c9a7'}
-                  onClick={() => patch({ enabled: !cfg.enabled },
-                    !cfg.enabled ? '自动挂单已开启' : '自动挂单已关闭')} />
+                  onClick={() => {
+                    if (!cfg.configured && !cfg.enabled) {
+                      flash('请先在下方保存交易所密钥');
+                      return;
+                    }
+                    patch({ enabled: !cfg.enabled },
+                      !cfg.enabled ? '自动挂单已开启' : '自动挂单已关闭');
+                  }} />
         </div>
 
         <div style={{ ...sty.rowBetween, borderTop: '1px solid #1e1e1e', paddingTop: 8 }}>
@@ -297,7 +302,7 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
               {live ? '⚠️ 实盘' : '模拟盘'}
             </div>
             <div style={{ fontSize: 9.5, color: '#4a5058' }}>
-              {live ? '真实资金' : 'OKX 模拟资金，无风险'}
+              {live ? '真实资金' : `${(cfg.exchange || 'okx').toUpperCase()} 模拟资金，无风险`}
             </div>
           </div>
           {live ? (
@@ -325,11 +330,73 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
         )}
       </div>
 
+      {/* ── 交易所 / API ── */}
+      <Section title="交易所 / API">
+        <div style={{ ...sty.card, gap: 6 }}>
+          <Row label="交易所" hint="行情仍用 OKX；下单走所选交易所">
+            <select
+              value={(cfg.exchange || 'okx').toLowerCase()}
+              onChange={(e) => switchExchange(e.target.value)}
+              disabled={savingKey}
+              style={{ ...sty.input, width: 160 }}
+            >
+              {exchanges.map((ex) => (
+                <option key={ex.id} value={ex.id} disabled={!ex.enabled}>
+                  {ex.label}{ex.enabled ? '' : '（即将支持）'}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <div style={{ fontSize: 9.5, color: cfg.configured ? '#00c9a7' : '#f5a623', lineHeight: 1.6 }}>
+            {cfg.configured
+              ? `已配置 ${(cfg.exchange || 'okx').toUpperCase()} · Key ${cfg.key_hint || '••••'}`
+              : `未配置 ${(cfg.exchange || 'okx').toUpperCase()} 密钥，自动挂单无法开启。`}
+          </div>
+          <Row label="API Key">
+            <input type="text" autoComplete="off" value={apiKey}
+                   placeholder={cfg.key_hint || `${(cfg.exchange || 'okx').toUpperCase()} API Key`}
+                   onChange={(e) => setApiKey(e.target.value)}
+                   style={{ ...sty.input, width: 220, maxWidth: '55vw' }} />
+          </Row>
+          <Row label="Secret">
+            <input type="password" autoComplete="new-password" value={apiSecret}
+                   placeholder={cfg.has_secret ? '已保存，留空不改' : 'Secret'}
+                   onChange={(e) => setApiSecret(e.target.value)}
+                   style={{ ...sty.input, width: 220, maxWidth: '55vw' }} />
+          </Row>
+          <Row label="Passphrase">
+            <input type="password" autoComplete="new-password" value={apiPhrase}
+                   placeholder={cfg.has_passphrase ? '已保存，留空不改' : '创建 Key 时设的密码'}
+                   onChange={(e) => setApiPhrase(e.target.value)}
+                   style={{ ...sty.input, width: 220, maxWidth: '55vw' }} />
+          </Row>
+          <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6 }}>
+            {(cfg.exchange || 'okx').toLowerCase() === 'bitget'
+              ? 'Bitget：模拟盘须用 Demo 专用 Key，并与上方「模拟盘」一致。品种按 MUUSDT / SPCXUSDT / BTCUSDT 映射（OKX 的 MU-USDT-SWAP → MUUSDT）。'
+              : 'OKX：模拟盘 / 实盘 Key 不通用，须与上方「模拟盘 / 实盘」一致。'}
+            {' '}密钥只存服务器，页面不回传明文。
+          </div>
+          <button
+            onClick={saveCredentials}
+            disabled={savingKey || (!cfg.configured
+              ? !(apiKey.trim() && apiSecret.trim() && apiPhrase.trim())
+              : !(apiKey.trim() || apiSecret.trim() || apiPhrase.trim()))}
+            style={{
+              ...sty.btn, alignSelf: 'flex-start',
+              opacity: savingKey || (!cfg.configured
+                ? !(apiKey.trim() && apiSecret.trim() && apiPhrase.trim())
+                : !(apiKey.trim() || apiSecret.trim() || apiPhrase.trim())) ? 0.35 : 1,
+            }}
+          >
+            {savingKey ? '保存中…' : '保存密钥'}
+          </button>
+        </div>
+      </Section>
+
       {/* ── 交易品种（多品种并行） ── */}
       <Section title={`交易品种（${symbolCfgs.length}/${maxSymbols}）`}>
         <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7 }}>
-          每个品种独立设置保证金 / 杠杆 / 允许周期 / 指标参数 / ER 阈值 / 止盈止损规则，独立开关；
-          品种开关 × 上方总开关同时打开才会下单。
+          保证金、杠杆、周期、ER、等级、止盈止损都在本行展开后改。品种开关 × 总开关同时开才会下单。
         </div>
         {symbolCfgs.map((c) => (
           <SymbolRow key={c.symbol} c={c} swap={swap}
@@ -343,8 +410,8 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
                    onAdd={(sym) => patchSymbol(sym, {}, `${sym} 已加入，正在拉历史K线…`)} />
       </Section>
 
-      {/* ── 下单参数（全局默认） ── */}
-      <Section title="下单参数（新品种默认值）">
+      {/* ── 公共下单（全品种共用；杠杆/保证金/止盈在品种行） ── */}
+      <Section title="公共下单">
         <Row label="交易品类" hint={swap ? '永续合约，可做多做空' : '现货，只能做多'}>
           <div style={{ display: 'flex', gap: 3 }}>
             {[['SWAP', '合约'], ['SPOT', '现货']].map(([v, l]) => (
@@ -353,39 +420,16 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             ))}
           </div>
         </Row>
-
         {swap && (
-          <>
-            <Row label="杠杆倍数" hint={`名义价值 = 保证金 × ${cfg.leverage}`}>
-              <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                {LEVERAGES.map((l) => (
-                  <button key={l} onClick={() => patch({ leverage: l }, `杠杆改为 ${l}x`)}
-                          style={{ ...sty.chip, opacity: cfg.leverage === l ? 1 : 0.3 }}>
-                    {l}x
-                  </button>
-                ))}
-              </div>
-            </Row>
-            <Row label="保证金模式" hint="cross 全仓 / isolated 逐仓">
-              <div style={{ display: 'flex', gap: 3 }}>
-                {[['cross', '全仓'], ['isolated', '逐仓']].map(([v, l]) => (
-                  <button key={v} onClick={() => patch({ margin_mode: v }, `已改为${l}`)}
-                          style={{ ...sty.chip, opacity: cfg.margin_mode === v ? 1 : 0.3 }}>{l}</button>
-                ))}
-              </div>
-            </Row>
-          </>
+          <Row label="保证金模式" hint="全品种共用：cross 全仓 / isolated 逐仓">
+            <div style={{ display: 'flex', gap: 3 }}>
+              {[['cross', '全仓'], ['isolated', '逐仓']].map(([v, l]) => (
+                <button key={v} onClick={() => patch({ margin_mode: v }, `已改为${l}`)}
+                        style={{ ...sty.chip, opacity: cfg.margin_mode === v ? 1 : 0.3 }}>{l}</button>
+              ))}
+            </div>
+          </Row>
         )}
-
-        <Row label="每笔保证金" hint="新品种默认固定金额；各品种可改成净值百分比">
-          <div style={{ display: 'flex', gap: 4 }}>
-            <input type="number" min={1} step={1} value={amount}
-                   onChange={(e) => setAmount(+e.target.value)} style={sty.input} />
-            <button onClick={() => patch({ amount_usdt: amount }, `每笔改为 ${amount} USDT`)}
-                    disabled={amount === cfg.amount_usdt}
-                    style={{ ...sty.smallBtn, opacity: amount === cfg.amount_usdt ? 0.3 : 1 }}>改</button>
-          </div>
-        </Row>
         <Row label="追价偏移 %" hint="买单略高于现价、卖单略低于现价，IOC 立刻成交；吃不到自动撤，不记持仓">
           <div style={{ display: 'flex', gap: 4 }}>
             <input type="number" min={0} max={2} step={0.01} value={offset}
@@ -396,325 +440,6 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
           </div>
         </Row>
       </Section>
-
-      {/* ── 止盈止损 · 标准档 ── */}
-      {rules && (
-        <Section title="止盈止损 · 标准档（ER ≥ 标准线）">
-          <div style={sty.rulesFlow}>
-            开仓 → {rules.tp1_pct}% 平 {rules.tp1_ratio}%
-            {rules.tp2_pct != null && <> → {rules.tp2_pct}% 平 {rules.tp2_ratio}%</>}
-            {rules.tp3_pct != null && <> → {rules.tp3_pct}% 平 {rules.tp3_ratio}%</>}
-            {rules.move_sl_to_entry && ' → 一档后止损抬保本'}
-          </div>
-
-          <div style={sty.rowBetween}>
-            <span style={{ fontSize: 11, color: '#c8ccd4' }}>启用止盈止损</span>
-            <Toggle on={rules.enabled} onClick={() => patchRules({ enabled: !rules.enabled })} />
-          </div>
-
-          {/* 三级止盈 */}
-          <div style={{ fontSize: 10, color: '#f5a623', fontWeight: 600, marginBottom: 6 }}>
-            📊 三级止盈（分批离场）
-          </div>
-
-          <Row label="第一档 %" hint={swap ? `触发价格幅度，${cfg.leverage}x 下 = 保证金 ${(tp1 * cfg.leverage).toFixed(1)}%` : '价格涨幅 %'}>
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input type="number" min={0.1} step={0.1} value={tp1}
-                     onChange={(e) => setTp1(+e.target.value)} style={{ ...sty.input, width: 60 }} />
-              <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
-              <input type="number" min={1} max={100} step={5} value={tpRatio}
-                     onChange={(e) => setTpRatio(+e.target.value)} style={{ ...sty.input, width: 50 }} />
-              <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
-            </div>
-          </Row>
-
-          <Row label="第二档 %" hint="第一档完成后才检查">
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input type="number" min={0.1} step={0.1} value={tp2}
-                     onChange={(e) => setTp2(+e.target.value)} style={{ ...sty.input, width: 60 }} />
-              <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
-              <input type="number" min={0} max={100} step={5} value={tp2Ratio}
-                     onChange={(e) => setTp2Ratio(+e.target.value)} style={{ ...sty.input, width: 50 }} />
-              <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
-            </div>
-          </Row>
-
-          <Row label="第三档 %" hint="第二档完成后，剩余仓位">
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input type="number" min={0.1} step={0.1} value={tp3}
-                     onChange={(e) => setTp3(+e.target.value)} style={{ ...sty.input, width: 60 }} />
-              <span style={{ fontSize: 10, color: '#8b93a0' }}>→ 平</span>
-              <input type="number" min={0} max={100} step={5} value={tp3Ratio}
-                     onChange={(e) => setTp3Ratio(+e.target.value)} style={{ ...sty.input, width: 50 }} />
-              <span style={{ fontSize: 10, color: '#8b93a0' }}>%</span>
-              <button
-                onClick={() => patchRules({
-                  tp1_pct: tp1, tp1_ratio: tpRatio,
-                  tp2_pct: tp2, tp2_ratio: tp2Ratio,
-                  tp3_pct: tp3, tp3_ratio: tp3Ratio,
-                }, `三档止盈 ${tp1}%×${tpRatio}% → ${tp2}%×${tp2Ratio}% → ${tp3}%×${tp3Ratio}%`)}
-                style={sty.smallBtn}>改</button>
-            </div>
-          </Row>
-
-          <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, marginTop: 4, padding: '6px 8px', background: '#00c9a710', borderRadius: 3 }}>
-            这是新品种的默认规则。已加进列表的品种以「交易品种」里保存的为准。<br/>
-            推荐：1% 平 30% → 2% 平 40% → 3.5% 平剩余
-          </div>
-
-          {/* 智能止损增强 */}
-          {rules.sl_buffer_atr !== undefined && (
-            <>
-              <div style={{ fontSize: 10, color: '#4e8aff', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
-                🛡️ 智能止损（减少震荡扫损）
-              </div>
-              <Row label="ATR缓冲倍数" hint="ST止损线外扩N倍ATR，给震荡留空间">
-                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input type="number" min={0} max={2} step={0.1}
-                         value={rules.sl_buffer_atr || 0.5}
-                         onChange={(e) => patchRules({ sl_buffer_atr: +e.target.value })}
-                         style={{ ...sty.input, width: 60 }} />
-                  <span style={{ fontSize: 9, color: '#8b93a0' }}>× ATR</span>
-                </div>
-              </Row>
-              <Row label="最小止损距离 %" hint="防止止损过近被秒扫">
-                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input type="number" min={0.5} max={5} step={0.1}
-                         value={rules.sl_min_pct || 1.2}
-                         onChange={(e) => patchRules({ sl_min_pct: +e.target.value })}
-                         style={{ ...sty.input, width: 60 }} />
-                  <span style={{ fontSize: 9, color: '#8b93a0' }}>%</span>
-                </div>
-              </Row>
-              <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#4e8aff10', borderRadius: 3 }}>
-                智能止损 = max(ST线-ATR缓冲, 开仓价×最小距离%)<br/>
-                避免震荡时被正常波动扫损
-              </div>
-            </>
-          )}
-
-          {/* 盈利保护 */}
-          {rules.protect_profit_at !== undefined && (
-            <>
-              <div style={{ fontSize: 10, color: '#00c9a7', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
-                💎 盈利保护（避免过早离场）
-              </div>
-              <Row label="启动保护 %" hint="浮盈达到此值时启动保护">
-                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input type="number" min={0.5} max={10} step={0.1}
-                         value={rules.protect_profit_at || 1.5}
-                         onChange={(e) => patchRules({ protect_profit_at: +e.target.value })}
-                         style={{ ...sty.input, width: 60 }} />
-                  <span style={{ fontSize: 9, color: '#8b93a0' }}>%</span>
-                </div>
-              </Row>
-              <Row label="允许回撤 %" hint="从最高点可以回撤多少">
-                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input type="number" min={0.1} max={5} step={0.1}
-                         value={rules.protect_trail_pct || 0.8}
-                         onChange={(e) => patchRules({ protect_trail_pct: +e.target.value })}
-                         style={{ ...sty.input, width: 60 }} />
-                  <span style={{ fontSize: 9, color: '#8b93a0' }}>%</span>
-                </div>
-              </Row>
-              <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#00c9a710', borderRadius: 3 }}>
-                示例：浮盈达1.5%后，允许回撤0.8%<br/>
-                即从最高点回落超过0.8%才止损，避免短期回调就离场
-              </div>
-            </>
-          )}
-
-          <div style={sty.rowBetween}>
-            <div>
-              <div style={{ fontSize: 11, color: '#c8ccd4' }}>止盈后止损抬到开仓价</div>
-              <div style={{ fontSize: 8.5, color: '#4a5058' }}>剩余仓位变成无风险持有</div>
-            </div>
-            <Toggle on={rules.move_sl_to_entry}
-                    onClick={() => patchRules({ move_sl_to_entry: !rules.move_sl_to_entry })} />
-          </div>
-
-          <Row label="初始止损" hint={rules.sl_mode === 'st' ? '用超趋线（推荐）' : '按开仓价百分比'}>
-            <div style={{ display: 'flex', gap: 3 }}>
-              {[['st', '超趋线'], ['pct', '百分比']].map(([v, l]) => (
-                <button key={v} onClick={() => patchRules({ sl_mode: v }, `止损改为${l}`)}
-                        style={{ ...sty.chip, opacity: rules.sl_mode === v ? 1 : 0.3 }}>{l}</button>
-              ))}
-            </div>
-          </Row>
-          {rules.sl_mode === 'pct' && (
-            <Row label="止损幅度 %" hint="距开仓价">
-              <div style={{ display: 'flex', gap: 4 }}>
-                <input type="number" min={0.1} step={0.1} value={slPct}
-                       onChange={(e) => setSlPct(+e.target.value)} style={sty.input} />
-                <button onClick={() => patchRules({ sl_pct: slPct }, `止损改为 ${slPct}%`)}
-                        disabled={slPct === rules.sl_pct}
-                        style={{ ...sty.smallBtn, opacity: slPct === rules.sl_pct ? 0.3 : 1 }}>改</button>
-              </div>
-            </Row>
-          )}
-          <div style={sty.rowBetween}>
-            <div>
-              <div style={{ fontSize: 11, color: '#c8ccd4' }}>跟随超趋线移动止损</div>
-              <div style={{ fontSize: 8.5, color: '#4a5058' }}>只朝有利方向移，锁住利润</div>
-            </div>
-            <Toggle on={rules.trail_with_st}
-                    onClick={() => patchRules({ trail_with_st: !rules.trail_with_st })} />
-          </div>
-
-          {/* 极端保护止损 */}
-          <div style={{ fontSize: 10, color: '#e05263', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
-            🚨 极端保护止损（兜底保护）
-          </div>
-          <div style={sty.rowBetween}>
-            <div>
-              <div style={{ fontSize: 11, color: '#c8ccd4' }}>启用极端保护</div>
-              <div style={{ fontSize: 8.5, color: '#4a5058' }}>亏损达到指定幅度强制平仓</div>
-            </div>
-            <Toggle on={maxLossEnabled}
-                    onClick={() => {
-                      const newVal = !maxLossEnabled;
-                      setMaxLossEnabled(newVal);
-                      patchRules({ max_loss_enabled: newVal }, newVal ? '极端保护已启用' : '极端保护已关闭');
-                    }} />
-          </div>
-          {maxLossEnabled && (
-            <>
-              <Row label="最大亏损 %" hint="价格亏损达此幅度立即止损">
-                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input type="number" min={1} max={20} step={0.5}
-                         value={maxLossPct}
-                         onChange={(e) => setMaxLossPct(+e.target.value)}
-                         style={sty.input} />
-                  <button onClick={() => patchRules({ max_loss_pct: maxLossPct }, `极端保护止损改为 ${maxLossPct}%`)}
-                          disabled={maxLossPct === rules.max_loss_pct}
-                          style={{ ...sty.smallBtn, opacity: maxLossPct === rules.max_loss_pct ? 0.3 : 1 }}>改</button>
-                </div>
-              </Row>
-              <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#e0526320', borderRadius: 3 }}>
-                极端保护 = 最高优先级止损，优先于反向信号<br/>
-                适用场景：信号系统失效、闪崩、趋势判断错误<br/>
-                {cfg?.leverage ? `当前杠杆 ${cfg.leverage}x，价格亏损 ${maxLossPct}% ≈ 保证金亏损 ${(maxLossPct * cfg.leverage).toFixed(0)}%` : ''}
-              </div>
-            </>
-          )}
-        </Section>
-      )}
-
-      {/* ── 止盈止损 · 弱档（快进快出） ── */}
-      {quick && cfg && (
-        <Section title="弱档 · 快进快出（震荡边缘）">
-          <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7 }}>
-            ER 在 <b style={{ color: '#8b93a0' }}>{cfg.er_weak_min}</b> ~{' '}
-            <b style={{ color: '#8b93a0' }}>{cfg.er_min}</b> 的信号走这一档：
-            止盈一到<b style={{ color: '#f5a623' }}>全部平掉</b>。
-            吃不到大波段的行情就赚快钱。
-          </div>
-
-          <div style={sty.rowBetween}>
-            <div>
-              <div style={{ fontSize: 11, color: '#c8ccd4' }}>弱档自动下单</div>
-              <div style={{ fontSize: 8.5, color: cfg.quick_enabled ? '#f5a623' : '#4a5058' }}>
-                {cfg.quick_enabled
-                  ? `已开启 —— ER ${cfg.er_weak_min}~${cfg.er_min} 的信号也会真实下单`
-                  : `未开启 —— 该区间信号只提醒、不下单`}
-              </div>
-            </div>
-            <Toggle on={!!cfg.quick_enabled}
-                    onClick={() => patch({ quick_enabled: !cfg.quick_enabled },
-                                         cfg.quick_enabled ? '弱档下单已关闭' : '⚠️ 弱档下单已开启')} />
-          </div>
-
-          <div style={{ opacity: cfg.quick_enabled ? 1 : 0.4,
-                        pointerEvents: cfg.quick_enabled ? 'auto' : 'none',
-                        display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Row label="止盈 %" hint={swap ? `全平。${cfg.leverage}x 下 = 保证金 ${(qTp * cfg.leverage).toFixed(1)}%` : '价格幅度，触发即全平'}>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <input type="number" min={0.1} step={0.1} value={qTp}
-                       onChange={(e) => setQTp(+e.target.value)} style={sty.input} />
-                <button onClick={() => patchRules({ profile: 'quick', tp1_pct: qTp }, `弱档止盈改为 ${qTp}%`)}
-                        disabled={qTp === quick.tp1_pct}
-                        style={{ ...sty.smallBtn, opacity: qTp === quick.tp1_pct ? 0.3 : 1 }}>改</button>
-              </div>
-            </Row>
-            <Row label="止损方式" hint={quick.sl_mode === 'st'
-                ? '用超趋线 —— 离开仓价通常比固定百分比远，破线即趋势翻转'
-                : '距开仓价固定百分比（快进快出默认）'}>
-              <div style={{ display: 'flex', gap: 3 }}>
-                {[['pct', '百分比'], ['st', '超趋线']].map(([v, l]) => (
-                  <button key={v}
-                          onClick={() => patchRules({ profile: 'quick', sl_mode: v }, `弱档止损改为${l}`)}
-                          style={{ ...sty.chip, opacity: quick.sl_mode === v ? 1 : 0.3 }}>{l}</button>
-                ))}
-              </div>
-            </Row>
-            {quick.sl_mode === 'pct' && (
-              <Row label="止损 %" hint="距开仓价固定">
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <input type="number" min={0.1} step={0.1} value={qSl}
-                         onChange={(e) => setQSl(+e.target.value)} style={sty.input} />
-                  <button onClick={() => patchRules({ profile: 'quick', sl_pct: qSl }, `弱档止损改为 ${qSl}%`)}
-                          disabled={qSl === quick.sl_pct}
-                          style={{ ...sty.smallBtn, opacity: qSl === quick.sl_pct ? 0.3 : 1 }}>改</button>
-                </div>
-              </Row>
-            )}
-            {quick.sl_mode === 'st' && (
-              <div style={sty.rowBetween}>
-                <div>
-                  <div style={{ fontSize: 11, color: '#c8ccd4' }}>跟随超趋线移动止损</div>
-                  <div style={{ fontSize: 8.5, color: '#4a5058' }}>
-                    关闭则用开仓那一刻的趋势线，之后不动
-                  </div>
-                </div>
-                <Toggle on={quick.trail_with_st}
-                        onClick={() => patchRules({ profile: 'quick', trail_with_st: !quick.trail_with_st })} />
-              </div>
-            )}
-            <div style={{ fontSize: 9, color: '#3f4650', lineHeight: 1.6 }}>
-              {quick.sl_mode === 'pct'
-                ? <>盈亏比 {qSl > 0 ? (qTp / qSl).toFixed(2) : '—'} : 1 —— 靠胜率赚钱。</>
-                : <>超趋线止损时盈亏比不固定（取决于开仓时离线多远）。</>}
-              {' '}止盈比例 / 保本已按「快进快出」定义写死（100% / 关）。
-            </div>
-
-            {/* 弱档极端保护止损 */}
-            <div style={{ fontSize: 10, color: '#e05263', fontWeight: 600, marginTop: 10, marginBottom: 6 }}>
-              🚨 弱档极端保护止损
-            </div>
-            <div style={sty.rowBetween}>
-              <div>
-                <div style={{ fontSize: 11, color: '#c8ccd4' }}>启用极端保护</div>
-                <div style={{ fontSize: 8.5, color: '#4a5058' }}>弱档信号更激进，保护更严格</div>
-              </div>
-              <Toggle on={qMaxLossEnabled}
-                      onClick={() => {
-                        const newVal = !qMaxLossEnabled;
-                        setQMaxLossEnabled(newVal);
-                        patchRules({ profile: 'quick', max_loss_enabled: newVal }, newVal ? '弱档极端保护已启用' : '弱档极端保护已关闭');
-                      }} />
-            </div>
-            {qMaxLossEnabled && (
-              <>
-                <Row label="最大亏损 %" hint="价格亏损达此幅度立即止损">
-                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                    <input type="number" min={1} max={20} step={0.5}
-                           value={qMaxLossPct}
-                           onChange={(e) => setQMaxLossPct(+e.target.value)}
-                           style={sty.input} />
-                    <button onClick={() => patchRules({ profile: 'quick', max_loss_pct: qMaxLossPct }, `弱档极端保护止损改为 ${qMaxLossPct}%`)}
-                            disabled={qMaxLossPct === quick.max_loss_pct}
-                            style={{ ...sty.smallBtn, opacity: qMaxLossPct === quick.max_loss_pct ? 0.3 : 1 }}>改</button>
-                  </div>
-                </Row>
-                <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.6, padding: '6px 8px', background: '#e0526320', borderRadius: 3 }}>
-                  弱档极端保护优先级最高<br/>
-                  {cfg?.leverage ? `当前杠杆 ${cfg.leverage}x，价格亏损 ${qMaxLossPct}% ≈ 保证金亏损 ${(qMaxLossPct * cfg.leverage).toFixed(0)}%` : ''}
-                </div>
-              </>
-            )}
-          </div>
-        </Section>
-      )}
 
       {/* ── 闸门 ── */}
       <Section title="下单闸门（全部满足才挂单）">
@@ -729,34 +454,8 @@ OKX_SIMULATED=1     # 1=模拟盘 0=实盘`}</pre>
             </span>
           </div>
           <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7, marginTop: 4 }}>
-            效率比 ER = 净位移 / 路径长度。图表品种当前 ER 档位以此展示；
-            每个品种独立配置 ER 阈值，在「交易品种」展开编辑。
+            图表当前品种的 ER 档位。ER / 等级 / 强度 / 止盈止损都在「交易品种」里各自设置。
           </div>
-        </div>
-
-        <Row label="允许等级" hint="C 级为逆 Bias 信号">
-          <div style={{ display: 'flex', gap: 3 }}>
-            {['A', 'B', 'C'].map((g) => {
-              const grades = cfg.allow_grades || [];
-              const on = grades.includes(g);
-              return (
-                <button key={g} onClick={() => patch({
-                  allow_grades: on ? grades.filter((x) => x !== g) : [...grades, g],
-                })} style={{ ...sty.chip, opacity: on ? 1 : 0.3 }}>{g}</button>
-              );
-            })}
-          </div>
-        </Row>
-        <Row label="最低强度" hint="翻转当根的质量 0~3">
-          <div style={{ display: 'flex', gap: 3 }}>
-            {[0, 1, 2, 3].map((n) => (
-              <button key={n} onClick={() => patch({ min_score: n })}
-                      style={{ ...sty.chip, opacity: cfg.min_score === n ? 1 : 0.3 }}>{n}</button>
-            ))}
-          </div>
-        </Row>
-        <div style={{ fontSize: 9, color: '#3f4650', lineHeight: 1.6, padding: '2px 0' }}>
-          ER 阈值、允许周期、止盈止损已移到「交易品种」里按品种单独设置。
         </div>
       </Section>
 
@@ -951,6 +650,7 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [tp2Ratio, setTp2Ratio] = useState(c.exit_rules?.tp2_ratio ?? 40);
   const [tp3, setTp3] = useState(c.exit_rules?.tp3_pct ?? 3.5);
   const [tp3Ratio, setTp3Ratio] = useState(c.exit_rules?.tp3_ratio ?? 30);
+  const [tp3Mode, setTp3Mode] = useState(c.exit_rules?.tp3_mode ?? 'pct');
   const [slPct, setSlPct] = useState(c.exit_rules?.sl_pct ?? 2);
   const [moveSlToEntry, setMoveSlToEntry] = useState(c.exit_rules?.move_sl_to_entry ?? true);
   const [trailWithSt, setTrailWithSt] = useState(c.exit_rules?.trail_with_st ?? true);
@@ -964,6 +664,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [qTrailWithSt, setQTrailWithSt] = useState(c.exit_rules_quick?.trail_with_st ?? true);
   const [qMaxLossPct, setQMaxLossPct] = useState(c.exit_rules_quick?.max_loss_pct ?? 8.0);
   const [qMaxLossEnabled, setQMaxLossEnabled] = useState(c.exit_rules_quick?.max_loss_enabled ?? true);
+  const [grades, setGrades] = useState(c.allow_grades || ['A', 'B']);
+  const [minScore, setMinScore] = useState(c.min_score ?? 2);
+  const [quickOn, setQuickOn] = useState(!!c.quick_enabled);
 
   useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
   useEffect(() => { setSizingMode(c.sizing_mode || 'fixed'); }, [c.sizing_mode]);
@@ -998,13 +701,14 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
     setTp2Ratio(c.exit_rules.tp2_ratio ?? 40);
     setTp3(c.exit_rules.tp3_pct ?? 3.5);
     setTp3Ratio(c.exit_rules.tp3_ratio ?? 30);
+    setTp3Mode(c.exit_rules.tp3_mode ?? 'pct');
     setSlPct(c.exit_rules.sl_pct ?? 2);
     setMoveSlToEntry(c.exit_rules.move_sl_to_entry ?? true);
     setTrailWithSt(c.exit_rules.trail_with_st ?? true);
     setMaxLossPct(c.exit_rules.max_loss_pct ?? 10.0);
     setMaxLossEnabled(c.exit_rules.max_loss_enabled ?? true);
   }, [c.exit_rules?.tp1_pct, c.exit_rules?.tp1_ratio, c.exit_rules?.tp2_pct, c.exit_rules?.tp2_ratio,
-      c.exit_rules?.tp3_pct, c.exit_rules?.tp3_ratio, c.exit_rules?.sl_pct,
+      c.exit_rules?.tp3_pct, c.exit_rules?.tp3_ratio, c.exit_rules?.tp3_mode, c.exit_rules?.sl_pct,
       c.exit_rules?.move_sl_to_entry, c.exit_rules?.trail_with_st,
       c.exit_rules?.max_loss_pct, c.exit_rules?.max_loss_enabled]);
   useEffect(() => {
@@ -1019,6 +723,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   }, [c.exit_rules_quick?.tp1_pct, c.exit_rules_quick?.tp1_ratio, c.exit_rules_quick?.sl_pct,
       c.exit_rules_quick?.move_sl_to_entry, c.exit_rules_quick?.trail_with_st,
       c.exit_rules_quick?.max_loss_pct, c.exit_rules_quick?.max_loss_enabled]);
+  useEffect(() => { setGrades(c.allow_grades || ['A', 'B']); }, [c.allow_grades]);
+  useEffect(() => { setMinScore(c.min_score ?? 2); }, [c.min_score]);
+  useEffect(() => { setQuickOn(!!c.quick_enabled); }, [c.quick_enabled]);
 
   return (
     <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
@@ -1047,6 +754,7 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
           : `${c.margin_usdt}U`} × {c.leverage}x　·　{(c.allow_tfs || []).join('/')}　·
         参数 {c.params?.periods}×{c.params?.multiplier}　·
         ER {c.er_hide_below ?? 0.10}/{c.er_weak_min ?? 0.12}/{c.er_min ?? 0.15}
+        {' '}· {(c.allow_grades || []).join('/')} ≥{c.min_score ?? 2}{c.quick_enabled ? ' · 弱档开' : ''}
       </div>
 
       {open && (
@@ -1118,6 +826,36 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 );
               })}
             </div>
+          </div>
+          <Row label="允许等级" hint="C 级为逆 Bias 信号">
+            <div style={{ display: 'flex', gap: 3 }}>
+              {['A', 'B', 'C'].map((g) => {
+                const on = grades.includes(g);
+                return (
+                  <button key={g} onClick={() => {
+                    const next = on ? grades.filter((x) => x !== g) : [...grades, g];
+                    setGrades(next);
+                  }} style={{ ...sty.chip, opacity: on ? 1 : 0.3 }}>{g}</button>
+                );
+              })}
+            </div>
+          </Row>
+          <Row label="最低强度" hint="翻转当根质量 0~3">
+            <div style={{ display: 'flex', gap: 3 }}>
+              {[0, 1, 2, 3].map((n) => (
+                <button key={n} onClick={() => setMinScore(n)}
+                        style={{ ...sty.chip, opacity: minScore === n ? 1 : 0.3 }}>{n}</button>
+              ))}
+            </div>
+          </Row>
+          <div style={sty.rowBetween}>
+            <div>
+              <div style={{ fontSize: 11, color: '#c8ccd4' }}>弱档自动下单</div>
+              <div style={{ fontSize: 8.5, color: quickOn ? '#f5a623' : '#4a5058' }}>
+                {quickOn ? 'ER 落在弱档区间也会开仓（快进快出）' : '弱档信号只提醒、不开仓'}
+              </div>
+            </div>
+            <Toggle on={quickOn} onClick={() => setQuickOn(!quickOn)} color="#f5a623" />
           </div>
           <Row label="指标参数" hint="ATR 周期 × 倍数，换品种通常要用「参数寻优」重调">
             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
@@ -1296,14 +1034,28 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                      onChange={(e) => setTp2Ratio(+e.target.value)}
                      style={{ ...sty.input, width: 42 }} />
               <span style={{ fontSize: 9, color: '#6a7280' }}>%　3档</span>
-              <input type="number" min={0} step={0.1} value={tp3}
-                     onChange={(e) => setTp3(+e.target.value)}
-                     style={{ ...sty.input, width: 42 }} />
-              <span style={{ fontSize: 9, color: '#6a7280' }}>%×</span>
-              <input type="number" min={0} max={100} step={1} value={tp3Ratio}
-                     onChange={(e) => setTp3Ratio(+e.target.value)}
-                     style={{ ...sty.input, width: 42 }} />
-              <span style={{ fontSize: 9, color: '#6a7280' }}>%　SL</span>
+              <select value={tp3Mode} onChange={(e) => setTp3Mode(e.target.value)}
+                      style={{ ...sty.input, width: 88, fontSize: 9, padding: '2px 2px' }}>
+                <option value="pct">按幅度%</option>
+                <option value="reverse_signal">反向信号全平</option>
+              </select>
+              {tp3Mode === 'pct' ? (
+                <>
+                  <input type="number" min={0} step={0.1} value={tp3}
+                         onChange={(e) => setTp3(+e.target.value)}
+                         style={{ ...sty.input, width: 42 }} />
+                  <span style={{ fontSize: 9, color: '#6a7280' }}>%×</span>
+                  <input type="number" min={0} max={100} step={1} value={tp3Ratio}
+                         onChange={(e) => setTp3Ratio(+e.target.value)}
+                         style={{ ...sty.input, width: 42 }} />
+                  <span style={{ fontSize: 9, color: '#6a7280' }}>%</span>
+                </>
+              ) : (
+                <span style={{ fontSize: 9, color: '#8b93a0' }}>
+                  同周期反向且过闸门可下单时，剩余仓位全平
+                </span>
+              )}
+              <span style={{ fontSize: 9, color: '#6a7280' }}>　SL</span>
               <input type="number" min={0} step={0.1} value={slPct}
                      onChange={(e) => setSlPct(+e.target.value)}
                      style={{ ...sty.input, width: 42 }} />
@@ -1390,6 +1142,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     adx_filter_enabled: adxOn,
                     adx_min: adxMin,
                     adx_period: adxPeriod,
+                    allow_grades: grades,
+                    min_score: minScore,
+                    quick_enabled: quickOn,
                     exit_rules: {
                       enabled: true,
                       tp1_pct: tp1,
@@ -1397,7 +1152,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                       tp2_pct: tp2,
                       tp2_ratio: tp2Ratio,
                       tp3_pct: tp3,
-                      tp3_ratio: tp3Ratio,
+                      tp3_ratio: tp3Mode === 'reverse_signal' ? 100 : tp3Ratio,
+                      tp3_mode: tp3Mode,
                       move_sl_to_entry: moveSlToEntry,
                       sl_mode: 'st',
                       sl_pct: slPct,

@@ -418,15 +418,68 @@ async def notify_test():
 
 # ─── 自动挂单（OKX） ────────────────────────────────────────────
 
+def _public_trade_cfg() -> dict:
+    return {**vars(state.trade_cfg), **trade.credentials_public()}
+
+
 @router.get("/api/trade/config")
 async def trade_config():
-    cfg = state.trade_cfg
-    return {
-        **vars(cfg),
-        "configured":  trade.configured,        # 是否已配 API 密钥
-        "env_paper":   trade.SIMULATED,         # 环境变量里的默认环境
-        "exchange":    "OKX",
-    }
+    return _public_trade_cfg()
+
+
+class CredentialsIn(BaseModel):
+    exchange:    Optional[str] = "okx"
+    api_key:     Optional[str] = None
+    api_secret:  Optional[str] = None
+    passphrase:  Optional[str] = None
+
+
+@router.get("/api/trade/credentials")
+async def get_credentials():
+    return trade.credentials_public()
+
+
+@router.post("/api/trade/credentials")
+async def set_credentials(body: CredentialsIn):
+    ex = (body.exchange or "okx").strip().lower()
+    if ex not in ("okx", "bitget"):
+        return {"ok": False, "error": "目前仅支持 OKX / Bitget"}
+    key = (body.api_key or "").strip()
+    secret = (body.api_secret or "").strip()
+    phrase = (body.passphrase or "").strip()
+
+    # 只切换交易所（沿用该所已存密钥）
+    if not (key or secret or phrase):
+        try:
+            pub = trade.set_exchange(ex)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        ping = None
+        if pub.get("configured"):
+            ping = await trade.ping(sim=state.trade_cfg.paper)
+        await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
+        return {"ok": True, "credentials": pub, "ping": ping, "config": _public_trade_cfg()}
+
+    # 写入密钥（可同时切换交易所）
+    # 切到新所且该所还没密钥时，必须三项齐全
+    bucket_ready = False
+    try:
+        # 先切所，再看该所是否已有完整密钥
+        trade.set_exchange(ex, persist=False)
+        bucket_ready = trade.configured
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    if not bucket_ready and not (key and secret and phrase):
+        return {"ok": False, "error": "首次配置需要填写 API Key、Secret、Passphrase"}
+
+    pub = trade.apply_credentials(key or None, secret or None, phrase or None,
+                                  exchange_id=ex)
+    if not pub.get("configured"):
+        return {"ok": False, "error": "密钥不完整，未保存"}
+    ping = await trade.ping(sim=state.trade_cfg.paper)
+    await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
+    return {"ok": True, "credentials": pub, "ping": ping, "config": _public_trade_cfg()}
 
 
 class TradeCfgIn(BaseModel):
@@ -453,7 +506,7 @@ async def set_trade_config(body: TradeCfgIn):
     cfg = state.trade_cfg
     if body.enabled is not None:
         if body.enabled and not trade.configured:
-            return {"ok": False, "error": "未配置 OKX API 密钥，无法开启自动挂单"}
+            return {"ok": False, "error": "未配置交易所 API 密钥，无法开启自动挂单"}
         cfg.enabled = body.enabled
     if body.paper        is not None: cfg.paper        = body.paper
     if body.category     is not None:
@@ -495,13 +548,13 @@ async def set_trade_config(body: TradeCfgIn):
             logger.warning(f"⚠️ 弱档自动下单已开启：ER {cfg.er_weak_min}~{cfg.er_min} "
                            f"的信号也会用真实资金下单（快进快出规则）")
 
-    await state.broadcast({"type": "trade_config", "data": vars(cfg)})
+    await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
     state.save_settings()
 
     # ER 参数改变后重扫历史信号，更新 hidden 字段
     state.feed.rescan_signals()
 
-    return {"ok": True, "config": vars(cfg)}
+    return {"ok": True, "config": _public_trade_cfg()}
 
 
 # ─── 止盈止损规则 ────────────────────────────────────────────────
@@ -514,10 +567,17 @@ class ExitRulesPatch(BaseModel):
     tp2_ratio:        Optional[float] = None   # 第二档止盈平仓比例 %
     tp3_pct:          Optional[float] = None   # 第三档止盈触发幅度 %
     tp3_ratio:        Optional[float] = None   # 第三档止盈平仓比例 %（建议100全平）
+    tp3_mode:         Optional[str]   = None   # pct | reverse_signal
     move_sl_to_entry: Optional[bool]  = None
     sl_mode:          Optional[str]   = None
     sl_pct:           Optional[float] = None
     trail_with_st:    Optional[bool]  = None
+    max_loss_enabled: Optional[bool]  = None
+    max_loss_pct:     Optional[float] = None
+    sl_buffer_atr:    Optional[float] = None
+    sl_min_pct:       Optional[float] = None
+    protect_profit_at: Optional[float] = None
+    protect_trail_pct: Optional[float] = None
 
 
 class ExitRulesIn(ExitRulesPatch):
@@ -536,6 +596,11 @@ def _apply_exit_patch(r, patch: ExitRulesPatch):
     if patch.tp2_ratio        is not None: r.tp2_ratio = max(0.0, min(100.0, patch.tp2_ratio))
     if patch.tp3_pct          is not None: r.tp3_pct = max(0.1, min(100.0, patch.tp3_pct))
     if patch.tp3_ratio        is not None: r.tp3_ratio = max(0.0, min(100.0, patch.tp3_ratio))
+    if patch.tp3_mode is not None:
+        if patch.tp3_mode not in ("pct", "reverse_signal"):
+            return "tp3_mode 仅支持 pct（按幅度）/ reverse_signal（反向可下单信号全平）"
+        if hasattr(r, "tp3_mode"):
+            r.tp3_mode = patch.tp3_mode
     if patch.move_sl_to_entry is not None: r.move_sl_to_entry = patch.move_sl_to_entry
     if patch.sl_mode is not None:
         if patch.sl_mode not in ("st", "pct"):
@@ -543,6 +608,18 @@ def _apply_exit_patch(r, patch: ExitRulesPatch):
         r.sl_mode = patch.sl_mode
     if patch.sl_pct           is not None: r.sl_pct = max(0.1, min(50.0, patch.sl_pct))
     if patch.trail_with_st    is not None: r.trail_with_st = patch.trail_with_st
+    if patch.max_loss_enabled is not None and hasattr(r, "max_loss_enabled"):
+        r.max_loss_enabled = patch.max_loss_enabled
+    if patch.max_loss_pct is not None and hasattr(r, "max_loss_pct"):
+        r.max_loss_pct = max(0.5, min(50.0, patch.max_loss_pct))
+    if patch.sl_buffer_atr is not None and hasattr(r, "sl_buffer_atr"):
+        r.sl_buffer_atr = max(0.0, min(5.0, patch.sl_buffer_atr))
+    if patch.sl_min_pct is not None and hasattr(r, "sl_min_pct"):
+        r.sl_min_pct = max(0.1, min(20.0, patch.sl_min_pct))
+    if patch.protect_profit_at is not None and hasattr(r, "protect_profit_at"):
+        r.protect_profit_at = max(0.1, min(50.0, patch.protect_profit_at))
+    if patch.protect_trail_pct is not None and hasattr(r, "protect_trail_pct"):
+        r.protect_trail_pct = max(0.0, min(20.0, patch.protect_trail_pct))
     return None
 
 
@@ -845,7 +922,7 @@ async def set_lev(body: LeverageIn):
             await state.broadcast({"type": "symbols", "data": _symbols_payload()})
         else:
             state.trade_cfg.leverage = lev
-            await state.broadcast({"type": "trade_config", "data": vars(state.trade_cfg)})
+            await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
         state.save_settings()
     return r
 
@@ -858,7 +935,7 @@ async def trade_orders(limit: int = 50):
 @router.get("/api/trade/ping")
 async def trade_ping():
     """密钥自检：查一次账户资产，顺便确认走的是模拟盘还是实盘。"""
-    return await trade.ping()
+    return await trade.ping(sim=state.trade_cfg.paper)
 
 
 @router.get("/api/regime")
@@ -949,8 +1026,7 @@ async def websocket_endpoint(ws: WebSocket):
             "params":  vars(state.params),
             "tfs":     [{"tf": tf, "label": cfg["label"]} for tf, cfg in TF_CONFIG.items()],
             "bias_tfs": BIAS_TFS,
-            "trade_config": {**vars(state.trade_cfg), "configured": trade.configured,
-                             "exchange": "OKX"},
+            "trade_config": _public_trade_cfg(),
             "exit_rules": _all_rules(),
             "orders":  state.orders[-50:],
             "position": state.position.to_dict(state.ticker.last) if state.position else None,

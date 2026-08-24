@@ -1,15 +1,19 @@
 """
-OKX REST 历史 K 线拉取
+OKX REST 历史 K 线拉取 + 本地合并
 
 /api/v5/market/candles 单次最多 300 根，需要更长历史时用 after 游标翻页
-（history-candles 端点给更久远的数据，这里按需回退到它）。
+（history-candles 端点给更久远的数据）。
+
+长展示窗口（15m/1h/4h/1d）：启动时本地 SQLite ∪ REST，收盘持续落盘。
 """
 
 import asyncio
 import json
 import logging
+import time
 import urllib.request
 
+import candle_store
 from state import Candle, SymbolStore, TF_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -51,6 +55,7 @@ def fetch_candles(tf: str, limit: int = 300, symbol: str = "BTC-USDT") -> list[C
     collected: dict[int, Candle] = {}
     bar = TF_CONFIG[tf]["okx_bar"]
     after = None
+    pages = 0
 
     while len(collected) < limit:
         page_n = min(PAGE_LIMIT, limit - len(collected))
@@ -74,26 +79,75 @@ def fetch_candles(tf: str, limit: int = 300, symbol: str = "BTC-USDT") -> list[C
         for c in page:
             collected[c.ts] = c
         after = min(c.ts for c in page)          # 下一页取更早的
+        pages += 1
         if len(page) < page_n:                   # 没有更多历史了
             break
+        # 大窗口翻页限速，避免 OKX 频控
+        if pages % 5 == 0:
+            time.sleep(0.12)
 
     out = sorted(collected.values(), key=lambda c: c.ts)
-    logger.info(f"历史K线[{symbol} {tf}] 拉取 {len(out)} 根")
+    logger.info(f"历史K线[{symbol} {tf}] 拉取 {len(out)} 根（{pages} 页）")
+    return out
+
+
+def _merge(local: list[Candle], remote: list[Candle], limit: int) -> list[Candle]:
+    by_ts: dict[int, Candle] = {}
+    for c in local:
+        by_ts[c.ts] = c
+    for c in remote:
+        # 远端覆盖同 ts（含最新未收盘）
+        by_ts[c.ts] = c
+    out = sorted(by_ts.values(), key=lambda c: c.ts)
+    if len(out) > limit:
+        out = out[-limit:]
     return out
 
 
 async def load_history(store: SymbolStore):
-    """按 TF_CONFIG.maxlen 填满该品种各周期 deque。"""
+    """按 TF_CONFIG.maxlen 填满该品种各周期 deque；长周期优先本地再补 REST。"""
     loop = asyncio.get_event_loop()
     symbol = store.symbol
     for tf, cfg in TF_CONFIG.items():
         try:
-            candles = await loop.run_in_executor(
-                None, fetch_candles, tf, cfg["maxlen"], symbol
+            limit = cfg["maxlen"]
+            local: list[Candle] = []
+            if candle_store.should_persist(tf):
+                local = await loop.run_in_executor(
+                    None, candle_store.load_candles, symbol, tf, limit
+                )
+
+            need_fetch = limit
+            if local:
+                # 本地已有大半时，只补最近一段 + 少量重叠，减少翻页
+                need_fetch = min(limit, max(300, limit - len(local) + 400))
+
+            remote = await loop.run_in_executor(
+                None, fetch_candles, tf, need_fetch, symbol
             )
+            merged = _merge(local, remote, limit)
+
+            # 本地仍不够展示窗口：再向前翻满
+            if len(merged) < limit * 0.9 and len(remote) >= need_fetch:
+                more = await loop.run_in_executor(
+                    None, fetch_candles, tf, limit, symbol
+                )
+                merged = _merge(merged, more, limit)
+
             deq = store.candles[tf]
             deq.clear()
-            deq.extend(candles)
+            deq.extend(merged)
+
+            if candle_store.should_persist(tf):
+                # 只落已收盘，避免把未完成 K 写死
+                closed = [c for c in merged if c.confirm]
+                await loop.run_in_executor(
+                    None, candle_store.save_candles, symbol, tf, closed, True
+                )
+            logger.info(
+                f"历史就绪[{symbol} {tf}] 内存 {len(merged)}/{limit}"
+                f"（本地 {len(local)} + REST {len(remote)}）"
+            )
         except Exception as e:
             logger.error(f"历史K线[{symbol} {tf}] 异常: {e}")
         await asyncio.sleep(0.15)   # 轻微限速，避免触发 OKX 频控

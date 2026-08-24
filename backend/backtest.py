@@ -30,13 +30,37 @@ strategy.entry 反向进场会自动平掉原仓，所以这里就是「永远�
 from __future__ import annotations
 
 import position
-from indicators import ma, super_trend
+import strategy
+from indicators import ma, st_signals, super_trend
+from integration import enhanced_signal_handler
 from position import ExitRules
-from regime import classify, efficiency_ratio
+from regime import TradeConfig, classify, efficiency_ratio
+
+try:
+    from position_enhanced import (
+        EnhancedExitRules, check_enhanced, apply_tp_enhanced, trail_enhanced,
+    )
+    _HAS_ENH = True
+except ImportError:
+    EnhancedExitRules = None  # type: ignore
+    _HAS_ENH = False
 
 # 不启用止盈止损时用的哨兵：check() 见 enabled=False 直接返回 None，
 # trail_with_st 也关掉，确保走的是原来那条「只靠翻转进出」的路径。
 _OFF = ExitRules(enabled=False, trail_with_st=False)
+
+
+def _is_enhanced(rules) -> bool:
+    return _HAS_ENH and isinstance(rules, EnhancedExitRules)
+
+
+def _rules_active(rules) -> bool:
+    """原版 ExitRules 靠 enabled；增强版 enabled=False 只关价格止损，止盈仍有效。"""
+    if rules is None:
+        return False
+    if _is_enhanced(rules):
+        return True
+    return bool(rules.enabled)
 
 
 def _bias_series(candles: list[dict], p: dict) -> list[int | None]:
@@ -72,6 +96,9 @@ def run_backtest(
     adx_filter_enabled: bool = False,
     adx_min: float = 20.0,
     adx_period: int = 14,
+    live_gate: TradeConfig | None = None,
+    gate_tf: str = "15m",
+    candles_by_tf: dict[str, list[dict]] | None = None,
 ) -> dict:
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
@@ -89,12 +116,25 @@ def run_backtest(
     biases = _bias_series(candles, p) if bias_filter else []
     flip_at = {f["i"]: f["type"] for f in st["flips"]}
     trend, up, dn = st["trend"], st["up"], st["dn"]
+    sig_by_ts = {s["ts"]: s for s in st_signals(candles, st, gate_tf)} if live_gate else {}
+
+    def _cbtf_at(i: int) -> dict[str, list[dict]]:
+        ts = candles[i]["ts"]
+        if not candles_by_tf:
+            return {gate_tf: candles[: i + 1]}
+        out: dict[str, list[dict]] = {}
+        for tf, arr in candles_by_tf.items():
+            sl = [c for c in arr if c["ts"] <= ts]
+            if sl:
+                out[tf] = sl
+        return out or {gate_tf: candles[: i + 1]}
 
     # 两档出场规则。弱档三个条件都齐才算启用（有闸门、有弱档下界、有弱档规则），
-    # 缺任何一个都退回「低于 er_min 一律拦」的老行为
-    rules_normal = exit_rules if (exit_rules and exit_rules.enabled) else _OFF
+    # 缺任何一个都退回「低于 er_min 一律拦」的老行为。
+    # 增强版：enabled=False 仍保留规则（只关价格止损，三级止盈照常）。
+    rules_normal = exit_rules if _rules_active(exit_rules) else _OFF
     quick_on = (er_min is not None and er_weak_min is not None
-                and exit_rules_quick is not None and exit_rules_quick.enabled)
+                and _rules_active(exit_rules_quick))
     rules_by = {"normal": rules_normal,
                 "quick": exit_rules_quick if quick_on else _OFF}
     lev = max(1, int(leverage))
@@ -107,7 +147,7 @@ def run_backtest(
     curve: list[dict] = []
     peak = init_cash
     max_dd = 0.0
-    n_block = n_tp1 = n_stop = n_rev = n_liq = n_skip = 0
+    n_block = n_tp1 = n_tp2 = n_tp3 = n_stop = n_rev = n_liq = n_skip = 0
 
     def st_line(i: int) -> float | None:
         """该根的超趋线值，同 feed._st_line：多头取 up、空头取 dn。"""
@@ -181,19 +221,111 @@ def run_backtest(
             stop=position.initial_stop(sig, rules_by[profile]),
             leverage=lev, entry_ts=candles[i]["ts"], ct_val=1.0, profile=profile,
         )
+        pos.tp2_done = False
+        pos.tp3_done = False
+        pos.max_unrealized_pct = 0.0
         cur = {
             "side": pos.side, "entry": price, "entry_ts": candles[i]["ts"],
             "entry_i": i, "qty0": qty, "pnl": 0.0, "gross": 0.0, "exits": [],
             "profile": profile,
         }
 
+    def take_profit(i: int, act: dict, rules):
+        """按触发价分批止盈。增强版比例相对 init_qty；第三档平剩余。"""
+        nonlocal equity, pos, cur, n_tp1, n_tp2, n_tp3
+        stage = {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)
+        if act.get("price") is not None:
+            trig = act["price"]
+        else:
+            pct = getattr(rules, f"tp{stage}_pct", rules.tp1_pct)
+            trig = pos.entry * (1 + pct / 100) if pos.long else pos.entry * (1 - pct / 100)
+        if act["action"] == "tp3" and _is_enhanced(rules):
+            q = pos.qty
+        elif _is_enhanced(rules):
+            base = pos.init_qty if pos.init_qty else pos.qty
+            q = min(pos.qty, base * act["ratio"] / 100)
+        else:
+            q = pos.qty * act["ratio"] / 100
+        if q <= 0:
+            return
+        gross = q * (trig - pos.entry) * (1 if pos.long else -1)
+        fee = q * trig * fee_rate
+        equity += gross - fee
+        cur["pnl"] += gross - fee
+        cur["gross"] += gross
+        cur["exits"].append({
+            "px": round(trig, 6), "qty": q,
+            "reason": f"止盈{stage}", "ts": candles[i]["ts"],
+        })
+        if _is_enhanced(rules):
+            apply_tp_enhanced(pos, trig, q, rules, stage)
+        else:
+            position.apply_tp1(pos, trig, q, rules)
+        if stage == 1:
+            n_tp1 += 1
+        elif stage == 2:
+            n_tp2 += 1
+        else:
+            n_tp3 += 1
+        if pos.qty <= 0:
+            finalize(i)
+
+    def eval_open_gate(i: int, typ: str) -> tuple[bool, str]:
+        """此根 typ 方向是否过闸门可开仓（与 executor 一致）。"""
+        profile = "normal"
+        if live_gate:
+            sig = sig_by_ts.get(candles[i]["ts"])
+            if not sig or sig["type"] != typ:
+                return False, profile
+            full = strategy.evaluate(_cbtf_at(i), p, sig)
+            gate = enhanced_signal_handler(
+                full, candles[: i + 1], live_gate,
+                candles_by_tf=_cbtf_at(i), p=p,
+                use_momentum=True, use_false_filter=True,
+                use_adaptive=True,
+            )
+            if gate.get("hidden") or not gate.get("trade"):
+                return False, profile
+            return True, gate.get("profile") or "normal"
+        ok = True
+        if bias_filter:
+            b = biases[i] if i < len(biases) else None
+            ok = (b == 1 and typ == "buy") or (b == -1 and typ == "sell")
+        if ok and er_min is not None:
+            er = efficiency_ratio(candles[:i + 1])
+            reg = classify(er, er_min,
+                           er_weak_min=er_weak_min if quick_on else None,
+                           quick_enabled=quick_on)
+            if reg["tradable"]:
+                profile = reg["profile"] or "normal"
+            else:
+                ok = False
+        if ok and atr_filter_enabled:
+            from regime import atr_volatility
+            atr_vol = atr_volatility(candles[:i + 1])
+            if atr_vol is not None and atr_vol < atr_vol_min:
+                ok = False
+        if ok and range_filter_enabled:
+            from regime import range_bound
+            rc = range_bound(candles[:i + 1])
+            if (rc["range_size_pct"] < range_size_max * 100
+                    and rc["touches"] >= range_touches_min):
+                ok = False
+        if ok and adx_filter_enabled:
+            from regime import adx_latest
+            adx_val = adx_latest(candles[:i + 1], adx_period)
+            if adx_val is not None and adx_val < adx_min:
+                ok = False
+        return ok, profile
+
     for i, c in enumerate(candles):
         rules = rules_by[pos.profile] if pos else rules_normal
         # ── 1) 盘中止盈止损（先止损后止盈，同一根同时满足时算止损） ──
-        if pos and rules.enabled:
+        # 增强版 enabled=False：跳过价格止损，仍跑三级止盈（对齐实盘 executor）
+        if pos and _rules_active(rules):
             adverse = c["l"] if pos.long else c["h"]
             liq = liq_price()
-            hit_s = position.hit_stop(pos, adverse)
+            hit_s = rules.enabled and position.hit_stop(pos, adverse)
             hit_l = liq is not None and (adverse <= liq if pos.long else adverse >= liq)
             if hit_s or hit_l:
                 if hit_s and hit_l:
@@ -213,82 +345,66 @@ def run_backtest(
                            ("保本止损" if pos.breakeven else "止损"))
             else:
                 favorable = c["h"] if pos.long else c["l"]
-                act = position.check(pos, favorable, rules)
-                if act and act["action"] == "tp1":
-                    # 按触发价成交，不是按最高价 —— 挂单挂在 tp1_pct 那个位置
-                    trig = pos.entry * (1 + rules.tp1_pct / 100) if pos.long \
-                        else pos.entry * (1 - rules.tp1_pct / 100)
-                    q = pos.qty * act["ratio"] / 100
-                    gross = q * (trig - pos.entry) * (1 if pos.long else -1)
-                    fee = q * trig * fee_rate
-                    equity += gross - fee
-                    cur["pnl"] += gross - fee
-                    cur["gross"] += gross
-                    cur["exits"].append({"px": round(trig, 6), "qty": q,
-                                         "reason": "止盈", "ts": c["ts"]})
-                    position.apply_tp1(pos, trig, q, rules)
-                    n_tp1 += 1
-                    if pos.qty <= 0:
-                        finalize(i)
+                # 同根可连破多档：每档成交后重判，直到不再触发或仓位清完
+                for _ in range(3):
+                    if not pos:
+                        break
+                    pos.max_unrealized_pct = max(
+                        getattr(pos, "max_unrealized_pct", 0.0) or 0.0,
+                        pos.pnl_pct(favorable),
+                    )
+                    if _is_enhanced(rules):
+                        act = check_enhanced(pos, favorable, rules,
+                                             pos.max_unrealized_pct)
+                    else:
+                        act = position.check(pos, favorable, rules)
+                    if not act or act["action"] not in ("tp1", "tp2", "tp3"):
+                        break
+                    take_profit(i, act, rules)
 
         # ── 2) 翻转信号 ──
         typ = flip_at.get(i)
         if typ:
             price = c["c"]
-            # 反向持仓先平 —— 闸门管不着这一步（还原 executor.on_signal）
+            gate_ok, profile = eval_open_gate(i, typ)
+            # 反向持仓先平 —— 第三档 reverse_signal 仅在同周期反向且过闸门时平剩余
             if pos and ((pos.long and typ == "sell") or (not pos.long and typ == "buy")):
-                n_rev += 1
-                close_part(i, price, pos.qty, "反向信号")
+                rules_r = rules_by[pos.profile]
+                tp2_done = getattr(pos, "tp2_done", False)
+                tp3_done = getattr(pos, "tp3_done", False)
+                signal_tp3 = (
+                    _is_enhanced(rules_r)
+                    and getattr(rules_r, "tp3_mode", "pct") == "reverse_signal"
+                    and tp2_done and not tp3_done
+                )
+                if signal_tp3:
+                    if gate_ok:
+                        take_profit(i, {
+                            "action": "tp3",
+                            "ratio": 100.0,
+                            "reason": "反向可下单信号第三档全平",
+                            "price": price,
+                        }, rules_r)
+                else:
+                    n_rev += 1
+                    close_part(i, price, pos.qty, "反向信号")
 
             if pos is None and not (typ == "sell" and not allow_short):
-                ok = True
-                profile = "normal"
-                if bias_filter:
-                    b = biases[i] if i < len(biases) else None
-                    ok = (b == 1 and typ == "buy") or (b == -1 and typ == "sell")
-                if ok and er_min is not None:
-                    # 和实时路径同一套分档判定（regime.classify），别另写一份。
-                    # er_trend 只影响 label，trend/weak 都是 normal 档，传什么都一样
-                    er = efficiency_ratio(candles[:i + 1])
-                    reg = classify(er, er_min,
-                                   er_weak_min=er_weak_min if quick_on else None,
-                                   quick_enabled=quick_on)
-                    if reg["tradable"]:
-                        profile = reg["profile"] or "normal"
-                    else:
-                        ok = False
-                        n_block += 1
-                # ATR 波动率过滤
-                if ok and atr_filter_enabled:
-                    from regime import atr_volatility
-                    atr_vol = atr_volatility(candles[:i + 1])
-                    if atr_vol is not None and atr_vol < atr_vol_min:
-                        ok = False
-                        n_block += 1
-                # 区间震荡过滤
-                if ok and range_filter_enabled:
-                    from regime import range_bound
-                    rc = range_bound(candles[:i + 1])
-                    if (rc["range_size_pct"] < range_size_max * 100
-                            and rc["touches"] >= range_touches_min):
-                        ok = False
-                        n_block += 1
-                # ADX 过滤
-                if ok and adx_filter_enabled:
-                    from regime import adx_latest
-                    adx_val = adx_latest(candles[:i + 1], adx_period)
-                    if adx_val is not None and adx_val < adx_min:
-                        ok = False
-                        n_block += 1
-                if ok:
+                if gate_ok:
                     open_pos(i, price, typ, profile)
+                elif live_gate or er_min is not None:
+                    n_block += 1
 
         # ── 3) 收盘后随超趋线移动止损（对应 feed.on_st_line） ──
         # 注意重取规则：本根刚开的仓，循环顶部的 rules 还是开仓前的旧值
+        # 增强版即使 enabled=False 仍跟踪（实盘 trail_with_st=True）
         if pos:
             r3 = rules_by[pos.profile]
-            if r3.enabled:
-                position.trail(pos, st_line(i), r3)
+            if r3.trail_with_st:
+                if _is_enhanced(r3):
+                    trail_enhanced(pos, st_line(i), r3, c["c"])
+                else:
+                    position.trail(pos, st_line(i), r3)
 
         eq = equity + unrealized(c["c"])
         peak = max(peak, eq)
@@ -330,6 +446,8 @@ def run_backtest(
         # ── 闸门 / 离场统计 ──
         "er_blocked":    n_block,
         "tp1_count":     n_tp1,
+        "tp2_count":     n_tp2,
+        "tp3_count":     n_tp3,
         "stop_count":    n_stop,
         "reverse_count": n_rev,
         "liq_count":     n_liq,

@@ -139,14 +139,36 @@ class Executor:
         pos = self.store.position
         want = "long" if sig["type"] == "buy" else "short"
 
-        # 反向平仓：必须同周期。允许周期正常离场；非允许周期只用来清掉误开的残留仓。
+        # 反向平仓：必须同周期。第三档 reverse_signal 模式仅在同周期反向且过闸门时全平剩余。
         if should_close_on_reverse(pos, sig):
-            leftover = pos and not self._tf_ok(pos.tf)
-            if allowed or leftover:
-                await self._close(pos, f"{tf} 出现反向信号", sig.get("price"))
+            rules = self.rules_of(pos)
+            tp2_done = getattr(pos, "tp2_done", False)
+            tp3_done = getattr(pos, "tp3_done", False)
+            signal_tp3 = (
+                USE_ENHANCED and isinstance(rules, EnhancedExitRules)
+                and getattr(rules, "tp3_mode", "pct") == "reverse_signal"
+                and tp2_done and not tp3_done
+            )
+            if signal_tp3:
+                if allowed and gate.get("trade"):
+                    await self._take_profit(pos, sig.get("price"), {
+                        "action": "tp3",
+                        "ratio": 100.0,
+                        "reason": f"{tf} 反向可下单信号，第三档剩余全平",
+                    })
+                else:
+                    logger.info(
+                        f"[第三档等待] {self.store.symbol} {tf} 反向信号未过闸门，"
+                        f"继续持有剩余仓位"
+                    )
+                    return None
             else:
-                logger.info(f"[忽略非允许周期反向] {self.store.symbol} {tf} 不在 {self.cfg.allow_tfs}")
-                return None
+                leftover = pos and not self._tf_ok(pos.tf)
+                if allowed or leftover:
+                    await self._close(pos, f"{tf} 出现反向信号", sig.get("price"))
+                else:
+                    logger.info(f"[忽略非允许周期反向] {self.store.symbol} {tf} 不在 {self.cfg.allow_tfs}")
+                    return None
         elif pos and pos.qty > 0 and pos.side != want and sig.get("tf") != pos.tf:
             logger.info(
                 f"[忽略异周期反向] {self.store.symbol} 持仓 {pos.tf} {pos.side}，"
