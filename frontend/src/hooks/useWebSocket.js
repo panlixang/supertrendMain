@@ -107,7 +107,9 @@ export function useWebSocket() {
           break;
         case 'symbols':
           s.setSymbolCfgs(msg.data);
-          // ER 阈值/过滤器改变后重新拉取图表品种的指标，让 hidden 字段生效
+          if (msg.params && isChart) s.setParams(msg.params);
+          if (msg.signals && isChart) s.setSignals(msg.signals);
+          // 闸门/指标参数变更后重新拉取图表品种的指标，让箭头 / ❌ / hidden 生效
           if (isChart) {
             s.clearIndicators();
             ALL_TFS.forEach((tf) => fetchIndicators(tf, true));

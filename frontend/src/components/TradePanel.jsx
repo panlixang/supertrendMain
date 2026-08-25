@@ -1121,10 +1121,12 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
             </div>
           </div>
           <button onClick={() => onPatch({
+                    rescan: true,
                     margin_usdt: margin,
                     sizing_mode: sizingMode,
                     equity_pct: eqPct,
                     leverage: c.leverage,
+                    allow_tfs: c.allow_tfs,
                     periods,
                     multiplier: mult,
                     er_hide_below: erHide,

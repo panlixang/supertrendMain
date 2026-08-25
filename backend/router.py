@@ -719,6 +719,8 @@ class SymbolCfgIn(BaseModel):
     # 止盈止损（品种独立）
     exit_rules:            Optional[ExitRulesPatch] = None
     exit_rules_quick:      Optional[ExitRulesPatch] = None
+    # 前端「保存所有配置」带 true：不论改了哪些字段都重扫图表信号
+    rescan:                Optional[bool] = None
 
 
 async def _load_symbol_history(sym: str):
@@ -819,16 +821,26 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
         if err:
             return {"ok": False, "error": err}
 
-    # ER 参数或过滤器改变后重扫该品种历史信号
-    if any(x is not None for x in [body.er_hide_below, body.er_min, body.er_weak_min,
-                                     body.er_trend, body.allow_grades, body.min_score,
-                                     body.atr_filter_enabled, body.range_filter_enabled,
-                                     body.mtf_filter_enabled, body.adx_filter_enabled,
-                                     body.adx_min, body.adx_period]):
-        if state.feed:
-            state.feed.rescan_signals(st)
+    # 闸门 / 指标 / 允许周期变化，或「保存所有配置」显式要求，都重扫历史信号
+    _affects_signals = any(x is not None for x in [
+        body.er_hide_below, body.er_min, body.er_weak_min, body.er_trend,
+        body.allow_grades, body.min_score, body.quick_enabled, body.allow_tfs,
+        body.atr_filter_enabled, body.atr_vol_min,
+        body.range_filter_enabled, body.range_size_max, body.range_touches_min,
+        body.mtf_filter_enabled, body.mtf_consistency_min, body.mtf_flip_max,
+        body.adx_filter_enabled, body.adx_min, body.adx_period,
+        body.periods, body.multiplier,
+    ])
+    did_rescan = False
+    if (body.rescan or _affects_signals) and state.feed:
+        state.feed.rescan_signals(st)
+        did_rescan = True
 
-    await state.broadcast({"type": "symbols", "data": _symbols_payload()})
+    payload = {"type": "symbols", "data": _symbols_payload(), "symbol": sym}
+    if did_rescan and st.symbol == state.current_symbol:
+        payload["signals"] = list(st.signals)
+        payload["params"] = vars(st.params)
+    await state.broadcast(payload)
     state.save_settings()
     return {"ok": True, "symbols": _symbols_payload()}
 
