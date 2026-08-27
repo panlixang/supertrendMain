@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Component, useState } from 'react';
 import BacktestPanel from './components/BacktestPanel';
 import BiasTable from './components/BiasTable';
 import CandleChart from './components/CandleChart';
@@ -60,11 +60,13 @@ export default function App() {
           </nav>
 
           <div style={{ flex: 1, overflowY: 'auto' }}>
-            {tab === 'bias' && <BiasTable />}
-            {tab === 'signals' && <SignalList />}
-            {tab === 'trade' && <TradePanel />}
-            {tab === 'backtest' && <BacktestPanel />}
-            {tab === 'params' && <ParamPanel />}
+            <PanelErrorBoundary resetKey={tab}>
+              {tab === 'bias' && <BiasTable />}
+              {tab === 'signals' && <SignalList />}
+              {tab === 'trade' && <TradePanel />}
+              {tab === 'backtest' && <BacktestPanel />}
+              {tab === 'params' && <ParamPanel />}
+            </PanelErrorBoundary>
           </div>
         </aside>
       </div>
@@ -83,6 +85,35 @@ export default function App() {
       `}</style>
     </div>
   );
+}
+
+/** 侧栏某一页渲染失败时保住图表，避免整页被打成黑屏。切标签会自动重试。 */
+class PanelErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidUpdate(prev) {
+    if (prev.resetKey !== this.props.resetKey && this.state.err) {
+      this.setState({ err: null });
+    }
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div style={{ padding: 14, fontSize: 12, color: '#e05263', lineHeight: 1.7 }}>
+          这一页渲染出错，图表还在。切到别的标签再回来，或刷新页面。
+          <div style={{ fontSize: 10, color: '#5a6270', marginTop: 8, fontFamily: 'var(--font-mono)' }}>
+            {String(this.state.err?.message || this.state.err)}
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 const sty = {

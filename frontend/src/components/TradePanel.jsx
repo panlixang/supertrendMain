@@ -26,7 +26,7 @@ export default function TradePanel() {
 
   // 后端只在仓位变动时推 position，浮动盈亏要跟着各品种 ticker 秒级更新，
   // 所以这里用「该品种自己的最新价」本地重算 —— 千万不能拿别的品种的价来算
-  const posList = Object.entries(positions)
+  const posList = Object.entries(positions || {})
     .map(([sym, p]) => {
       const t = tickers[sym]?.last;
       return [sym, p && t ? withLivePnl(p, t) : p];
@@ -207,10 +207,13 @@ export default function TradePanel() {
 
   const live = !cfg.paper;
   const swap = cfg.category === 'SWAP';
-  const exchanges = cfg.exchanges || [
-    { id: 'okx', label: 'OKX', enabled: true },
-    { id: 'bitget', label: 'Bitget', enabled: false },
-  ];
+  const rows = Array.isArray(symbolCfgs) ? symbolCfgs : [];
+  const exchanges = Array.isArray(cfg.exchanges) && cfg.exchanges.length
+    ? cfg.exchanges
+    : [
+        { id: 'okx', label: 'OKX', enabled: true },
+        { id: 'bitget', label: 'Bitget', enabled: false },
+      ];
 
   return (
     <div style={sty.wrap}>
@@ -394,18 +397,18 @@ export default function TradePanel() {
       </Section>
 
       {/* ── 交易品种（多品种并行） ── */}
-      <Section title={`交易品种（${symbolCfgs.length}/${maxSymbols}）`}>
+      <Section title={`交易品种（${rows.length}/${maxSymbols}）`}>
         <div style={{ fontSize: 9.5, color: '#5a6270', lineHeight: 1.7 }}>
           保证金、杠杆、周期、ER、等级、止盈止损都在本行展开后改。品种开关 × 总开关同时开才会下单。
         </div>
-        {symbolCfgs.map((c) => (
+        {rows.map((c) => (
           <SymbolRow key={c.symbol} c={c} swap={swap}
                      last={tickers[c.symbol]?.last ?? c.last}
                      hasPos={!!positions[c.symbol]}
                      onPatch={(body, note) => patchSymbol(c.symbol, body, note)}
                      onRemove={() => removeSymbol(c.symbol)} />
         ))}
-        <AddSymbol disabled={symbolCfgs.length >= maxSymbols}
+        <AddSymbol disabled={rows.length >= maxSymbols}
                    max={maxSymbols}
                    onAdd={(sym) => patchSymbol(sym, {}, `${sym} 已加入，正在拉历史K线…`)} />
       </Section>
@@ -819,7 +822,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 const on = (c.allow_tfs || []).includes(t);
                 return (
                   <button key={t} onClick={() => onPatch({
-                    allow_tfs: on ? c.allow_tfs.filter((x) => x !== t) : [...c.allow_tfs, t],
+                    allow_tfs: on
+                      ? (c.allow_tfs || []).filter((x) => x !== t)
+                      : [...(c.allow_tfs || []), t],
                   })} style={{ ...sty.chip, opacity: on ? 1 : 0.25, fontSize: 9.5, padding: '2px 6px' }}>
                     {t}
                   </button>
