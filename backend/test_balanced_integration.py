@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parent))
 from regime import TradeConfig, evaluate
 from regime_scoring import score_signal, evaluate_enhanced
 from regime_dynamic import adaptive_er_threshold
-from feed import fetch_klines
+from history import fetch_candles
 
 
 def test_scoring_system():
@@ -25,7 +25,7 @@ def test_scoring_system():
     print("="*70)
 
     # 加载测试数据
-    candles = fetch_klines("BTC/USDT:USDT", "1h", 200)
+    candles = fetch_candles("1h", 200, "BTC-USDT")
 
     # 创建测试信号
     sig = {
@@ -75,7 +75,7 @@ def test_dynamic_threshold():
     print("🧪 测试2：动态阈值")
     print("="*70)
 
-    candles = fetch_klines("BTC/USDT:USDT", "1h", 200)
+    candles = fetch_candles("1h", 200, "BTC-USDT")
 
     # 测试动态阈值计算
     adapt = adaptive_er_threshold(candles, base_er=0.15)
@@ -104,7 +104,7 @@ def test_integration():
     print("🧪 测试3：完整集成流程")
     print("="*70)
 
-    candles = fetch_klines("BTC/USDT:USDT", "1h", 200)
+    candles = fetch_candles("1h", 200, "BTC-USDT")
 
     sig = {
         "type": "buy",
@@ -166,7 +166,7 @@ def test_half_position_logic():
     print("🧪 测试4：半仓下单逻辑")
     print("="*70)
 
-    candles = fetch_klines("BTC/USDT:USDT", "1h", 200)
+    candles = fetch_candles("1h", 200, "BTC-USDT")
 
     # 制造一个60-79分的信号（中置信度）
     sig = {
