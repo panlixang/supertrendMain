@@ -123,6 +123,13 @@ class SymbolTradeConfig:
     adx_filter_enabled:    bool  = False   # 是否启用ADX过滤
     adx_min:               float = 20.0    # ADX最小值（低于此值视为无趋势）
     adx_period:            int   = 14      # ADX计算周期
+    # ── 信号打分制（平衡型方案）──
+    use_scoring:           bool  = True    # 是否启用打分制（推荐开启）
+    scoring_full_threshold: float = 80.0   # 全仓阈值：≥此分数全仓下单
+    scoring_half_threshold: float = 60.0   # 半仓阈值：≥此分数半仓下单
+    scoring_alert_threshold: float = 40.0  # 提醒阈值：≥此分数仅提醒不下单
+    # ── 动态ER阈值（平衡型方案）──
+    use_dynamic_threshold:  bool  = True   # 是否启用动态阈值（推荐开启）
 
 
 class SymbolStore:

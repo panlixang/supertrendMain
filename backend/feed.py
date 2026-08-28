@@ -355,6 +355,9 @@ class OKXFeed:
         full["profile"] = gate.get("profile")
         full["filters"] = gate.get("filters", {})     # 过滤器详情
         full["symbol"] = store.symbol
+        # 平衡型方案：打分制字段
+        full["trade_half"] = gate.get("trade_half", False)
+        full["score_detail"] = gate.get("score_detail")
 
         store.add_signal(full)
         # 非允许周期：只提醒、不进执行器。唯一例外是手里还捏着这个周期的残留仓

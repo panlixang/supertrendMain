@@ -108,6 +108,13 @@ class TradeConfig:
     adx_filter_enabled:    bool  = False   # 是否启用ADX过滤
     adx_min:               float = 20.0    # ADX最小值（低于此值视为无趋势）
     adx_period:            int   = 14      # ADX计算周期
+    # ── 信号打分制（平衡型方案）──
+    use_scoring:           bool  = True    # 是否启用打分制（推荐开启）
+    scoring_full_threshold: float = 80.0   # 全仓阈值：≥此分数全仓下单
+    scoring_half_threshold: float = 60.0   # 半仓阈值：≥此分数半仓下单
+    scoring_alert_threshold: float = 40.0  # 提醒阈值：≥此分数仅提醒不下单
+    # ── 动态ER阈值（平衡型方案）──
+    use_dynamic_threshold:  bool  = True   # 是否启用动态阈值（推荐开启）
 
 
 def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
@@ -115,14 +122,32 @@ def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
     """决定这条信号该不该真下单。
 
     返回 {"trade": bool, "regime": {...}, "reasons": [...], "hidden": bool,
-            "filters": {...}}，
+            "filters": {...}, "trade_half": bool (可选), "score_detail": {...} (可选)}，
     reasons 是所有未通过项，会原样显示在 UI 和推送里 —— 用户要看得到为什么没下单。
     hidden=True 表示 ER 过低且不够干脆，信号静默（不弹窗、不提醒、图表不画、不下单）。
     交易周期上强度够的翻转视为突破启动：显示和下单同步，ER/ATR/ADX 滞后不拦。
     filters 包含所有过滤器的详细检测结果，供调试和展示。
+
+    如果启用打分制 (cfg.use_scoring=True)，会返回：
+        trade_half: bool - 是否半仓下单
+        score_detail: {total, confidence, breakdown, suggestion} - 打分详情
     """
+    # ===== 平衡型方案：打分制 + 动态阈值 =====
+    if cfg.use_scoring:
+        from regime_scoring import evaluate_enhanced
+        return evaluate_enhanced(sig, candles, cfg, candles_by_tf, p)
+
+    # ===== 原有逻辑（保持向后兼容）=====
     er = efficiency_ratio(candles)
-    regime = classify(er, cfg.er_min, cfg.er_trend, cfg.er_weak_min, cfg.quick_enabled)
+
+    # 如果启用动态阈值，使用自适应的 er_min
+    effective_er_min = cfg.er_min
+    if cfg.use_dynamic_threshold:
+        from regime_dynamic import adaptive_er_threshold
+        adapt = adaptive_er_threshold(candles, cfg.er_min)
+        effective_er_min = adapt["threshold"]
+
+    regime = classify(er, effective_er_min, cfg.er_trend, cfg.er_weak_min, cfg.quick_enabled)
 
     # ER 太低默认静默。交易周期上足够干脆的翻转 = 突破启动：
     # 图上出箭头，自动下单也走同一条路径（ER/ATR/ADX 窗口此时还没跟上）。

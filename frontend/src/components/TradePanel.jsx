@@ -670,6 +670,12 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [grades, setGrades] = useState(c.allow_grades || ['A', 'B']);
   const [minScore, setMinScore] = useState(c.min_score ?? 2);
   const [quickOn, setQuickOn] = useState(!!c.quick_enabled);
+  // 平衡型方案：打分制 + 动态阈值
+  const [useScoring, setUseScoring] = useState(c.use_scoring ?? true);
+  const [scoringFull, setScoringFull] = useState(c.scoring_full_threshold ?? 80);
+  const [scoringHalf, setScoringHalf] = useState(c.scoring_half_threshold ?? 60);
+  const [scoringAlert, setScoringAlert] = useState(c.scoring_alert_threshold ?? 40);
+  const [useDynamic, setUseDynamic] = useState(c.use_dynamic_threshold ?? true);
 
   useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
   useEffect(() => { setSizingMode(c.sizing_mode || 'fixed'); }, [c.sizing_mode]);
@@ -729,6 +735,14 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   useEffect(() => { setGrades(c.allow_grades || ['A', 'B']); }, [c.allow_grades]);
   useEffect(() => { setMinScore(c.min_score ?? 2); }, [c.min_score]);
   useEffect(() => { setQuickOn(!!c.quick_enabled); }, [c.quick_enabled]);
+  useEffect(() => {
+    setUseScoring(c.use_scoring ?? true);
+    setScoringFull(c.scoring_full_threshold ?? 80);
+    setScoringHalf(c.scoring_half_threshold ?? 60);
+    setScoringAlert(c.scoring_alert_threshold ?? 40);
+    setUseDynamic(c.use_dynamic_threshold ?? true);
+  }, [c.use_scoring, c.scoring_full_threshold, c.scoring_half_threshold,
+      c.scoring_alert_threshold, c.use_dynamic_threshold]);
 
   return (
     <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
@@ -873,8 +887,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                      style={{ ...sty.input, width: 48 }} />
             </div>
           </Row>
-          <Row label="ER 阈值" hint="隐藏/弱档/标准档。交易周期上强度够的翻转：图上有箭头就会下单">
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <Row label="ER 阈值" hint="隐藏/弱档/标准档。改为0.0可显示所有原始SuperTrend信号">
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
               <input type="number" min={0} max={1} step={0.01} value={erHide}
                      onChange={(e) => setErHide(+e.target.value)}
                      style={{ ...sty.input, width: 54 }} placeholder="隐藏" />
@@ -884,8 +898,22 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
               <input type="number" min={0} max={1} step={0.01} value={erMin}
                      onChange={(e) => setErMin(+e.target.value)}
                      style={{ ...sty.input, width: 54 }} placeholder="标准" />
+              <button onClick={() => { setErHide(0.0); setErWeakMin(0.0); setErMin(0.0); }}
+                      style={{ ...sty.chip, fontSize: 9, padding: '2px 6px', background: '#ffffff08' }}>
+                显示全部
+              </button>
+              <button onClick={() => { setErHide(0.10); setErWeakMin(0.12); setErMin(0.15); }}
+                      style={{ ...sty.chip, fontSize: 9, padding: '2px 6px', background: '#ffffff08' }}>
+                默认
+              </button>
             </div>
           </Row>
+          <div style={{ fontSize: 8.5, color: '#5a6270', lineHeight: 1.7, padding: '4px 0' }}>
+            <b style={{ color: '#8b93a0' }}>隐藏阈值</b>：ER &lt; 此值时信号静默（图表不显示）。
+            点击 <b style={{ color: '#00c9a7' }}>显示全部</b> 可看到所有原始SuperTrend翻转。
+            <br/>
+            <b style={{ color: '#8b93a0' }}>弱档/标准档</b>：控制是否下单，不影响图表显示。
+          </div>
 
           {/* ── 组合过滤器 ── */}
           <div style={{ borderTop: '1px solid #1e1e1e', paddingTop: 6 }}>
@@ -1018,6 +1046,79 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 </>
               )}
             </div>
+
+            {/* 平衡型方案：打分制 + 动态阈值 */}
+            <div style={{ borderTop: '1px solid #1e1e1e', paddingTop: 6, marginTop: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: '#00c9a7', letterSpacing: 0.4, marginBottom: 6 }}>
+                ▸ 平衡型方案（打分制 + 动态阈值）
+              </div>
+              <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.7, marginBottom: 6 }}>
+                不是"拦或不拦"的二元判断，而是给信号打0-100分，根据分数决定是否下单或减半仓位。
+                动态阈值让ER在突破启动时放宽、趋势末期收紧。
+              </div>
+
+              {/* 打分制 */}
+              <div style={sty.filterBlock}>
+                <div style={sty.rowBetween}>
+                  <div>
+                    <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>信号打分制</div>
+                    <div style={{ fontSize: 8.5, color: '#4a5058' }}>
+                      综合ER、ATR、MTF等维度打分，分级处理信号（推荐开启）
+                    </div>
+                  </div>
+                  <Toggle on={useScoring} onClick={() => setUseScoring(!useScoring)} color="#00c9a7" />
+                </div>
+                {useScoring && (
+                  <>
+                    <Row label="全仓阈值" hint="≥此分数全仓下单">
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <input type="number" min={0} max={100} step={5} value={scoringFull}
+                               onChange={(e) => setScoringFull(+e.target.value)}
+                               style={{ ...sty.input, width: 54 }} />
+                        <span style={{ fontSize: 9, color: '#4a5058' }}>分</span>
+                      </div>
+                    </Row>
+                    <Row label="半仓阈值" hint="≥此分数半仓试探">
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <input type="number" min={0} max={100} step={5} value={scoringHalf}
+                               onChange={(e) => setScoringHalf(+e.target.value)}
+                               style={{ ...sty.input, width: 54 }} />
+                        <span style={{ fontSize: 9, color: '#4a5058' }}>分</span>
+                      </div>
+                    </Row>
+                    <Row label="提醒阈值" hint="≥此分数仅提醒不下单">
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <input type="number" min={0} max={100} step={5} value={scoringAlert}
+                               onChange={(e) => setScoringAlert(+e.target.value)}
+                               style={{ ...sty.input, width: 54 }} />
+                        <span style={{ fontSize: 9, color: '#4a5058' }}>分</span>
+                      </div>
+                    </Row>
+                    <div style={{ fontSize: 8.5, color: '#5a6270', lineHeight: 1.7, padding: '4px 0' }}>
+                      &lt;{scoringAlert}分静默 · {scoringAlert}-{scoringHalf-1}分提醒 · {scoringHalf}-{scoringFull-1}分半仓 · ≥{scoringFull}分全仓
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* 动态阈值 */}
+              <div style={sty.filterBlock}>
+                <div style={sty.rowBetween}>
+                  <div>
+                    <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>动态ER阈值</div>
+                    <div style={{ fontSize: 8.5, color: '#4a5058' }}>
+                      ER阈值自适应：突破启动时放宽，趋势末期收紧（推荐开启）
+                    </div>
+                  </div>
+                  <Toggle on={useDynamic} onClick={() => setUseDynamic(!useDynamic)} color="#00c9a7" />
+                </div>
+                {useDynamic && (
+                  <div style={{ fontSize: 8.5, color: '#5a6270', lineHeight: 1.7, padding: '4px 0' }}>
+                    基于ER斜率、突破幅度、量能等指标自动调整阈值±0.05，解决ER滞后问题。
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
           <div style={{ padding: '2px 0' }}>
             <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>标准档三级止盈（价格幅度）</div>
@@ -1149,6 +1250,12 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     adx_filter_enabled: adxOn,
                     adx_min: adxMin,
                     adx_period: adxPeriod,
+                    // 平衡型方案：打分制 + 动态阈值
+                    use_scoring: useScoring,
+                    scoring_full_threshold: scoringFull,
+                    scoring_half_threshold: scoringHalf,
+                    scoring_alert_threshold: scoringAlert,
+                    use_dynamic_threshold: useDynamic,
                     allow_grades: grades,
                     min_score: minScore,
                     quick_enabled: quickOn,

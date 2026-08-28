@@ -93,6 +93,62 @@ export default function SignalList() {
               </div>
             )}
 
+            {/* 显示打分详情 */}
+            {s.score_detail && (
+              <div style={{ marginTop: 6, padding: '6px 8px', background: '#ffffff08', borderRadius: 3, border: '1px solid #262626' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: '#c8ccd4', fontWeight: 700 }}>
+                    信号置信度：{s.score_detail.total}分
+                  </span>
+                  <span style={{ ...sty.badge, fontSize: 8.5, padding: '1px 5px',
+                                background: s.score_detail.confidence === 'high' ? '#00c9a722' :
+                                           s.score_detail.confidence === 'medium' ? '#f5a62322' :
+                                           s.score_detail.confidence === 'low' ? '#4e8aff22' : '#5a627022',
+                                color: s.score_detail.confidence === 'high' ? '#00c9a7' :
+                                       s.score_detail.confidence === 'medium' ? '#f5a623' :
+                                       s.score_detail.confidence === 'low' ? '#4e8aff' : '#8b93a0' }}>
+                    {s.score_detail.confidence === 'high' ? '高置信' :
+                     s.score_detail.confidence === 'medium' ? '中置信' :
+                     s.score_detail.confidence === 'low' ? '低置信' : '噪音'}
+                  </span>
+                  {s.trade_half && (
+                    <span style={{ ...sty.badge, fontSize: 8.5, padding: '1px 5px', background: '#f5a62322', color: '#f5a623' }}>
+                      半仓
+                    </span>
+                  )}
+                </div>
+                {s.score_detail.breakdown && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {Object.entries(s.score_detail.breakdown).map(([key, val]) => (
+                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: 8.5, color: '#5a6270', minWidth: 75 }}>
+                          {key === 'signal_quality' ? '信号强度' :
+                           key === 'er_momentum' ? 'ER趋势性' :
+                           key === 'volatility' ? '波动率' :
+                           key === 'mtf_alignment' ? 'MTF共振' :
+                           key === 'breakout_boost' ? '突破加成' :
+                           key === 'penalties' ? '扣分项' : key}
+                        </span>
+                        <div style={{ flex: 1, height: 4, background: '#1e1e1e', borderRadius: 2, overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.abs(val) * 4}%`, height: '100%',
+                                        background: val >= 0 ? '#00c9a7' : '#e05263' }} />
+                        </div>
+                        <span style={{ fontSize: 8.5, color: val >= 0 ? '#00c9a7' : '#e05263',
+                                       fontFamily: 'var(--font-mono)', minWidth: 24, textAlign: 'right' }}>
+                          {val > 0 ? '+' : ''}{val}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {s.score_detail.suggestion && (
+                  <div style={{ fontSize: 8.5, color: '#8b93a0', marginTop: 4, lineHeight: 1.5 }}>
+                    💡 {s.score_detail.suggestion}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* 显示增强功能的额外信息 */}
             {s.filters && Object.keys(s.filters).length > 0 && (
               <div style={sty.filtersBox}>

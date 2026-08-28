@@ -249,6 +249,13 @@ class Executor:
             logger.warning(f"[跳过开仓] {symbol} {how}")
             return await self._record({"ok": False, "error": how, "price": px}, extra)
 
+        # ===== 平衡型方案：如果是半仓信号，保证金减半 =====
+        trade_half = sig.get("trade_half", False)
+        if trade_half:
+            margin = margin * 0.5
+            logger.info(f"[半仓下单] {symbol} 信号置信度中等，保证金减半至 {margin:.2f}U")
+            extra["half_position"] = True
+
         r = await trade.place_order(
             symbol, side, px,
             margin_usdt=margin, leverage=cfg.leverage,
