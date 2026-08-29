@@ -345,6 +345,12 @@ class AppState:
             adx_filter_enabled=sc.adx_filter_enabled,
             adx_min=sc.adx_min,
             adx_period=sc.adx_period,
+            # 信号打分制品种独立
+            use_scoring=sc.use_scoring,
+            scoring_full_threshold=sc.scoring_full_threshold,
+            scoring_half_threshold=sc.scoring_half_threshold,
+            scoring_alert_threshold=sc.scoring_alert_threshold,
+            use_dynamic_threshold=sc.use_dynamic_threshold,
         )
 
     async def broadcast(self, msg: dict):
@@ -469,6 +475,12 @@ class AppState:
                     adx_filter_enabled=e.get("adx_filter_enabled", False),
                     adx_min=e.get("adx_min", 20.0),
                     adx_period=e.get("adx_period", 14),
+                    # 信号打分制（平衡型方案）
+                    use_scoring=e.get("use_scoring", True),
+                    scoring_full_threshold=e.get("scoring_full_threshold", 80.0),
+                    scoring_half_threshold=e.get("scoring_half_threshold", 60.0),
+                    scoring_alert_threshold=e.get("scoring_alert_threshold", 40.0),
+                    use_dynamic_threshold=e.get("use_dynamic_threshold", True),
                 )
                 # 覆盖其他字段
                 if "enabled" in e:

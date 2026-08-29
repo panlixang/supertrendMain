@@ -99,6 +99,8 @@ def run_backtest(
     live_gate: TradeConfig | None = None,
     gate_tf: str = "15m",
     candles_by_tf: dict[str, list[dict]] | None = None,
+    score_only_gate: bool = False,
+    min_total_score: float = 60.0,
 ) -> dict:
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
@@ -278,6 +280,15 @@ def run_backtest(
             if not sig or sig["type"] != typ:
                 return False, profile
             full = strategy.evaluate(_cbtf_at(i), p, sig)
+            if score_only_gate:
+                from regime_scoring import score_signal
+                sc = score_signal(
+                    full, candles[: i + 1], live_gate,
+                    candles_by_tf=_cbtf_at(i), p=p,
+                )
+                if sc["total_score"] < min_total_score:
+                    return False, profile
+                return True, sc["regime"].get("profile") or "normal"
             gate = enhanced_signal_handler(
                 full, candles[: i + 1], live_gate,
                 candles_by_tf=_cbtf_at(i), p=p,

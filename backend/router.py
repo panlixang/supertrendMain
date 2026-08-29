@@ -716,6 +716,12 @@ class SymbolCfgIn(BaseModel):
     adx_filter_enabled:    Optional[bool]  = None
     adx_min:               Optional[float] = None
     adx_period:            Optional[int]   = None
+    # ── 信号打分制（平衡型方案）──
+    use_scoring:             Optional[bool]  = None
+    scoring_full_threshold:  Optional[float] = None
+    scoring_half_threshold:  Optional[float] = None
+    scoring_alert_threshold: Optional[float] = None
+    use_dynamic_threshold:   Optional[bool]  = None
     # 止盈止损（品种独立）
     exit_rules:            Optional[ExitRulesPatch] = None
     exit_rules_quick:      Optional[ExitRulesPatch] = None
@@ -807,6 +813,16 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if body.adx_min              is not None: c.adx_min              = max(0.0, min(100.0, body.adx_min))
     if body.adx_period           is not None: c.adx_period           = max(1, min(50, body.adx_period))
 
+    # 信号打分制品种独立
+    if body.use_scoring is not None: c.use_scoring = body.use_scoring
+    if body.scoring_full_threshold  is not None:
+        c.scoring_full_threshold  = max(0.0, min(100.0, body.scoring_full_threshold))
+    if body.scoring_half_threshold  is not None:
+        c.scoring_half_threshold  = max(0.0, min(100.0, body.scoring_half_threshold))
+    if body.scoring_alert_threshold is not None:
+        c.scoring_alert_threshold = max(0.0, min(100.0, body.scoring_alert_threshold))
+    if body.use_dynamic_threshold is not None: c.use_dynamic_threshold = body.use_dynamic_threshold
+
     # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
     if body.multiplier  is not None: st.params.multiplier = max(0.1, body.multiplier)
@@ -830,6 +846,8 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
         body.mtf_filter_enabled, body.mtf_consistency_min, body.mtf_flip_max,
         body.adx_filter_enabled, body.adx_min, body.adx_period,
         body.periods, body.multiplier,
+        body.use_scoring, body.scoring_full_threshold, body.scoring_half_threshold,
+        body.scoring_alert_threshold, body.use_dynamic_threshold,
     ])
     did_rescan = False
     if (body.rescan or _affects_signals) and state.feed:

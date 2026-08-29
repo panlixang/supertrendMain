@@ -177,20 +177,23 @@ def score_signal(sig: dict, candles: list[dict], cfg: TradeConfig,
     total = sum(breakdown.values())
     total = max(0, min(100, total))  # 限制在0-100
 
-    # ===== 决策逻辑 =====
+    # ===== 决策逻辑（阈值读取配置；未设置/为 0 时回退默认 80/60/40）=====
+    full_thr  = getattr(cfg, "scoring_full_threshold",  80.0) or 80.0
+    half_thr  = getattr(cfg, "scoring_half_threshold",  60.0) or 60.0
+    alert_thr = getattr(cfg, "scoring_alert_threshold", 40.0) or 40.0
     if not cfg.enabled:
         confidence = "disabled"
         action = "alert_only"
         suggestion = "自动下单未开启"
-    elif total >= 80:
+    elif total >= full_thr:
         confidence = "high"
         action = "trade_full"
-        suggestion = "高置信度，全仓操作"
-    elif total >= 60:
+        suggestion = f"高置信度，全仓操作（≥{full_thr:g}分）"
+    elif total >= half_thr:
         confidence = "medium"
         action = "trade_half"
-        suggestion = "中等置信度，建议半仓试探"
-    elif total >= 40:
+        suggestion = f"中等置信度，建议半仓试探（≥{half_thr:g}分）"
+    elif total >= alert_thr:
         confidence = "low"
         action = "alert_only"
         suggestion = "低置信度，仅提醒观察"

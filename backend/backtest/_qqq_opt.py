@@ -1,4 +1,4 @@
-"""SNDK-USDT-SWAP 15m / 1h 超趋参数寻优（SPCX 同款闸门 + 三级止盈）。"""
+"""QQQ-USDT-SWAP 15m / 1h 超趋参数寻优（MU 同款闸门 + 三级止盈）。"""
 from __future__ import annotations
 
 import copy
@@ -8,13 +8,14 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtest import run_backtest
 from _live_cfg_backtest import (
     BARS, BIAS_TFS, LIVE_URL, exit_rules, fetch_candles, trade_cfg, ts_fmt, _get,
 )
 
-SYMBOL = "SNDK-USDT-SWAP"
+SYMBOL = "QQQ-USDT-SWAP"
 PERIODS = list(range(7, 22, 2))
 MULTS = list(range(2, 11))
 MIN_TRADES = {"15m": 8, "1h": 5}
@@ -26,10 +27,10 @@ def score_row(pnl: float, dd: float, trades: int, min_t: int) -> float:
     return pnl / dd
 
 
-def sndk_sym_template() -> dict:
+def qqq_sym_template() -> dict:
     live = _get(LIVE_URL)
-    spcx = next(s for s in live["symbols"] if "SPCX" in s["symbol"])
-    sym = copy.deepcopy(spcx)
+    mu = next(s for s in live["symbols"] if "MU" in s["symbol"])
+    sym = copy.deepcopy(mu)
     sym["symbol"] = SYMBOL
     return sym
 
@@ -40,6 +41,7 @@ def run_grid(sym: dict, gate_tf: str, candles: list, cbtf: dict) -> list[dict]:
     cfg = trade_cfg(s)
     rules = exit_rules(s)
     base_p = sym["params"]
+    cur_p, cur_m = base_p["periods"], base_p["multiplier"]
     min_t = MIN_TRADES[gate_tf]
     rows = []
     total = len(PERIODS) * len(MULTS)
@@ -71,7 +73,7 @@ def run_grid(sym: dict, gate_tf: str, candles: list, cbtf: dict) -> list[dict]:
                 "profit_factor": r["profit_factor"],
                 "blocked": r["er_blocked"],
                 "score": round(score_row(pnl, r["max_dd_pct"], r["trades"], min_t), 3),
-                "is_spcx_default": pe == 13 and float(m) == 4.0,
+                "is_mu_default": pe == cur_p and float(m) == float(cur_m),
             })
             if n % 18 == 0:
                 print(f"  {gate_tf} {n}/{total} …", flush=True)
@@ -89,7 +91,7 @@ def pack(gate_tf: str, rows: list, start: int, end: int, bars: int) -> dict:
         "end": ts_fmt(end),
         "bars": bars,
         "min_trades": min_t,
-        "spcx_default_13x4": next((r for r in rows if r["is_spcx_default"]), None),
+        "mu_default_17x3": next((r for r in rows if r["is_mu_default"]), None),
         "best_score": qualified[0] if qualified else None,
         "best_pnl": max(rows, key=lambda r: r["pnl_u"]) if rows else None,
         "top8": qualified[:8],
@@ -118,16 +120,15 @@ def cross_best(a: dict, b: dict) -> dict | None:
 
 
 def main():
-    sym = sndk_sym_template()
-    sym["symbol"] = SYMBOL
+    sym = qqq_sym_template()
     out = {
         "symbol": SYMBOL,
-        "filters": "SPCX 同款：ER/ATR/区间/ADX + A/B score≥2 + 三级止盈 10U×10x",
+        "filters": "MU 同款：ER/ATR/区间/ADX + A/B/C grade score≥1 + 三级止盈 10U×10x",
     }
     all_by_tf = {}
 
     for gate_tf, bar_n in (("15m", BARS["15m"]), ("1h", BARS["1h"])):
-        print(f"\n=== SNDK fetch {gate_tf} ===", flush=True)
+        print(f"\n=== QQQ fetch {gate_tf} ===", flush=True)
         candles = fetch_candles(SYMBOL, gate_tf, bar_n)
         cbtf = {gate_tf: candles}
         for tf in BIAS_TFS:
@@ -140,11 +141,11 @@ def main():
         all_by_tf[gate_tf] = pack(
             gate_tf, rows, candles[0]["ts"], candles[-1]["ts"], len(candles)
         )
-        d = all_by_tf[gate_tf]["spcx_default_13x4"]
+        d = all_by_tf[gate_tf]["mu_default_17x3"]
         b = all_by_tf[gate_tf]["best_score"]
         if d:
             print(
-                f"  SPCX默认13×4: {d['pnl_u']}U dd={d['max_dd_pct']}% trades={d['trades']}",
+                f"  MU默认17×3: {d['pnl_u']}U dd={d['max_dd_pct']}% trades={d['trades']} PF={d['profit_factor']}",
                 flush=True,
             )
         if b:
@@ -160,7 +161,7 @@ def main():
     if cross:
         out["cross_best_pnl"] = cross
 
-    path = os.path.join(os.path.dirname(__file__), "_sndk_opt.json")
+    path = os.path.join(os.path.dirname(__file__), "_qqq_opt.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     with open(path.replace(".json", "_full.json"), "w", encoding="utf-8") as f:

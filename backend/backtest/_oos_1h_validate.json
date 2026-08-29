@@ -1,0 +1,311 @@
+{
+  "note": "五币 1h 最优参数样本外验证 2025-09-03~2026-03-03",
+  "by_symbol": {
+    "ETH": {
+      "best_params": [
+        7,
+        4.0,
+        35
+      ],
+      "results": [
+        {
+          "periods": 7,
+          "multiplier": 4.0,
+          "min_score_100": 35,
+          "pnl_u": 10.96,
+          "max_dd_pct": 15.94,
+          "trades": 48,
+          "win_rate": 79.2,
+          "profit_factor": 1.35,
+          "blocked": 4
+        },
+        {
+          "periods": 7,
+          "multiplier": 4.0,
+          "min_score_100": 30,
+          "pnl_u": 10.96,
+          "max_dd_pct": 15.94,
+          "trades": 48,
+          "win_rate": 79.2,
+          "profit_factor": 1.35,
+          "blocked": 4
+        },
+        {
+          "periods": 7,
+          "multiplier": 4.0,
+          "min_score_100": 40,
+          "pnl_u": 10.96,
+          "max_dd_pct": 15.94,
+          "trades": 48,
+          "win_rate": 79.2,
+          "profit_factor": 1.35,
+          "blocked": 4
+        },
+        {
+          "periods": 7,
+          "multiplier": 4.0,
+          "min_score_100": 45,
+          "pnl_u": 10.77,
+          "max_dd_pct": 15.94,
+          "trades": 47,
+          "win_rate": 78.7,
+          "profit_factor": 1.34,
+          "blocked": 5
+        },
+        {
+          "periods": 7,
+          "multiplier": 4.0,
+          "min_score_100": 25,
+          "pnl_u": 10.6,
+          "max_dd_pct": 17.67,
+          "trades": 52,
+          "win_rate": 78.8,
+          "profit_factor": 1.33,
+          "blocked": 0
+        },
+        {
+          "periods": 7,
+          "multiplier": 3.0,
+          "min_score_100": 35,
+          "pnl_u": 9.71,
+          "max_dd_pct": 14.4,
+          "trades": 85,
+          "win_rate": 74.1,
+          "profit_factor": 1.25,
+          "blocked": 14
+        },
+        {
+          "periods": 6,
+          "multiplier": 4.0,
+          "min_score_100": 35,
+          "pnl_u": 0.63,
+          "max_dd_pct": 16.91,
+          "trades": 48,
+          "win_rate": 75.0,
+          "profit_factor": 1.07,
+          "blocked": 6
+        },
+        {
+          "periods": 8,
+          "multiplier": 4.0,
+          "min_score_100": 35,
+          "pnl_u": 0.46,
+          "max_dd_pct": 20.52,
+          "trades": 46,
+          "win_rate": 80.4,
+          "profit_factor": 1.07,
+          "blocked": 4
+        },
+        {
+          "periods": 7,
+          "multiplier": 5.0,
+          "min_score_100": 35,
+          "pnl_u": -2.06,
+          "max_dd_pct": 27.49,
+          "trades": 36,
+          "win_rate": 80.6,
+          "profit_factor": 0.99,
+          "blocked": 4
+        },
+        {
+          "periods": 7,
+          "multiplier": 3.5,
+          "min_score_100": 35,
+          "pnl_u": -4.79,
+          "max_dd_pct": 17.04,
+          "trades": 60,
+          "win_rate": 70.0,
+          "profit_factor": 0.96,
+          "blocked": 8
+        },
+        {
+          "periods": 9,
+          "multiplier": 4.0,
+          "min_score_100": 35,
+          "pnl_u": -5.58,
+          "max_dd_pct": 21.41,
+          "trades": 46,
+          "win_rate": 76.1,
+          "profit_factor": 0.92,
+          "blocked": 4
+        },
+        {
+          "periods": 5,
+          "multiplier": 4.0,
+          "min_score_100": 35,
+          "pnl_u": -9.98,
+          "max_dd_pct": 18.87,
+          "trades": 51,
+          "win_rate": 78.4,
+          "profit_factor": 0.84,
+          "blocked": 7
+        },
+        {
+          "periods": 7,
+          "multiplier": 4.5,
+          "min_score_100": 35,
+          "pnl_u": -15.66,
+          "max_dd_pct": 26.54,
+          "trades": 44,
+          "win_rate": 65.9,
+          "profit_factor": 0.77,
+          "blocked": 6
+        }
+      ],
+      "no_data": false
+    },
+    "BTC": {
+      "best_params": [
+        11,
+        4.0,
+        50
+      ],
+      "results": [
+        {
+          "periods": 11,
+          "multiplier": 3.5,
+          "min_score_100": 50,
+          "pnl_u": 0.86,
+          "max_dd_pct": 22.12,
+          "trades": 56,
+          "win_rate": 62.5,
+          "profit_factor": 1.09,
+          "blocked": 26
+        },
+        {
+          "periods": 9,
+          "multiplier": 4.0,
+          "min_score_100": 50,
+          "pnl_u": -2.22,
+          "max_dd_pct": 21.1,
+          "trades": 35,
+          "win_rate": 65.7,
+          "profit_factor": 0.98,
+          "blocked": 25
+        },
+        {
+          "periods": 12,
+          "multiplier": 4.0,
+          "min_score_100": 50,
+          "pnl_u": -3.14,
+          "max_dd_pct": 23.0,
+          "trades": 34,
+          "win_rate": 64.7,
+          "profit_factor": 0.95,
+          "blocked": 28
+        },
+        {
+          "periods": 11,
+          "multiplier": 4.0,
+          "min_score_100": 60,
+          "pnl_u": -3.62,
+          "max_dd_pct": 10.28,
+          "trades": 13,
+          "win_rate": 61.5,
+          "profit_factor": 0.69,
+          "blocked": 47
+        },
+        {
+          "periods": 10,
+          "multiplier": 4.0,
+          "min_score_100": 50,
+          "pnl_u": -5.42,
+          "max_dd_pct": 21.37,
+          "trades": 31,
+          "win_rate": 64.5,
+          "profit_factor": 0.87,
+          "blocked": 29
+        },
+        {
+          "periods": 13,
+          "multiplier": 4.0,
+          "min_score_100": 50,
+          "pnl_u": -5.68,
+          "max_dd_pct": 24.12,
+          "trades": 37,
+          "win_rate": 62.2,
+          "profit_factor": 0.89,
+          "blocked": 27
+        },
+        {
+          "periods": 11,
+          "multiplier": 4.0,
+          "min_score_100": 50,
+          "pnl_u": -5.91,
+          "max_dd_pct": 23.26,
+          "trades": 34,
+          "win_rate": 64.7,
+          "profit_factor": 0.87,
+          "blocked": 26
+        },
+        {
+          "periods": 11,
+          "multiplier": 4.0,
+          "min_score_100": 55,
+          "pnl_u": -5.91,
+          "max_dd_pct": 23.26,
+          "trades": 34,
+          "win_rate": 64.7,
+          "profit_factor": 0.87,
+          "blocked": 26
+        },
+        {
+          "periods": 11,
+          "multiplier": 4.0,
+          "min_score_100": 45,
+          "pnl_u": -7.18,
+          "max_dd_pct": 24.61,
+          "trades": 53,
+          "win_rate": 66.0,
+          "profit_factor": 0.9,
+          "blocked": 7
+        },
+        {
+          "periods": 11,
+          "multiplier": 4.0,
+          "min_score_100": 40,
+          "pnl_u": -8.77,
+          "max_dd_pct": 26.18,
+          "trades": 54,
+          "win_rate": 64.8,
+          "profit_factor": 0.87,
+          "blocked": 6
+        },
+        {
+          "periods": 11,
+          "multiplier": 4.5,
+          "min_score_100": 50,
+          "pnl_u": -12.49,
+          "max_dd_pct": 24.16,
+          "trades": 29,
+          "win_rate": 62.1,
+          "profit_factor": 0.65,
+          "blocked": 27
+        },
+        {
+          "periods": 11,
+          "multiplier": 5.0,
+          "min_score_100": 50,
+          "pnl_u": -20.6,
+          "max_dd_pct": 28.42,
+          "trades": 29,
+          "win_rate": 62.1,
+          "profit_factor": 0.41,
+          "blocked": 15
+        },
+        {
+          "periods": 11,
+          "multiplier": 3.0,
+          "min_score_100": 50,
+          "pnl_u": -22.04,
+          "max_dd_pct": 24.24,
+          "trades": 72,
+          "win_rate": 51.4,
+          "profit_factor": 0.7,
+          "blocked": 39
+        }
+      ],
+      "no_data": false
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""QQQ-USDT-SWAP 15m / 1h 超趋参数寻优（MU 同款闸门 + 三级止盈）。"""
+"""MU-USDT-SWAP 15m / 1h 超趋参数寻优（线上 live_gate + 三级止盈）。"""
 from __future__ import annotations
 
 import copy
@@ -8,13 +8,14 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtest import run_backtest
 from _live_cfg_backtest import (
     BARS, BIAS_TFS, LIVE_URL, exit_rules, fetch_candles, trade_cfg, ts_fmt, _get,
 )
 
-SYMBOL = "QQQ-USDT-SWAP"
+SYMBOL = "MU-USDT-SWAP"
 PERIODS = list(range(7, 22, 2))
 MULTS = list(range(2, 11))
 MIN_TRADES = {"15m": 8, "1h": 5}
@@ -26,12 +27,9 @@ def score_row(pnl: float, dd: float, trades: int, min_t: int) -> float:
     return pnl / dd
 
 
-def qqq_sym_template() -> dict:
+def mu_sym() -> dict:
     live = _get(LIVE_URL)
-    mu = next(s for s in live["symbols"] if "MU" in s["symbol"])
-    sym = copy.deepcopy(mu)
-    sym["symbol"] = SYMBOL
-    return sym
+    return copy.deepcopy(next(s for s in live["symbols"] if "MU" in s["symbol"]))
 
 
 def run_grid(sym: dict, gate_tf: str, candles: list, cbtf: dict) -> list[dict]:
@@ -72,7 +70,7 @@ def run_grid(sym: dict, gate_tf: str, candles: list, cbtf: dict) -> list[dict]:
                 "profit_factor": r["profit_factor"],
                 "blocked": r["er_blocked"],
                 "score": round(score_row(pnl, r["max_dd_pct"], r["trades"], min_t), 3),
-                "is_mu_default": pe == cur_p and float(m) == float(cur_m),
+                "is_current": pe == cur_p and float(m) == float(cur_m),
             })
             if n % 18 == 0:
                 print(f"  {gate_tf} {n}/{total} …", flush=True)
@@ -90,7 +88,7 @@ def pack(gate_tf: str, rows: list, start: int, end: int, bars: int) -> dict:
         "end": ts_fmt(end),
         "bars": bars,
         "min_trades": min_t,
-        "mu_default_17x3": next((r for r in rows if r["is_mu_default"]), None),
+        "current": next((r for r in rows if r["is_current"]), None),
         "best_score": qualified[0] if qualified else None,
         "best_pnl": max(rows, key=lambda r: r["pnl_u"]) if rows else None,
         "top8": qualified[:8],
@@ -100,34 +98,27 @@ def pack(gate_tf: str, rows: list, start: int, end: int, bars: int) -> dict:
 
 def cross_best(a: dict, b: dict) -> dict | None:
     def idx(rows, min_t):
-        return {
-            f"{r['periods']}×{r['multiplier']}": r
-            for r in rows if r["trades"] >= min_t
-        }
+        return {f"{r['periods']}×{r['multiplier']}": r for r in rows if r["trades"] >= min_t}
     ia = idx(a["all"], MIN_TRADES["15m"])
     ib = idx(b["all"], MIN_TRADES["1h"])
     common = set(ia) & set(ib)
     if not common:
         return None
     best = max(common, key=lambda k: ia[k]["pnl_u"] + ib[k]["pnl_u"])
-    return {
-        "p": best,
-        "15m": ia[best],
-        "1h": ib[best],
-        "combined_pnl": round(ia[best]["pnl_u"] + ib[best]["pnl_u"], 2),
-    }
+    return {"p": best, "15m": ia[best], "1h": ib[best],
+            "combined_pnl": round(ia[best]["pnl_u"] + ib[best]["pnl_u"], 2)}
 
 
 def main():
-    sym = qqq_sym_template()
+    sym = mu_sym()
     out = {
         "symbol": SYMBOL,
-        "filters": "MU 同款：ER/ATR/区间/ADX + A/B/C grade score≥1 + 三级止盈 10U×10x",
+        "filters": "线上 MU：ER/ATR/区间/ADX + A/B/C score≥1 + 三级止盈 10U×10x",
     }
     all_by_tf = {}
 
     for gate_tf, bar_n in (("15m", BARS["15m"]), ("1h", BARS["1h"])):
-        print(f"\n=== QQQ fetch {gate_tf} ===", flush=True)
+        print(f"\n=== MU fetch {gate_tf} ===", flush=True)
         candles = fetch_candles(SYMBOL, gate_tf, bar_n)
         cbtf = {gate_tf: candles}
         for tf in BIAS_TFS:
@@ -140,19 +131,14 @@ def main():
         all_by_tf[gate_tf] = pack(
             gate_tf, rows, candles[0]["ts"], candles[-1]["ts"], len(candles)
         )
-        d = all_by_tf[gate_tf]["mu_default_17x3"]
+        cur = all_by_tf[gate_tf]["current"]
         b = all_by_tf[gate_tf]["best_score"]
-        if d:
-            print(
-                f"  MU默认17×3: {d['pnl_u']}U dd={d['max_dd_pct']}% trades={d['trades']} PF={d['profit_factor']}",
-                flush=True,
-            )
+        if cur:
+            print(f"  当前 {cur['periods']}×{cur['multiplier']}: {cur['pnl_u']}U dd={cur['max_dd_pct']}% "
+                  f"trades={cur['trades']} PF={cur['profit_factor']}", flush=True)
         if b:
-            print(
-                f"  best {b['periods']}×{b['multiplier']}: {b['pnl_u']}U dd={b['max_dd_pct']}% "
-                f"PF={b['profit_factor']} trades={b['trades']}",
-                flush=True,
-            )
+            print(f"  best {b['periods']}×{b['multiplier']}: {b['pnl_u']}U dd={b['max_dd_pct']}% "
+                  f"PF={b['profit_factor']} trades={b['trades']}", flush=True)
 
     cross = cross_best(all_by_tf["15m"], all_by_tf["1h"])
     out["15m"] = {k: v for k, v in all_by_tf["15m"].items() if k != "all"}
@@ -160,7 +146,7 @@ def main():
     if cross:
         out["cross_best_pnl"] = cross
 
-    path = os.path.join(os.path.dirname(__file__), "_qqq_opt.json")
+    path = os.path.join(os.path.dirname(__file__), "_mu_opt.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     with open(path.replace(".json", "_full.json"), "w", encoding="utf-8") as f:

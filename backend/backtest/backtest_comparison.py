@@ -8,6 +8,7 @@ python backend/backtest_comparison.py
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtest import run_backtest
 from position import ExitRules
