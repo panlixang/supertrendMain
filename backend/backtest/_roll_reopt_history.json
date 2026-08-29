@@ -1,0 +1,26 @@
+{
+  "last_run_ts": 1787995371982,
+  "last_run_date": "2026-08-29",
+  "runs": [
+    {
+      "date": "2026-08-29",
+      "bars": {
+        "QQQ-USDT-SWAP": 4273
+      },
+      "best": {
+        "QQQ-USDT-SWAP": {
+          "periods": 17,
+          "multiplier": 3.5,
+          "min_score_100": 45,
+          "pnl_u": 15.13,
+          "max_dd_pct": 4.35,
+          "trades": 74,
+          "win_rate": 54.1,
+          "profit_factor": 1.77,
+          "score": 3.478,
+          "is_current_st": false
+        }
+      }
+    }
+  ]
+}

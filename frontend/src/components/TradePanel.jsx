@@ -42,6 +42,7 @@ export default function TradePanel() {
   const [apiSecret, setApiSecret] = useState('');
   const [apiPhrase, setApiPhrase] = useState('');
   const [savingKey, setSavingKey] = useState(false);
+  const [reopt, setReopt] = useState(null);
 
   useEffect(() => {
     if (!cfg) return;
@@ -61,6 +62,21 @@ export default function TradePanel() {
     const iv = setInterval(load, 20000);
     return () => { dead = true; clearInterval(iv); };
   }, [tf]);
+
+  // 每月28日自动寻优的结果，拉下来供手动确认应用（60s 轮询，寻优完成后自动出现）
+  useEffect(() => {
+    let dead = false;
+    const load = async () => {
+      try {
+        const r = await fetch(`${API}/api/trade/reopt-results`);
+        const d = await r.json();
+        if (!dead && d.ok) setReopt(d.results);
+      } catch {}
+    };
+    load();
+    const iv = setInterval(load, 60000);
+    return () => { dead = true; clearInterval(iv); };
+  }, []);
 
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(''), 4500); };
 
@@ -190,6 +206,21 @@ export default function TradePanel() {
       else flash(d.error || '保存失败');
       return d.ok;
     } catch { flash('网络错误'); return false; }
+  }
+
+  // 手动确认应用寻优参数（每月28日寻优结果，不自动更新）
+  async function applyReopt(sym, best) {
+    if (!window.confirm(
+      `确认把 ${sym} 参数更新为 ${best.periods}×${best.multiplier}（分数 ≥${best.min_score_100}）？\n` +
+      `回测: ${best.pnl_u}U / ${best.trades}笔 / 胜率 ${best.win_rate}% / 回撤 ${best.max_dd_pct}%`
+    )) return;
+    await patchSymbol(sym, {
+      rescan: true,
+      periods: best.periods,
+      multiplier: best.multiplier,
+      scoring_full_threshold: best.min_score_100,
+      scoring_half_threshold: best.min_score_100,
+    }, `${sym} 已应用寻优参数 ${best.periods}×${best.multiplier} s${best.min_score_100}`);
   }
 
   async function removeSymbol(sym) {
@@ -564,6 +595,60 @@ export default function TradePanel() {
           ))}
         </Section>
       )}
+
+      {/* ── 最新参数寻优（每月28日自动跑，手动确认应用） ── */}
+      <Section title="最新参数寻优（每月28日自动 · 手动确认应用）">
+        {!reopt && (
+          <div style={{ fontSize: 10, color: '#4a5058', padding: '8px 0', lineHeight: 1.7 }}>
+            尚无寻优结果。每月 28 日 00:00 自动对全部品种跑一轮参数寻优，
+            完成后在此展示，由你手动确认后才会更新到线上。
+          </div>
+        )}
+        {reopt && Object.entries(reopt.best || {}).map(([sym, best]) => {
+          const c = rows.find((x) => x.symbol === sym);
+          const curP = c?.params;
+          const curT = c?.scoring_full_threshold;
+          const applied = !!c && curP?.periods === best.periods
+            && +curP?.multiplier === +best.multiplier
+            && curT === best.min_score_100;
+          const prev = (reopt.prev || {})[sym];
+          const drift = (reopt.drift || {})[sym] || '—';
+          const pf = best.profit_factor == null ? 'inf' : best.profit_factor.toFixed(2);
+          return (
+            <div key={sym} style={{ ...sty.card, padding: '7px 9px', gap: 4,
+                                    borderColor: applied ? '#00c9a733' : '#f5a62344' }}>
+              <div style={sty.rowBetween}>
+                <span style={{ fontSize: 11, fontWeight: 800 }}>{sym}</span>
+                <span style={{ fontSize: 9, color: drift.includes('漂移') ? '#f5a623' : '#00c9a7' }}>
+                  {drift}
+                </span>
+              </div>
+              <div style={{ fontSize: 9, color: '#8b93a0', lineHeight: 1.7, fontFamily: 'var(--font-mono)' }}>
+                当前 {curP ? `${curP.periods}×${curP.multiplier} s${curT ?? '—'}` : '未配置'}
+                {'　→　'}最优 <b style={{ color: '#e9ecef' }}>{best.periods}×{best.multiplier} s{best.min_score_100}</b>
+                {prev && prev.periods !== best.periods && (
+                  <span>（上次 {prev.periods}×{prev.multiplier} s{prev.min_score_100}）</span>
+                )}
+              </div>
+              <div style={{ fontSize: 8.5, color: '#5a6270', lineHeight: 1.6 }}>
+                寻优 {reopt.date} · 数据 {(reopt.bars || {})[sym] ?? '—'} 根 · 回测 {best.pnl_u}U / {best.trades}笔 /
+                胜率 {best.win_rate}% / PF {pf} / 回撤 {best.max_dd_pct}%
+              </div>
+              {!applied && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button onClick={() => applyReopt(sym, best)}
+                          style={{ ...sty.smallBtn, borderColor: '#00c9a755', color: '#00c9a7' }}>
+                    确认应用该参数
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {reopt && !Object.keys(reopt.best || {}).length && (
+          <div style={{ fontSize: 10, color: '#4a5058', padding: '8px 0' }}>本轮寻优无满足样本的结果</div>
+        )}
+      </Section>
     </div>
   );
 }

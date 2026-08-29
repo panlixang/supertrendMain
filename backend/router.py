@@ -1,7 +1,9 @@
 """HTTP / WebSocket 路由"""
 
 import asyncio
+import json
 import logging
+import os
 import time
 from dataclasses import replace
 from functools import partial
@@ -742,6 +744,51 @@ async def _load_symbol_history(sym: str):
         logger.info(f"[{sym}] 历史加载完成，进入实时监控")
     except Exception as e:
         logger.warning(f"[{sym}] 历史加载失败: {e}")
+
+
+# ── 月度参数寻优结果（本地滚动寻优上传 / 前端展示，手动确认后才应用） ──
+REOPT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reopt_results.json")
+
+
+class ReoptUpload(BaseModel):
+    date:   str           = ""
+    bars:   dict          = {}
+    best:   dict          = {}
+    prev:   dict          = {}
+    drift:  dict          = {}
+    secret: Optional[str] = None
+
+
+@router.get("/api/trade/reopt-results")
+async def get_reopt_results():
+    """前端读取最近一轮寻优结果（挂单页「最新寻优」展示用）。"""
+    if not os.path.exists(REOPT_FILE):
+        return {"ok": False, "error": "尚无寻优结果，等待每月 28 日自动寻优", "results": None}
+    try:
+        with open(REOPT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"ok": True, "results": data}
+    except Exception as e:
+        logger.warning(f"读取寻优结果失败: {e}")
+        return {"ok": False, "error": f"读取失败: {e}", "results": None}
+
+
+@router.post("/api/trade/reopt-results")
+async def post_reopt_results(body: ReoptUpload):
+    """本地滚动寻优脚本上传最近一轮结果。可选 REOPT_SECRET 环境变量校验。"""
+    secret = os.environ.get("REOPT_SECRET", "")
+    if secret and body.secret != secret:
+        return {"ok": False, "error": "secret 校验失败"}
+    try:
+        tmp = REOPT_FILE + ".tmp"
+        payload = body.model_dump(exclude={"secret"})
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, REOPT_FILE)
+        return {"ok": True, "saved": payload["date"]}
+    except Exception as e:
+        logger.warning(f"保存寻优结果失败: {e}")
+        return {"ok": False, "error": f"保存失败: {e}"}
 
 
 @router.post("/api/trade/symbols")
