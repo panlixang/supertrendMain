@@ -689,6 +689,15 @@ async def query_order(inst_id: str, order_id: str, category: str = "SWAP",
     return {"ok": r.get("code") == "0", "data": _first(r), "error": None if r.get("code") == "0" else _err(r)}
 
 
+async def get_market_price(inst_id: str, category: str = "SWAP",
+                           sim: bool | None = None) -> float | None:
+    """当前交易所的实时价格。Bitget 走交易所公共行情，OKX 由调用方直接用本地 ticker。"""
+    if _use_bitget():
+        import bitget_trade
+        return await bitget_trade.get_market_price(inst_id, category, sim=sim)
+    return None
+
+
 async def ping(sim: bool | None = None) -> dict:
     """连通性 + 密钥有效性自检：查账户余额。"""
     if _use_bitget():

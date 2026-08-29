@@ -242,6 +242,13 @@ class Executor:
             logger.warning(f"[开仓前清挂单失败] {symbol}: {e}")
 
         last = self.store.ticker.last or sig["price"]
+        if getattr(trade, "exchange", "okx") == "bitget":
+            market_px = await trade.get_market_price(symbol, cfg.category, sim=cfg.paper)
+            if not market_px:
+                err = f"Bitget 实时价格获取失败，未使用图表价下单"
+                logger.warning(f"[{symbol}] {err}")
+                return await self._record({"ok": False, "error": err, "price": sig.get("price")}, extra)
+            last = market_px
         px = regime.limit_price(sig, cfg, last)
         side = "buy" if sig["type"] == "buy" else "sell"
         margin, how = await self._resolve_margin()

@@ -201,6 +201,30 @@ async def get_spec(inst_id: str, inst_type: str = "SWAP") -> dict:
     }
 
 
+async def get_market_price(inst_id: str, category: str = "SWAP",
+                           sim: bool | None = None) -> float | None:
+    """拉取 Bitget 指定品种的最新成交价。"""
+    if not configured:
+        return None
+    if category != "SWAP":
+        return None
+    sym = to_symbol(inst_id)
+    params = {"productType": PRODUCT, "symbol": sym}
+    loop = asyncio.get_event_loop()
+    r = await loop.run_in_executor(None, _request, "GET",
+                                   "/api/v2/mix/market/symbol-price", params,
+                                   False, False)
+    if not _ok(r):
+        logger.warning(f"Bitget 实时价格获取失败: {_err(r)}")
+        return None
+    data = r.get("data") or []
+    if isinstance(data, dict):
+        data = [data]
+    row = data[0] if data else {}
+    price = _num(row.get("price") or row.get("lastPr") or row.get("markPrice"))
+    return price or None
+
+
 async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
                        sim: bool | None = None) -> dict:
     if not configured:
