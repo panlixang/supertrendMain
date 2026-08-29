@@ -132,6 +132,24 @@ class SymbolTradeConfig:
     use_dynamic_threshold:  bool  = True   # 是否启用动态阈值（推荐开启）
 
 
+# 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；
+# 子串匹配（兼容 -USDT / -USDT-SWAP 后缀），未知品种回退 80/60/40。
+_SCORE_DEFAULTS: dict[str, tuple[float, float, float]] = {
+    "ETH":  (35.0, 35.0, 30.0),
+    "MU":   (40.0, 40.0, 30.0),
+    "SNDK": (65.0, 65.0, 55.0),
+    "SPCX": (50.0, 50.0, 40.0),
+}
+
+
+def _score_defaults_for(symbol: str) -> tuple[float, float, float]:
+    s = (symbol or "").upper()
+    for key, val in _SCORE_DEFAULTS.items():
+        if key in s:
+            return val
+    return (80.0, 60.0, 40.0)
+
+
 class SymbolStore:
     """一个品种的全部运行时数据。cfg=None 表示「仅看图」，结构上不可能下单。"""
 
@@ -259,8 +277,14 @@ class AppState:
         self._load_settings()
         if not self.stores:
             # 全新启动：给默认品种建一个 store，enabled=False 等用户手动开
+            _def_full, _def_half, _def_alert = _score_defaults_for(self.current_symbol)
             self.stores[self.current_symbol] = SymbolStore(
-                self.current_symbol, cfg=SymbolTradeConfig(symbol=self.current_symbol),
+                self.current_symbol, cfg=SymbolTradeConfig(
+                    symbol=self.current_symbol,
+                    scoring_full_threshold=_def_full,
+                    scoring_half_threshold=_def_half,
+                    scoring_alert_threshold=_def_alert,
+                ),
             )
 
     # ── 视图委托：图表 / 回测 / 参数页只关心 current_symbol ─────────
@@ -448,6 +472,7 @@ class AppState:
                     continue
                 symbol = str(e["symbol"]).upper()
                 # 从全局配置作为默认值，再用品种配置覆盖
+                _def_full, _def_half, _def_alert = _score_defaults_for(symbol)
                 cfg = SymbolTradeConfig(
                     symbol=symbol,
                     margin_usdt=e.get("margin_usdt", self.trade_cfg.amount_usdt),
@@ -475,11 +500,11 @@ class AppState:
                     adx_filter_enabled=e.get("adx_filter_enabled", False),
                     adx_min=e.get("adx_min", 20.0),
                     adx_period=e.get("adx_period", 14),
-                    # 信号打分制（平衡型方案）
+                    # 信号打分制（平衡型方案；存档无评分字段时用寻优默认值）
                     use_scoring=e.get("use_scoring", True),
-                    scoring_full_threshold=e.get("scoring_full_threshold", 80.0),
-                    scoring_half_threshold=e.get("scoring_half_threshold", 60.0),
-                    scoring_alert_threshold=e.get("scoring_alert_threshold", 40.0),
+                    scoring_full_threshold=e.get("scoring_full_threshold", _def_full),
+                    scoring_half_threshold=e.get("scoring_half_threshold", _def_half),
+                    scoring_alert_threshold=e.get("scoring_alert_threshold", _def_alert),
                     use_dynamic_threshold=e.get("use_dynamic_threshold", True),
                 )
                 # 覆盖其他字段
@@ -548,6 +573,7 @@ class AppState:
                 use_enhanced = False
 
             symbol = self.current_symbol
+            _def_full, _def_half, _def_alert = _score_defaults_for(symbol)
             cfg = SymbolTradeConfig(
                 symbol=symbol,
                 margin_usdt=self.trade_cfg.amount_usdt,
@@ -562,6 +588,12 @@ class AppState:
                 allow_grades=list(self.trade_cfg.allow_grades),
                 min_score=self.trade_cfg.min_score,
                 cooldown_sec=self.trade_cfg.cooldown_sec,
+                # 信号打分制（寻优默认值）
+                use_scoring=True,
+                scoring_full_threshold=_def_full,
+                scoring_half_threshold=_def_half,
+                scoring_alert_threshold=_def_alert,
+                use_dynamic_threshold=True,
             )
             params = Params()
             for k, v in (data.get("params") or {}).items():
