@@ -1,0 +1,250 @@
+{
+  "ETH": {
+    "A_原口径_弱档裸奔": {
+      "pnl_u": 48.48,
+      "max_dd_pct": 8.58,
+      "trades": 61,
+      "quick_trades": 8,
+      "win_rate": 86.9,
+      "profit_factor": 2.95,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 8,
+          "pnl_u": 28.89,
+          "win_rate": 75.0,
+          "avg_pnl": 3.61,
+          "pf": 5.28
+        },
+        "normal": {
+          "trades": 53,
+          "pnl_u": 22.58,
+          "win_rate": 88.7,
+          "avg_pnl": 0.43,
+          "pf": 2.15
+        }
+      }
+    },
+    "B_实盘同口径_带弱档规则": {
+      "pnl_u": 21.49,
+      "max_dd_pct": 7.8,
+      "trades": 61,
+      "quick_trades": 8,
+      "win_rate": 88.5,
+      "profit_factor": 2.06,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 8,
+          "pnl_u": 1.91,
+          "win_rate": 87.5,
+          "avg_pnl": 0.24,
+          "pf": 1.57
+        },
+        "normal": {
+          "trades": 53,
+          "pnl_u": 22.58,
+          "win_rate": 88.7,
+          "avg_pnl": 0.43,
+          "pf": 2.15
+        }
+      }
+    },
+    "C_彻底关弱档": {
+      "pnl_u": 4.59,
+      "max_dd_pct": 6.8,
+      "trades": 12,
+      "quick_trades": 0,
+      "win_rate": 91.7,
+      "profit_factor": 2.16,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 0
+        },
+        "normal": {
+          "trades": 12,
+          "pnl_u": 5.17,
+          "win_rate": 91.7,
+          "avg_pnl": 0.43,
+          "pf": 2.16
+        }
+      }
+    },
+    "D_弱档用正常档规则": {
+      "pnl_u": 21.19,
+      "max_dd_pct": 8.25,
+      "trades": 61,
+      "quick_trades": 8,
+      "win_rate": 86.9,
+      "profit_factor": 2.05,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 8,
+          "pnl_u": 1.61,
+          "win_rate": 75.0,
+          "avg_pnl": 0.2,
+          "pf": 1.48
+        },
+        "normal": {
+          "trades": 53,
+          "pnl_u": 22.58,
+          "win_rate": 88.7,
+          "avg_pnl": 0.43,
+          "pf": 2.15
+        }
+      }
+    },
+    "E_弱档并入正常档_er_min=0.12": {
+      "pnl_u": 21.19,
+      "max_dd_pct": 8.25,
+      "trades": 61,
+      "quick_trades": 0,
+      "win_rate": 86.9,
+      "profit_factor": 2.05,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 0
+        },
+        "normal": {
+          "trades": 61,
+          "pnl_u": 24.19,
+          "win_rate": 86.9,
+          "avg_pnl": 0.4,
+          "pf": 2.05
+        }
+      }
+    }
+  },
+  "BTC": {
+    "A_原口径_弱档裸奔": {
+      "pnl_u": 44.11,
+      "max_dd_pct": 7.27,
+      "trades": 42,
+      "quick_trades": 4,
+      "win_rate": 81.0,
+      "profit_factor": 3.9,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 4,
+          "pnl_u": 24.03,
+          "win_rate": 75.0,
+          "avg_pnl": 6.01,
+          "pf": 81.1
+        },
+        "normal": {
+          "trades": 38,
+          "pnl_u": 22.15,
+          "win_rate": 81.6,
+          "avg_pnl": 0.58,
+          "pf": 2.42
+        }
+      }
+    },
+    "B_实盘同口径_带弱档规则": {
+      "pnl_u": 23.08,
+      "max_dd_pct": 7.27,
+      "trades": 42,
+      "quick_trades": 4,
+      "win_rate": 83.3,
+      "profit_factor": 2.61,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 4,
+          "pnl_u": 3.0,
+          "win_rate": 100.0,
+          "avg_pnl": 0.75,
+          "pf": null
+        },
+        "normal": {
+          "trades": 38,
+          "pnl_u": 22.15,
+          "win_rate": 81.6,
+          "avg_pnl": 0.58,
+          "pf": 2.42
+        }
+      }
+    },
+    "C_彻底关弱档": {
+      "pnl_u": -0.69,
+      "max_dd_pct": 5.2,
+      "trades": 8,
+      "quick_trades": 0,
+      "win_rate": 62.5,
+      "profit_factor": 0.94,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 0
+        },
+        "normal": {
+          "trades": 8,
+          "pnl_u": -0.29,
+          "win_rate": 62.5,
+          "avg_pnl": -0.04,
+          "pf": 0.94
+        }
+      }
+    },
+    "D_弱档用正常档规则": {
+      "pnl_u": 28.82,
+      "max_dd_pct": 7.23,
+      "trades": 42,
+      "quick_trades": 4,
+      "win_rate": 83.3,
+      "profit_factor": 2.98,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 4,
+          "pnl_u": 8.74,
+          "win_rate": 100.0,
+          "avg_pnl": 2.19,
+          "pf": null
+        },
+        "normal": {
+          "trades": 38,
+          "pnl_u": 22.15,
+          "win_rate": 81.6,
+          "avg_pnl": 0.58,
+          "pf": 2.42
+        }
+      }
+    },
+    "E_弱档并入正常档_er_min=0.12": {
+      "pnl_u": 28.82,
+      "max_dd_pct": 7.23,
+      "trades": 42,
+      "quick_trades": 0,
+      "win_rate": 83.3,
+      "profit_factor": 2.98,
+      "start": "2026-02-22",
+      "end": "2026-08-29",
+      "agg": {
+        "quick": {
+          "trades": 0
+        },
+        "normal": {
+          "trades": 42,
+          "pnl_u": 30.89,
+          "win_rate": 83.3,
+          "avg_pnl": 0.74,
+          "pf": 2.98
+        }
+      }
+    }
+  }
+}

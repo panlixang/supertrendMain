@@ -101,6 +101,7 @@ def run_backtest(
     candles_by_tf: dict[str, list[dict]] | None = None,
     score_only_gate: bool = False,
     min_total_score: float = 60.0,
+    block_untradable: bool = False,
 ) -> dict:
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
@@ -131,12 +132,16 @@ def run_backtest(
                 out[tf] = sl
         return out or {gate_tf: candles[: i + 1]}
 
-    # 两档出场规则。弱档三个条件都齐才算启用（有闸门、有弱档下界、有弱档规则），
-    # 缺任何一个都退回「低于 er_min 一律拦」的老行为。
+    # 两档出场规则。弱档启用条件：
+    #  - live_gate（评分/实盘闸门）模式：只要传了弱档规则就启用，profile 由
+    #    score_signal 内部 classify 算出（ER∈[er_weak_min,er_min) → "quick"）。
+    #  - 老的非 live_gate 模式：三个条件都齐才算启用（有弱档下界、有弱档规则），
+    #    缺任何一个都退回「低于 er_min 一律拦」的老行为。
     # 增强版：enabled=False 仍保留规则（只关价格止损，三级止盈照常）。
     rules_normal = exit_rules if _rules_active(exit_rules) else _OFF
-    quick_on = (er_min is not None and er_weak_min is not None
-                and _rules_active(exit_rules_quick))
+    quick_on = (_rules_active(exit_rules_quick)
+                and (live_gate is not None
+                     or (er_min is not None and er_weak_min is not None)))
     rules_by = {"normal": rules_normal,
                 "quick": exit_rules_quick if quick_on else _OFF}
     lev = max(1, int(leverage))
@@ -287,6 +292,10 @@ def run_backtest(
                     candles_by_tf=_cbtf_at(i), p=p,
                 )
                 if sc["total_score"] < min_total_score:
+                    return False, profile
+                # 彻底关弱档：非 tradable（edge/range）信号直接拦掉，只下标准档。
+                # 实盘打分制默认不拦（executor 只看分数）；此开关用于「假设关弱档」回测。
+                if block_untradable and not sc["regime"].get("tradable", True):
                     return False, profile
                 return True, sc["regime"].get("profile") or "normal"
             gate = enhanced_signal_handler(

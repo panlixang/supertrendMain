@@ -1,0 +1,257 @@
+{
+  "baseline": {
+    "cfg": {
+      "er_min": 0.15,
+      "er_weak_min": 0.12,
+      "quick_enabled": true,
+      "use_dynamic_threshold": true,
+      "scoring_full_threshold": 35.0,
+      "margin_usdt": 10.0,
+      "leverage": 10
+    },
+    "trades": 61,
+    "quick_trades": 8,
+    "win_rate": 88.5,
+    "profit_factor": 2.06,
+    "max_dd_pct": 7.8,
+    "pnl_u": 21.49,
+    "start": "2026-02-22",
+    "end": "2026-08-29"
+  },
+  "er012_only_no_quick": {
+    "scan": [
+      {
+        "score": 15,
+        "pnl_u": 12.52,
+        "trades": 65,
+        "quick_trades": 0,
+        "win_rate": 83.1,
+        "pf": 1.49,
+        "dd": 11.17
+      },
+      {
+        "score": 20,
+        "pnl_u": 12.52,
+        "trades": 65,
+        "quick_trades": 0,
+        "win_rate": 83.1,
+        "pf": 1.49,
+        "dd": 11.17
+      },
+      {
+        "score": 25,
+        "pnl_u": 12.52,
+        "trades": 65,
+        "quick_trades": 0,
+        "win_rate": 83.1,
+        "pf": 1.49,
+        "dd": 11.17
+      },
+      {
+        "score": 30,
+        "pnl_u": 21.19,
+        "trades": 61,
+        "quick_trades": 0,
+        "win_rate": 86.9,
+        "pf": 2.05,
+        "dd": 8.25
+      },
+      {
+        "score": 35,
+        "pnl_u": 21.19,
+        "trades": 61,
+        "quick_trades": 0,
+        "win_rate": 86.9,
+        "pf": 2.05,
+        "dd": 8.25
+      },
+      {
+        "score": 40,
+        "pnl_u": 21.19,
+        "trades": 61,
+        "quick_trades": 0,
+        "win_rate": 86.9,
+        "pf": 2.05,
+        "dd": 8.25
+      },
+      {
+        "score": 45,
+        "pnl_u": 19.51,
+        "trades": 58,
+        "quick_trades": 0,
+        "win_rate": 86.2,
+        "pf": 1.97,
+        "dd": 8.51
+      },
+      {
+        "score": 50,
+        "pnl_u": 11.35,
+        "trades": 40,
+        "quick_trades": 0,
+        "win_rate": 87.5,
+        "pf": 1.83,
+        "dd": 8.8
+      },
+      {
+        "score": 55,
+        "pnl_u": 11.35,
+        "trades": 40,
+        "quick_trades": 0,
+        "win_rate": 87.5,
+        "pf": 1.83,
+        "dd": 8.8
+      },
+      {
+        "score": 60,
+        "pnl_u": 4.11,
+        "trades": 17,
+        "quick_trades": 0,
+        "win_rate": 82.4,
+        "pf": 1.63,
+        "dd": 8.53
+      },
+      {
+        "score": 65,
+        "pnl_u": 0.74,
+        "trades": 12,
+        "quick_trades": 0,
+        "win_rate": 75.0,
+        "pf": 1.17,
+        "dd": 6.79
+      },
+      {
+        "score": 70,
+        "pnl_u": -3.27,
+        "trades": 9,
+        "quick_trades": 0,
+        "win_rate": 66.7,
+        "pf": 0.64,
+        "dd": 6.65
+      }
+    ],
+    "best_score": 30,
+    "best_pnl_u": 21.19
+  },
+  "er012_no_quick_block_range": {
+    "scan": [
+      {
+        "score": 15,
+        "pnl_u": 5.8,
+        "trades": 20,
+        "quick_trades": 0,
+        "win_rate": 85.0,
+        "pf": 1.87,
+        "dd": 8.41
+      },
+      {
+        "score": 20,
+        "pnl_u": 5.8,
+        "trades": 20,
+        "quick_trades": 0,
+        "win_rate": 85.0,
+        "pf": 1.87,
+        "dd": 8.41
+      },
+      {
+        "score": 25,
+        "pnl_u": 5.8,
+        "trades": 20,
+        "quick_trades": 0,
+        "win_rate": 85.0,
+        "pf": 1.87,
+        "dd": 8.41
+      },
+      {
+        "score": 30,
+        "pnl_u": 5.8,
+        "trades": 20,
+        "quick_trades": 0,
+        "win_rate": 85.0,
+        "pf": 1.87,
+        "dd": 8.41
+      },
+      {
+        "score": 35,
+        "pnl_u": 5.8,
+        "trades": 20,
+        "quick_trades": 0,
+        "win_rate": 85.0,
+        "pf": 1.87,
+        "dd": 8.41
+      },
+      {
+        "score": 40,
+        "pnl_u": 5.8,
+        "trades": 20,
+        "quick_trades": 0,
+        "win_rate": 85.0,
+        "pf": 1.87,
+        "dd": 8.41
+      },
+      {
+        "score": 45,
+        "pnl_u": 4.11,
+        "trades": 17,
+        "quick_trades": 0,
+        "win_rate": 82.4,
+        "pf": 1.63,
+        "dd": 8.53
+      },
+      {
+        "score": 50,
+        "pnl_u": 4.11,
+        "trades": 17,
+        "quick_trades": 0,
+        "win_rate": 82.4,
+        "pf": 1.63,
+        "dd": 8.53
+      },
+      {
+        "score": 55,
+        "pnl_u": 4.11,
+        "trades": 17,
+        "quick_trades": 0,
+        "win_rate": 82.4,
+        "pf": 1.63,
+        "dd": 8.53
+      },
+      {
+        "score": 60,
+        "pnl_u": 4.11,
+        "trades": 17,
+        "quick_trades": 0,
+        "win_rate": 82.4,
+        "pf": 1.63,
+        "dd": 8.53
+      },
+      {
+        "score": 65,
+        "pnl_u": 0.74,
+        "trades": 12,
+        "quick_trades": 0,
+        "win_rate": 75.0,
+        "pf": 1.17,
+        "dd": 6.79
+      },
+      {
+        "score": 70,
+        "pnl_u": -3.27,
+        "trades": 9,
+        "quick_trades": 0,
+        "win_rate": 66.7,
+        "pf": 0.64,
+        "dd": 6.65
+      }
+    ],
+    "best_score": 15,
+    "best_pnl_u": 5.8,
+    "dynamic_on": {
+      "pnl_u": 5.8,
+      "trades": 20
+    },
+    "dynamic_off": {
+      "pnl_u": 5.8,
+      "trades": 20
+    }
+  }
+}
