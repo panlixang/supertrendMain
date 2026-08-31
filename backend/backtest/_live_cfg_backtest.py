@@ -53,6 +53,10 @@ def fetch_candles(symbol: str, tf: str, limit: int) -> list[dict]:
             break
         for row in rows:
             try:
+                # 只收录已收盘 K（confirm=1），与实盘只在收盘判信号的口径一致；
+                # /market/candles 第一页最新一根通常是未收盘的，必须丢弃
+                if len(row) > 8 and row[8] != "1":
+                    continue
                 ts = int(row[0])
                 collected[ts] = {
                     "ts": ts, "o": float(row[1]), "h": float(row[2]),

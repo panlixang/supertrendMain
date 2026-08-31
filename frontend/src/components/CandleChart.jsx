@@ -234,11 +234,11 @@ export default function CandleChart() {
 
     // plotshape：Buy 标签打在 up 上，Sell 打在 dn 上
     // hidden=true → 完全不显示（ER 过低且不够干脆的噪声）
-    // will_trade===false 且非 hidden → 灰色半透明+X标记（被过滤器拦住，仍显示供参考）
+    // will_trade===false 且非 hidden → 被过滤器拦住：showBlocked 开=灰色+X显示，关=隐藏（只高亮符合下单条件的）
     if (opts.showSignals) {
       r.candle.setMarkers(
         (ind.signals || [])
-          .filter(s => !s.hidden)
+          .filter(s => !s.hidden && (opts.showBlocked || s.will_trade !== false))
           .map((s) => {
             const blocked = s.will_trade === false;
             const buyColor  = blocked ? '#4a7a6e' : C.buyLabel;
@@ -279,7 +279,7 @@ export default function CandleChart() {
     } else {
       r.candle.setMarkers([]);
     }
-  }, [sorted, ind, opts.highlighting, opts.showSignals, opts.showMA]);
+  }, [sorted, ind, opts.highlighting, opts.showSignals, opts.showMA, opts.showBlocked]);
 
   // 点击信号列表某条 → 把该 K 线滚到视野中间
   useEffect(() => {
@@ -309,6 +309,7 @@ function ChartOverlay({ ind }) {
 
   const TOGGLES = [
     { k: 'showSignals', label: '买卖信号', c: C.bull },
+    { k: 'showBlocked', label: '拦截信号', c: '#4a7a6e' },
     { k: 'highlighting', label: '高亮区', c: '#8b8b8b' },
     { k: 'barColoring', label: 'K线上色', c: '#8b8b8b' },
     { k: 'showMA', label: `MA${params.fast_len}/${params.slow_len}`, c: '#f5a623' },

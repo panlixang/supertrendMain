@@ -454,14 +454,23 @@ class OKXFeed:
                             candles_at_signal = candles[:sig_idx + 1]
                         else:
                             candles_at_signal = candles
-                        gate = regime.evaluate(s, candles_at_signal, cfg,
-                                             candles_by_tf=st_store.all_candles(),
-                                             p=st_store.params)
+                        # 与实时 _check_flip 同一套判定口径：动量突破/假突破/自适应 + 打分制
+                        gate = enhanced_signal_handler(
+                            s, candles_at_signal, cfg,
+                            candles_by_tf=st_store.all_candles(),
+                            p=st_store.params,
+                            use_momentum=True,
+                            use_false_filter=True,
+                            use_adaptive=True,
+                        )
                         s["hidden"] = gate.get("hidden", False)
                         s["will_trade"] = gate.get("trade", False)
                         s["gate_reasons"] = gate.get("reasons", [])
                         s["regime"] = gate.get("regime")
                         s["filters"] = gate.get("filters", {})
+                        s["profile"] = gate.get("profile")
+                        s["trade_half"] = gate.get("trade_half", False)
+                        s["score_detail"] = gate.get("score_detail")
                         out.append(s)
                 except Exception as e:
                     logger.warning(f"[{st_store.symbol} {tf}] 历史信号扫描失败: {e}")

@@ -121,6 +121,7 @@ export const useStore = create((set) => ({
     onlyCurrentTf: true, // 信号流是否只看当前周期
     sound: true,         // 信号提示音
     modal: true,         // 信号醒目弹窗
+    showBlocked: false,  // 不符合下单条件的信号（will_trade=false）是否灰色显示；关=只高亮符合的
   },
   toggleOpt: (k) => set((s) => ({ opts: { ...s.opts, [k]: !s.opts[k] } })),
 
