@@ -885,7 +885,9 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
             return {"ok": False, "error": err}
 
     # 闸门 / 指标 / 允许周期变化，或「保存所有配置」显式要求，都重扫历史信号
+    # enabled 也触发：打分制里 cfg.enabled=False → action=alert_only（will_trade=False），图表要跟着变
     _affects_signals = any(x is not None for x in [
+        body.enabled,
         body.er_hide_below, body.er_min, body.er_weak_min, body.er_trend,
         body.allow_grades, body.min_score, body.quick_enabled, body.allow_tfs,
         body.atr_filter_enabled, body.atr_vol_min,
