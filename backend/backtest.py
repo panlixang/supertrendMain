@@ -29,6 +29,8 @@ strategy.entry 反向进场会自动平掉原仓，所以这里就是「永远�
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import position
 import strategy
 from indicators import ma, st_signals, super_trend
@@ -119,7 +121,17 @@ def run_backtest(
     biases = _bias_series(candles, p) if bias_filter else []
     flip_at = {f["i"]: f["type"] for f in st["flips"]}
     trend, up, dn = st["trend"], st["up"], st["dn"]
-    sig_by_ts = {s["ts"]: s for s in st_signals(candles, st, gate_tf)} if live_gate else {}
+    sig_by_ts = {}
+    if live_gate:
+        # 与实盘一致：信号要带 grade（A/B/C），否则打分制里 grade=None 不在
+        # allow_grades 会一律 alert_only，回测全被拦成 0 交易
+        try:
+            verdict = strategy.mtf_bias(candles_by_tf or {gate_tf: candles}, p)["verdict"]
+        except Exception:
+            verdict = "mixed"
+        for s in st_signals(candles, st, gate_tf):
+            s["grade"] = strategy.grade(s, verdict)
+            sig_by_ts[s["ts"]] = s
 
     def _cbtf_at(i: int) -> dict[str, list[dict]]:
         ts = candles[i]["ts"]
@@ -284,6 +296,11 @@ def run_backtest(
             sig = sig_by_ts.get(candles[i]["ts"])
             if not sig or sig["type"] != typ:
                 return False, profile
+            # bias_filter 面板开关：只接受与 MA 偏向一致的开仓（实盘面板可勾选）
+            if bias_filter:
+                b = biases[i] if i < len(biases) else None
+                if (b == 1 and typ != "buy") or (b == -1 and typ != "sell"):
+                    return False, profile
             full = strategy.evaluate(_cbtf_at(i), p, sig)
             if score_only_gate:
                 from regime_scoring import score_signal
@@ -519,13 +536,17 @@ def sweep(candles: list[dict], base: dict, periods: list[int], mults: list[float
 
 def sweep_er(candles: list[dict], p: dict, er_list: list[float],
              fee_rate: float = 0.0005, allow_short: bool = True,
-             bias_filter: bool = False, **kw) -> list[dict]:
+             bias_filter: bool = False, live_gate: TradeConfig | None = None,
+             **kw) -> list[dict]:
     """扫 er_min 闸门阈值。第一行是「无闸门」基准，其余按传入顺序（不排序 ——
     这张表要看的是阈值升高时各指标的走势，重排就看不出单调性了）。"""
     out = []
     for em in [None] + list(er_list):
+        # live_gate 模式：把 er_min 覆盖进实盘口径闸门（第一行 None = 品种当前阈值）
+        lg = (replace(live_gate, er_min=em if em is not None else live_gate.er_min)
+              if live_gate else None)
         r = run_backtest(candles, p, fee_rate=fee_rate, allow_short=allow_short,
-                         bias_filter=bias_filter, er_min=em, **kw)
+                         bias_filter=bias_filter, er_min=em, live_gate=lg, **kw)
         if "error" in r:
             continue
         out.append({

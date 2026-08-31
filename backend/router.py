@@ -253,6 +253,30 @@ def _filter_kw(body) -> dict:
     }
 
 
+# 实盘口径回测：这些字段在增强闸门里也按「品种配置 + 面板显式覆盖」参与，
+# 否则回测走老版简化闸门，会漏掉打分制/动量突破/假突破/等级等实盘核心判定。
+_GATE_FIELDS = (
+    "er_min", "er_weak_min", "er_trend", "quick_enabled",
+    "atr_filter_enabled", "atr_vol_min",
+    "range_filter_enabled", "range_size_max", "range_touches_min",
+    "mtf_filter_enabled", "mtf_consistency_min", "mtf_flip_max",
+    "adx_filter_enabled", "adx_min", "adx_period",
+)
+
+
+def _live_gate(body):
+    """构造实盘口径闸门：当前品种完整配置（打分制/等级/动量/假突破/ER/过滤器），
+    面板显式传过的字段覆盖。返回 TradeConfig；不适用时返回 None 走老逻辑。"""
+    if not hasattr(body, "model_dump"):
+        return None
+    cfg = state.cfg_for(state.current_symbol)
+    for k, v in body.model_dump(exclude_unset=True).items():
+        if k in _GATE_FIELDS and v is not None:
+            cfg = replace(cfg, **{k: v})
+    # 回测语义：假设自动挂单开启 —— enabled 不参与，否则品种默认关着会被全拦成 0 交易
+    return replace(cfg, enabled=True)
+
+
 async def _candles_for(tf: str, bars: int):
     """优先用内存 deque；要的根数超出缓存时现拉 REST。"""
     if tf not in TF_CONFIG:
@@ -281,6 +305,8 @@ async def backtest(body: BacktestIn):
         init_cash=body.init_cash, fee_rate=body.fee_rate,
         allow_short=body.allow_short, bias_filter=body.bias_filter,
         er_min=body.er_min, **_engine_kw(body), **_filter_kw(body),
+        # 实盘口径：打分制/动量突破/假突破/等级全部参与，面板显式字段覆盖品种配置
+        live_gate=_live_gate(body),
     ))
     rules = _exit_rules_of(body)
     r.update({"tf": body.tf, "symbol": state.current_symbol,
@@ -339,7 +365,8 @@ async def sweep(body: SweepIn):
         candles, vars(state.params), periods, mults,
         fee_rate=body.fee_rate, allow_short=body.allow_short,
         bias_filter=body.bias_filter, er_min=body.er_min,
-        **_engine_kw(body), **_filter_kw(body)))
+        **_engine_kw(body), **_filter_kw(body),
+        live_gate=_live_gate(body)))
     return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
             "count": len(rows), "rows": rows[:60]}
 
@@ -395,7 +422,8 @@ async def sweep_er(body: ErSweepIn):
         bt.sweep_er,
         candles, _params_with(body), ers,
         fee_rate=body.fee_rate, allow_short=body.allow_short,
-        bias_filter=body.bias_filter, **_engine_kw(body), **_filter_kw(body)))
+        bias_filter=body.bias_filter, **_engine_kw(body), **_filter_kw(body),
+        live_gate=_live_gate(body)))
     return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
             "live_er_min": state.trade_cfg.er_min, "rows": rows}
 

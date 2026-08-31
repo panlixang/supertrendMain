@@ -257,7 +257,10 @@ def evaluate_enhanced(sig: dict, candles: list[dict], cfg: TradeConfig,
     result = regime.evaluate(sig, candles, adjusted_cfg, candles_by_tf, p)
 
     # 附加自适应信息
+    # 注意：打分制路径（regime.evaluate → regime_scoring.evaluate_enhanced）返回不含
+    # filters 键，直接索引会 KeyError，导致整个增强链路被 integration 静默回退——
+    # 动量/假突破检测就从未真正生效。用 setdefault 安全写入。
     if adjustments:
-        result["filters"]["adaptive"] = adjustments
+        result.setdefault("filters", {})["adaptive"] = adjustments
 
     return result
