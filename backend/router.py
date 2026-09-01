@@ -215,13 +215,15 @@ def _params_with(body) -> dict:
 
 
 def _exit_rules_of(body):
-    """以面板上的实盘规则为基准，用 body 里显式传的字段覆盖。
+    """以当前品种的实盘规则为基准（无品种则用全局），用 body 里显式传的字段覆盖。
 
-    这样回测默认跑的就是「你实盘现在这套」，想试别的再单独传。
+    这样回测默认跑的就是「这个品种实盘现在这套」，想试别的再单独传。
     """
     if not getattr(body, "use_exit_rules", False):
         return None
-    r = replace(state.exit_rules, enabled=True)
+    st = state.stores.get(state.current_symbol)
+    base = st.exit_rules if st else state.exit_rules
+    r = replace(base, enabled=True)
     for f in ("tp1_pct", "tp1_ratio", "move_sl_to_entry", "sl_mode", "sl_pct", "trail_with_st"):
         v = getattr(body, f, None)
         if v is not None:
