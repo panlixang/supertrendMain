@@ -180,6 +180,12 @@ class BacktestIn(BaseModel):
     # 弱档：er_min 和 use_exit_rules 都开时才有意义
     er_weak_min:     Optional[float] = None   # None = 不启用弱档
     quick_enabled:   bool  = False
+    # 实盘口径闸门覆盖字段：_GATE_FIELDS 里的字段必须在此声明，
+    # 否则 Pydantic 会丢弃请求体里的未知字段，_live_gate 永远覆盖不到
+    er_trend:            Optional[float] = None
+    mtf_filter_enabled:  Optional[bool]  = None
+    mtf_consistency_min: Optional[float] = None
+    mtf_flip_max:        Optional[int]   = None
     # 只在 use_exit_rules=True 时生效；不传的字段沿用面板上的实盘设置
     tp1_pct:          Optional[float] = None
     tp1_ratio:        Optional[float] = None
