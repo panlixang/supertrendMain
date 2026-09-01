@@ -101,6 +101,11 @@ def trade_cfg(sym: dict) -> TradeConfig:
         adx_filter_enabled=sym["adx_filter_enabled"],
         adx_min=sym["adx_min"],
         adx_period=sym["adx_period"],
+        use_scoring=sym.get("use_scoring", True),
+        scoring_full_threshold=sym.get("scoring_full_threshold", 80.0),
+        scoring_half_threshold=sym.get("scoring_half_threshold", 60.0),
+        scoring_alert_threshold=sym.get("scoring_alert_threshold", 40.0),
+        use_dynamic_threshold=sym.get("use_dynamic_threshold", True),
     )
 
 
@@ -127,6 +132,12 @@ def exit_rules(sym: dict) -> EnhancedExitRules:
 def main():
     live = _get(LIVE_URL)
     symbols = live["symbols"]
+    kw = sys.argv[1].upper() if len(sys.argv) > 1 else ""
+    if kw:
+        symbols = [s for s in symbols if kw in s["symbol"].upper()]
+    if not symbols:
+        print(f"无匹配品种: {kw or 'all'}", flush=True)
+        return
     results = []
 
     for sym in symbols:
