@@ -16,6 +16,7 @@ from history import load_history
 from router import router
 from state import state
 from integration import create_enhanced_executor
+from adopt import adopt_exchange_position
 import trade
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI):
         # 使用增强版执行器（支持三级止盈、智能止损、盈利保护）
         state.executors[sym] = create_enhanced_executor(state, st)
     # 重启会丢掉内存持仓，但交易所上的旧限价单还在。不撤的话事后成交就变成没人管的仓。
+    # 交易所有真实持仓而本地状态机为空时，自动接管重建本地持仓（止损/止盈立即生效）。
     if trade.configured:
         for sym in list(state.stores):
             try:
@@ -50,16 +52,26 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"启动清理挂单失败 [{sym}]: {r.get('error')}")
                 posr = await trade.get_positions(sym, state.trade_cfg.category, sim=state.trade_cfg.paper)
                 if posr.get("ok"):
+                    st = state.stores.get(sym)
+                    ex = state.executors.get(sym)
                     for row in posr.get("data") or []:
                         try:
                             q = abs(float(row.get("pos") or 0))
                         except (TypeError, ValueError):
                             q = 0
-                        if q > 0:
+                        if q <= 0:
+                            continue
+                        adopted = False
+                        if st and ex:
+                            try:
+                                adopted = await adopt_exchange_position(state, ex, st, row)
+                            except Exception as e:
+                                logger.warning(f"[启动接管失败] {sym}: {e}")
+                        if not adopted:
                             logger.warning(
                                 f"启动时交易所仍有仓 {row.get('instId')} "
                                 f"pos={row.get('pos')} avgPx={row.get('avgPx')} "
-                                f"— 本地持仓已空，请到 OKX 手动处理或点对账"
+                                f"— 本地持仓已空，请到交易所手动处理或点对账"
                             )
             except Exception as e:
                 logger.warning(f"启动清理挂单失败 [{sym}]: {e}")
