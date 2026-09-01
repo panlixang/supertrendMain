@@ -311,6 +311,9 @@ async def backtest(body: BacktestIn):
         init_cash=body.init_cash, fee_rate=body.fee_rate,
         allow_short=body.allow_short, bias_filter=body.bias_filter,
         er_min=body.er_min, **_engine_kw(body), **_filter_kw(body),
+        # 信号周期必须与数据周期一致，否则 1h 数据按默认 gate_tf=15m 标记信号，
+        # 会被 allow_tfs 硬检查全拦成 0 笔
+        gate_tf=body.tf,
         # 实盘口径：打分制/动量突破/假突破/等级全部参与，面板显式字段覆盖品种配置
         live_gate=_live_gate(body),
     ))
@@ -372,6 +375,7 @@ async def sweep(body: SweepIn):
         fee_rate=body.fee_rate, allow_short=body.allow_short,
         bias_filter=body.bias_filter, er_min=body.er_min,
         **_engine_kw(body), **_filter_kw(body),
+        gate_tf=body.tf,
         live_gate=_live_gate(body)))
     return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
             "count": len(rows), "rows": rows[:60]}
@@ -429,6 +433,7 @@ async def sweep_er(body: ErSweepIn):
         candles, _params_with(body), ers,
         fee_rate=body.fee_rate, allow_short=body.allow_short,
         bias_filter=body.bias_filter, **_engine_kw(body), **_filter_kw(body),
+        gate_tf=body.tf,
         live_gate=_live_gate(body)))
     return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
             "live_er_min": state.trade_cfg.er_min, "rows": rows}
