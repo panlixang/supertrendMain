@@ -1,0 +1,90 @@
+{
+ "window": [
+  "05-05",
+  "09-03"
+ ],
+ "bars": 2900,
+ "lev": 10,
+ "note": "43/47 线上 tp1_pct 现状=1.0; A=假设 1.5",
+ "A": {
+  "pnl_u": 7.37,
+  "roi_pct": 147.4,
+  "trades": 56,
+  "win_rate": 69.6,
+  "avg_win_roe": 18.9,
+  "avg_loss_roe": -31.4,
+  "profit_factor": 1.32,
+  "max_dd_pct": 10.27,
+  "tp1": 37,
+  "tp2": 24,
+  "tp3": 0,
+  "stops": 47,
+  "reverses": 8
+ },
+ "B": {
+  "pnl_u": 2.2,
+  "roi_pct": 44.0,
+  "trades": 56,
+  "win_rate": 67.9,
+  "avg_win_roe": 15.7,
+  "avg_loss_roe": -27.5,
+  "profit_factor": 1.14,
+  "max_dd_pct": 11.7,
+  "tp1": 40,
+  "tp2": 18,
+  "tp3": 0,
+  "stops": 49,
+  "reverses": 7
+ },
+ "holeB": [
+  {
+   "entry": "05-15",
+   "side": "short",
+   "reason": "保本止损",
+   "fav_roe": 13.7,
+   "final_roe": -4.0
+  },
+  {
+   "entry": "05-27",
+   "side": "short",
+   "reason": "保本止损",
+   "fav_roe": 14.8,
+   "final_roe": -3.8
+  },
+  {
+   "entry": "06-16",
+   "side": "short",
+   "reason": "反向信号",
+   "fav_roe": 45.3,
+   "final_roe": -21.9
+  },
+  {
+   "entry": "06-25",
+   "side": "short",
+   "reason": "保本止损",
+   "fav_roe": 12.5,
+   "final_roe": -7.5
+  },
+  {
+   "entry": "06-28",
+   "side": "long",
+   "reason": "止损",
+   "fav_roe": 10.9,
+   "final_roe": -23.1
+  },
+  {
+   "entry": "08-03",
+   "side": "long",
+   "reason": "保本止损",
+   "fav_roe": 10.9,
+   "final_roe": -0.4
+  },
+  {
+   "entry": "08-06",
+   "side": "long",
+   "reason": "反向信号",
+   "fav_roe": 18.0,
+   "final_roe": -38.6
+  }
+ ]
+}
