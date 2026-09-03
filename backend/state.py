@@ -130,6 +130,16 @@ class SymbolTradeConfig:
     scoring_alert_threshold: float = 40.0  # 提醒阈值：≥此分数仅提醒不下单
     # ── 动态ER阈值（平衡型方案）──
     use_dynamic_threshold:  bool  = True   # 是否启用动态阈值（推荐开启）
+    # ── 评分引擎（Engine Profile，阶段2）──
+    # 空 = 沿用旧二元开关口径（score_v2 由服务器全局默认提供，现均为 v1）；
+    # "v2"/"quality_filter_v2" = 连续软分引擎（快噪声品种）；
+    # "v1"/"trend_follow_v1" = 阶梯引擎（长趋势品种）。
+    score_engine:           str   = ""
+    # ── Shadow Mode（阶段3，默认关）──
+    # 非空 = 每次判单用该引擎再算一遍并落盘（backend/logs/shadow_<SYM>.jsonl），
+    # 用于验证回测引擎优势是否转移到实时（主引擎不变，只做对照采集）。
+    # 取值同 score_engine："" / "v1" / "v2" / "trend_follow_v1" / "quality_filter_v2"。
+    shadow_engine:          str   = ""
 
 
 # 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；
@@ -375,6 +385,9 @@ class AppState:
             scoring_half_threshold=sc.scoring_half_threshold,
             scoring_alert_threshold=sc.scoring_alert_threshold,
             use_dynamic_threshold=sc.use_dynamic_threshold,
+            # 评分引擎（Engine Profile）+ Shadow Mode（阶段3）
+            score_engine=sc.score_engine,
+            shadow_engine=sc.shadow_engine,
         )
 
     async def broadcast(self, msg: dict):
@@ -506,6 +519,8 @@ class AppState:
                     scoring_half_threshold=e.get("scoring_half_threshold", _def_half),
                     scoring_alert_threshold=e.get("scoring_alert_threshold", _def_alert),
                     use_dynamic_threshold=e.get("use_dynamic_threshold", True),
+                    score_engine=e.get("score_engine", ""),
+                    shadow_engine=e.get("shadow_engine", ""),
                 )
                 # 覆盖其他字段
                 if "enabled" in e:
@@ -594,6 +609,7 @@ class AppState:
                 scoring_half_threshold=_def_half,
                 scoring_alert_threshold=_def_alert,
                 use_dynamic_threshold=True,
+                score_engine="",
             )
             params = Params()
             for k, v in (data.get("params") or {}).items():

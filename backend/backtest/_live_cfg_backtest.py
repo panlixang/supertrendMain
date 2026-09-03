@@ -106,6 +106,7 @@ def trade_cfg(sym: dict) -> TradeConfig:
         scoring_half_threshold=sym.get("scoring_half_threshold", 60.0),
         scoring_alert_threshold=sym.get("scoring_alert_threshold", 40.0),
         use_dynamic_threshold=sym.get("use_dynamic_threshold", True),
+        score_engine=sym.get("score_engine", ""),
     )
 
 

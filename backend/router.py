@@ -765,6 +765,10 @@ class SymbolCfgIn(BaseModel):
     scoring_half_threshold:  Optional[float] = None
     scoring_alert_threshold: Optional[float] = None
     use_dynamic_threshold:   Optional[bool]  = None
+    # 评分引擎（Engine Profile）："" = 默认(v1)；"quality_filter_v2"/"v2" = V2 软分
+    score_engine:            Optional[str]   = None
+    # Shadow Mode（阶段3）：另一引擎名 = 每次判单双引擎对照落盘；"" = 关闭
+    shadow_engine:           Optional[str]   = None
     # 止盈止损（品种独立）
     exit_rules:            Optional[ExitRulesPatch] = None
     exit_rules_quick:      Optional[ExitRulesPatch] = None
@@ -910,6 +914,15 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if body.scoring_alert_threshold is not None:
         c.scoring_alert_threshold = max(0.0, min(100.0, body.scoring_alert_threshold))
     if body.use_dynamic_threshold is not None: c.use_dynamic_threshold = body.use_dynamic_threshold
+    # 评分引擎（Engine Profile）；空字符串 = 默认 v1
+    if body.score_engine is not None: c.score_engine = (body.score_engine or "").strip().lower()
+    # Shadow Mode（阶段3）：另一引擎名 = 双引擎对照采集；"" = 关闭。白名单防手滑。
+    if body.shadow_engine is not None:
+        _se = (body.shadow_engine or "").strip().lower()
+        if _se not in ("", "v1", "v2", "trend_follow_v1", "quality_filter_v2"):
+            return {"ok": False,
+                    "error": "shadow_engine 仅支持 空 / v1 / v2 / trend_follow_v1 / quality_filter_v2"}
+        c.shadow_engine = _se
 
     # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
@@ -938,6 +951,7 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
         body.periods, body.multiplier,
         body.use_scoring, body.scoring_full_threshold, body.scoring_half_threshold,
         body.scoring_alert_threshold, body.use_dynamic_threshold,
+        body.score_engine,
     ])
     did_rescan = False
     if (body.rescan or _affects_signals) and state.feed:

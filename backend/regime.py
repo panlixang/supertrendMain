@@ -115,6 +115,30 @@ class TradeConfig:
     scoring_alert_threshold: float = 40.0  # 提醒阈值：≥此分数仅提醒不下单
     # ── 动态ER阈值（平衡型方案）──
     use_dynamic_threshold:  bool  = True   # 是否启用动态阈值（推荐开启）
+    # ── Score V2（实验性，默认关）──
+    # v2 把"二元/阶梯评分"改成连续软分：signal_quality 按 body/volume/距轨
+    # 连续化，volatility 用 ATR ratio 软分（不再受 atr_filter_enabled 绑架），
+    # mtf 用大周期方向软分。raw 满分 110 → 归一 100。开关为假时保持 v1 现行口径。
+    # ⚠️ 分数口径变化后，scoring_full/half/alert 阈值必须重新标定再上线。
+    score_v2:               bool  = False
+    # ── 评分引擎（Engine Profile，阶段2）──
+    # 显式指定品种使用的评分引擎，优先于 score_v2（二元开关保留仅作旧配置兼容）：
+    #   "" / "trend_follow_v1"  → V1 阶梯式（长趋势品种，如 CL / SKHYNIX）
+    #   "v2" / "quality_filter_v2" → V2 连续软分（快噪声品种，如 NVDA）
+    # 新增品种引擎不必改代码：按品种在配置里填 engine 名即可。
+    score_engine:           str   = ""
+    # ── Shadow Mode（阶段3，默认关）──
+    # 设为另一引擎名（如主引擎是 v2，shadow_engine="trend_follow_v1"）时，
+    # 每次判单会额外用 shadow 引擎计算一遍并落盘（见 shadow.py），用于验证
+    # 回测优势是否转移到实时。空 = 关闭，零开销零落盘。
+    shadow_engine:          str   = ""
+    # 默认值 = 现行 v2 行为。品种画像可通过覆盖这些档位实现"同 feature 不同
+    # 权重"：长趋势品种（趋势第二阶段跟随是赢家）宜把反向档抬高到中性区，
+    # 噪声品种保持强反重罚。
+    mtf_align_score:        float = 20.0    # 大周期与信号同向
+    mtf_neutral_score:      float = 12.0    # 大周期无方向 / seed / 数据不足
+    mtf_recent_reverse_score: float = 8.0   # 大周期刚反向（切换中，轻微反）
+    mtf_strong_reverse_score: float = 4.0   # 大周期稳定反向（强反，重罚）
 
 
 def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,

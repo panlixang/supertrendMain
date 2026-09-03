@@ -104,6 +104,7 @@ def run_backtest(
     score_only_gate: bool = False,
     min_total_score: float = 60.0,
     block_untradable: bool = False,
+    full_trades: bool = False,
 ) -> dict:
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
@@ -490,7 +491,7 @@ def run_backtest(
         "liq_count":     n_liq,
         "skipped_insufficient": n_skip,
         "quick_trades":  sum(1 for t in trades if t.get("profile") == "quick"),
-        "trade_list":    trades[-80:],
+        "trade_list":    trades if full_trades else trades[-80:],
         "equity":        curve[:: max(1, len(curve) // 300)],   # 抽稀到 ~300 点
     }
 

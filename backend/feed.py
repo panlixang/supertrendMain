@@ -359,6 +359,17 @@ class OKXFeed:
         full["trade_half"] = gate.get("trade_half", False)
         full["score_detail"] = gate.get("score_detail")
 
+        # Shadow Mode（阶段3）：品种配置了 shadow_engine 时，双引擎对照落盘。
+        # 只在 cfg 显式开启时生效，默认零开销；异常绝不影响主流程（内部捕获）。
+        if getattr(cfg, "shadow_engine", ""):
+            try:
+                import shadow as _shadow
+                _p = vars(store.params) if hasattr(store.params, "__dict__") else store.params
+                _shadow.record_dispatch(cfg, store.symbol, full, candles,
+                                        store.all_candles(), _p, tf)
+            except Exception as _e:
+                logger.warning(f"[{store.symbol}] shadow 记录失败: {_e}")
+
         store.add_signal(full)
         # 非允许周期：只提醒、不进执行器。唯一例外是手里还捏着这个周期的残留仓
         # （例如曾经被动量捷径误开的 1m），允许同周期反向把它平掉。

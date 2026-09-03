@@ -761,6 +761,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   const [scoringHalf, setScoringHalf] = useState(c.scoring_half_threshold ?? 60);
   const [scoringAlert, setScoringAlert] = useState(c.scoring_alert_threshold ?? 40);
   const [useDynamic, setUseDynamic] = useState(c.use_dynamic_threshold ?? true);
+  // Engine Profile：评分引擎 + Shadow 影子引擎
+  const [engine, setEngine] = useState(c.score_engine || '');
+  const [shadowEngine, setShadowEngine] = useState(c.shadow_engine || '');
 
   useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
   useEffect(() => { setSizingMode(c.sizing_mode || 'fixed'); }, [c.sizing_mode]);
@@ -828,6 +831,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
     setUseDynamic(c.use_dynamic_threshold ?? true);
   }, [c.use_scoring, c.scoring_full_threshold, c.scoring_half_threshold,
       c.scoring_alert_threshold, c.use_dynamic_threshold]);
+  useEffect(() => { setEngine(c.score_engine || ''); }, [c.score_engine]);
+  useEffect(() => { setShadowEngine(c.shadow_engine || ''); }, [c.shadow_engine]);
 
   return (
     <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
@@ -1186,6 +1191,32 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 )}
               </div>
 
+              {/* Engine Profile：评分引擎 + Shadow Mode */}
+              <div style={sty.filterBlock}>
+                <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>评分引擎 / Shadow</div>
+                <div style={{ fontSize: 8.5, color: '#4a5058', marginBottom: 4 }}>
+                  主引擎按品种固化（V1 阶梯 / V2 连续软分）；Shadow = 副引擎对照落盘，不切换主引擎
+                </div>
+                <Row label="评分引擎" hint="按品种固化，参考 Adaptive Engine Advisor 建议">
+                  <select value={engine}
+                          onChange={(e) => setEngine(e.target.value)}
+                          style={{ ...sty.input, width: 150, fontSize: 10 }}>
+                    <option value="">自动（默认 V1 口径）</option>
+                    <option value="trend_follow_v1">V1 · trend_follow_v1</option>
+                    <option value="quality_filter_v2">V2 · quality_filter_v2</option>
+                  </select>
+                </Row>
+                <Row label="Shadow" hint="副引擎对照采集（logs/shadow_*.jsonl），留空关闭">
+                  <select value={shadowEngine}
+                          onChange={(e) => setShadowEngine(e.target.value)}
+                          style={{ ...sty.input, width: 150, fontSize: 10 }}>
+                    <option value="">关闭</option>
+                    <option value="trend_follow_v1">对比 V1 · trend_follow_v1</option>
+                    <option value="quality_filter_v2">对比 V2 · quality_filter_v2</option>
+                  </select>
+                </Row>
+              </div>
+
               {/* 动态阈值 */}
               <div style={sty.filterBlock}>
                 <div style={sty.rowBetween}>
@@ -1337,6 +1368,9 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     adx_period: adxPeriod,
                     // 平衡型方案：打分制 + 动态阈值
                     use_scoring: useScoring,
+                    // Engine Profile：评分引擎 + Shadow 影子引擎
+                    score_engine: engine,
+                    shadow_engine: shadowEngine,
                     scoring_full_threshold: scoringFull,
                     scoring_half_threshold: scoringHalf,
                     scoring_alert_threshold: scoringAlert,

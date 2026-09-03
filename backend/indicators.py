@@ -320,12 +320,14 @@ def st_signals(candles: list[dict], st: dict, tf: str) -> list[dict]:
         line = st["up"][i] if is_buy else st["dn"][i]      # 标签落点 / 初始止损
         ref  = st["dn"][i - 1] if is_buy else st["up"][i - 1]   # 被突破的轨（dn1/up1）
         dist = abs(c["c"] - ref) if ref is not None else 0.0
+        body = abs(c["c"] - c["o"])
+        base = vols[max(0, i - 20):i]
+        avgv = sum(base) / len(base) if base else 0.0
 
         score = 0
         if (is_buy and c["c"] > c["o"]) or (not is_buy and c["c"] < c["o"]):
             score += 1
-        base = vols[max(0, i - 20):i]
-        if base and c["vol"] > (sum(base) / len(base)) * 1.2:
+        if avgv > 0 and c["vol"] > avgv * 1.2:
             score += 1
         if a > 0 and dist > 0.3 * a:
             score += 1
@@ -339,6 +341,10 @@ def st_signals(candles: list[dict], st: dict, tf: str) -> list[dict]:
             "line":       line,
             "atr":        a,
             "score":      score,
+            # ── v2 打分要用的原始度量（v1 只消费 score，忽略这些字段）──
+            "body_atr":   round(body / a, 3) if a > 0 else None,   # 实体 / ATR
+            "vol_ratio":  round(c["vol"] / avgv, 2) if avgv > 0 else None,  # 量 / 前20均量
+            "dist_atr":   round(dist / a, 3) if a > 0 else 0.0,    # 距被突破轨 / ATR
             "bars_since": n - 1 - i,
             "pnl_pct":    round(chg if is_buy else -chg, 2),
         })
