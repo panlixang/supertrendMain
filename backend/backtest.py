@@ -41,6 +41,7 @@ from regime import TradeConfig, classify, efficiency_ratio
 try:
     from position_enhanced import (
         EnhancedExitRules, check_enhanced, apply_tp_enhanced, trail_enhanced,
+        enhanced_initial_stop,
     )
     _HAS_ENH = True
 except ImportError:
@@ -105,6 +106,9 @@ def run_backtest(
     min_total_score: float = 60.0,
     block_untradable: bool = False,
     full_trades: bool = False,
+    trend_align: dict[int, int] | None = None,
+    max_loss_pct: float | None = None,
+    enhanced_stop: bool = False,
 ) -> dict:
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
@@ -168,6 +172,8 @@ def run_backtest(
     peak = init_cash
     max_dd = 0.0
     n_block = n_tp1 = n_tp2 = n_tp3 = n_stop = n_rev = n_liq = n_skip = 0
+    n_ml = 0
+    n_align_block = 0
 
     def st_line(i: int) -> float | None:
         """该根的超趋线值，同 feed._st_line：多头取 up、空头取 dn。"""
@@ -235,10 +241,20 @@ def run_backtest(
             qty = equity / price
 
         sig = {"price": price, "type": typ, "line": st_line(i)}
+        # enhanced_stop: 对齐实盘 enhanced_initial_stop（3% 保底 / sl_min 下限 /
+        # ST∓0.5ATR 外扩取最远）。默认 False 保持历史口径（直接用 ST 线）。
+        if enhanced_stop and _HAS_ENH:
+            _a = (st.get("atr") or [None] * len(candles))[i]
+            try:
+                stop = enhanced_initial_stop(sig, rules_by[profile], _a, 1)
+            except Exception:
+                stop = position.initial_stop(sig, rules_by[profile])
+        else:
+            stop = position.initial_stop(sig, rules_by[profile])
         pos = position.Position(
             symbol="BT", side="long" if typ == "buy" else "short", tf="",
             entry=price, qty=qty, init_qty=qty,
-            stop=position.initial_stop(sig, rules_by[profile]),
+            stop=stop,
             leverage=lev, entry_ts=candles[i]["ts"], ct_val=1.0, profile=profile,
         )
         pos.tp2_done = False
@@ -363,24 +379,42 @@ def run_backtest(
         if pos and _rules_active(rules):
             adverse = c["l"] if pos.long else c["h"]
             liq = liq_price()
+            stop_px = pos.stop
+            is_ml = False
+            # 极端保护止损(max_loss_pct, 可选, 默认不模拟)：与实盘 check_enhanced
+            # 语义一致 —— max_loss 线比正常止损更近时先于它触发；否则它不单独生效
+            #（正常止损更近，价格到不了 max_loss 线；已保本后同样不会触发）。
+            if rules.enabled and max_loss_pct:
+                ml_px = pos.entry * (1 - max_loss_pct / 100) if pos.long \
+                    else pos.entry * (1 + max_loss_pct / 100)
+                ml_nearer = (ml_px > pos.stop) if pos.long else (ml_px < pos.stop)
+                if ml_nearer and (
+                        adverse <= ml_px if pos.long else adverse >= ml_px):
+                    stop_px = ml_px
+                    is_ml = True
             hit_s = rules.enabled and position.hit_stop(pos, adverse)
+            if is_ml:
+                hit_s = True
             hit_l = liq is not None and (adverse <= liq if pos.long else adverse >= liq)
             if hit_s or hit_l:
                 if hit_s and hit_l:
                     # 价格朝不利方向走，先碰到的是离开仓价更近的那个
-                    px = max(pos.stop, liq) if pos.long else min(pos.stop, liq)
+                    px = max(stop_px, liq) if pos.long else min(stop_px, liq)
                     was_liq = px == liq
                 else:
-                    px, was_liq = (liq, True) if hit_l else (pos.stop, False)
+                    px, was_liq = (liq, True) if hit_l else (stop_px, False)
                 # 跳空：开盘就已在止损之外时，只能成交在开盘价附近，
                 # 仍按止损价记账会系统性高估。取更不利的一边。
                 px = min(px, c["o"]) if pos.long else max(px, c["o"])
                 if was_liq:
                     n_liq += 1
+                elif is_ml:
+                    n_ml += 1
                 else:
                     n_stop += 1
                 close_part(i, px, pos.qty, "爆仓" if was_liq else
-                           ("保本止损" if pos.breakeven else "止损"))
+                           ("极端止损" if is_ml else
+                            ("保本止损" if pos.breakeven else "止损")))
             else:
                 favorable = c["h"] if pos.long else c["l"]
                 # 同根可连破多档：每档成交后重判，直到不再触发或仓位清完
@@ -428,10 +462,18 @@ def run_backtest(
                     close_part(i, price, pos.qty, "反向信号")
 
             if pos is None and not (typ == "sell" and not allow_short):
-                if gate_ok:
+                # 高周期方向同向过滤（可选）：只看开仓，反向仓照常先平。
+                d = None
+                if trend_align is not None:
+                    d = trend_align.get(candles[i]["ts"])
+                aligned = d is None or ((d == 1 and typ == "buy")
+                                        or (d == -1 and typ == "sell"))
+                if gate_ok and aligned:
                     open_pos(i, price, typ, profile)
-                elif live_gate or er_min is not None:
+                elif aligned and (live_gate or er_min is not None):
                     n_block += 1
+                elif not aligned:
+                    n_align_block += 1
 
         # ── 3) 收盘后随超趋线移动止损（对应 feed.on_st_line） ──
         # 注意重取规则：本根刚开的仓，循环顶部的 rules 还是开仓前的旧值
@@ -483,10 +525,12 @@ def run_backtest(
         "end_ts":        candles[-1]["ts"],
         # ── 闸门 / 离场统计 ──
         "er_blocked":    n_block,
+        "align_blocked": n_align_block,
         "tp1_count":     n_tp1,
         "tp2_count":     n_tp2,
         "tp3_count":     n_tp3,
         "stop_count":    n_stop,
+        "max_loss_count": n_ml,
         "reverse_count": n_rev,
         "liq_count":     n_liq,
         "skipped_insufficient": n_skip,
