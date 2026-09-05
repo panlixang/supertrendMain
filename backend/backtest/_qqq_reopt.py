@@ -41,7 +41,7 @@ QQQ_SYM = {
         "tp3_pct": 3.5, "tp3_ratio": 100.0, "tp3_mode": "reverse_signal",
         "sl_buffer_atr": 0.5, "sl_min_pct": 1.2,
         "protect_profit_at": 1.5, "protect_trail_pct": 0.8,
-        "max_loss_enabled": True, "max_loss_pct": 3.0,
+        "max_loss_enabled": False, "max_loss_pct": 3.0,
     },
     "margin_usdt": 10.0,
     "leverage": 10,

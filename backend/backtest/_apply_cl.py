@@ -62,7 +62,7 @@ def main():
         "scoring_half_threshold": 50.0,
         "scoring_alert_threshold": 40.0,
         "use_dynamic_threshold": True,
-        # 出场规则（寻优最优 tp 1.2/3/3.5, sl 2.0, ml 2.0）
+        # 出场规则（寻优最优 tp 1.2/3/3.5, sl 2.0, 极端止损关）
         "exit_rules": {
             "enabled": True,
             "tp1_pct": 1.2, "tp1_ratio": 30.0,
@@ -73,7 +73,7 @@ def main():
             "sl_mode": "st", "sl_pct": 2.0, "trail_with_st": True,
             "sl_buffer_atr": 0.5, "sl_min_pct": 1.2,
             "protect_profit_at": 1.5, "protect_trail_pct": 0.8,
-            "max_loss_enabled": True, "max_loss_pct": 2.0,
+            "max_loss_enabled": False, "max_loss_pct": 2.0,
         },
     }
     print("POST /api/trade/symbols ->", json.dumps(body))

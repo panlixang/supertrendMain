@@ -3,10 +3,10 @@
 
 SKHYNIX：8-31 TP 寻优对齐口径 —— 9×3.0 / ER 0.11/0.12/0.12/0.3 /
 打分制 70/70/60 动态、A/B min_score=2、过滤器全关、10U×10x 1h、
-exit_rules 现盘模板 sl 3.0/ml 3.0 + tp 决策 1.2/1.5/3.5。
+exit_rules 现盘模板 sl 3.0/极端止损关 + tp 决策 1.2/1.5/3.5。
 
 CL：寻优最优（_apply_cl.py 全套）—— 19×2.5 / ER 0.25/0.12/0.25 /
-打分制 50/50/40 min_score=0 动态、range 过滤器、tp 1.2/3/3.5、sl 2.0/ml 2.0。
+打分制 50/50/40 min_score=0 动态、range 过滤器、tp 1.2/3/3.5、sl 2.0/极端止损关。
 """
 import json
 import urllib.request
@@ -66,7 +66,7 @@ def skhynix_body():
         "scoring_half_threshold": 70.0,
         "scoring_alert_threshold": 60.0,
         "use_dynamic_threshold": True,
-        # 出场：tp 决策 1.2/1.5/3.5 + 现盘 sl 3.0 / ml 3.0
+        # 出场：tp 决策 1.2/1.5/3.5 + 现盘 sl 3.0 / 极端止损关
         "exit_rules": {
             "enabled": True,
             "tp1_pct": 1.2, "tp1_ratio": 30.0,
@@ -77,7 +77,7 @@ def skhynix_body():
             "sl_mode": "st", "sl_pct": 3.0, "trail_with_st": True,
             "sl_buffer_atr": 0.5, "sl_min_pct": 1.2,
             "protect_profit_at": 1.5, "protect_trail_pct": 0.8,
-            "max_loss_enabled": True, "max_loss_pct": 3.0,
+            "max_loss_enabled": False, "max_loss_pct": 3.0,
         },
     }
 
@@ -120,7 +120,7 @@ def cl_body():
         "scoring_half_threshold": 50.0,
         "scoring_alert_threshold": 40.0,
         "use_dynamic_threshold": True,
-        # 出场：tp 1.2/3/3.5, sl 2.0, ml 2.0
+        # 出场：tp 1.2/3/3.5, sl 2.0, 极端止损关
         "exit_rules": {
             "enabled": True,
             "tp1_pct": 1.2, "tp1_ratio": 30.0,
@@ -131,7 +131,7 @@ def cl_body():
             "sl_mode": "st", "sl_pct": 2.0, "trail_with_st": True,
             "sl_buffer_atr": 0.5, "sl_min_pct": 1.2,
             "protect_profit_at": 1.5, "protect_trail_pct": 0.8,
-            "max_loss_enabled": True, "max_loss_pct": 2.0,
+            "max_loss_enabled": False, "max_loss_pct": 2.0,
         },
     }
 

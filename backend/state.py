@@ -251,9 +251,9 @@ class AppState:
                 move_sl_to_entry=True, trail_with_st=True,
                 # 盈利保护
                 protect_profit_at=1.5, protect_trail_pct=0.8,
-                # 极端保护止损（新增）
-                max_loss_enabled=True,   # 启用极端保护
-                max_loss_pct=10.0,       # 最大亏损10%
+                # 极端保护止损（2026-09-05 起全线关闭）
+                max_loss_enabled=False,
+                max_loss_pct=10.0,
             )
             self.exit_rules_quick = EnhancedExitRules(
                 # 弱档：快进快出
@@ -266,9 +266,9 @@ class AppState:
                 sl_buffer_atr=0.3, sl_min_pct=1.0,
                 move_sl_to_entry=False, trail_with_st=False,
                 protect_profit_at=999, protect_trail_pct=0,
-                # 极端保护止损（新增）
-                max_loss_enabled=True,   # 启用极端保护
-                max_loss_pct=8.0,        # 快进快出档用更紧的8%
+                # 极端保护止损（2026-09-05 起全线关闭）
+                max_loss_enabled=False,
+                max_loss_pct=8.0,
             )
         except ImportError:
             # 回退到原版

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""关闭所有线上品种的极端保护止损(max_loss)。
+"""关闭 43/47 两台服务器所有线上品种的极端保护止损(max_loss)。
 
 普通档 + quick 档 exit_rules.max_loss_enabled -> False。
 改后 GET 验证打印。
@@ -7,7 +7,7 @@
 import json
 import urllib.request
 
-LIVE = "http://43.108.10.84:5174"
+HOSTS = ["http://43.108.10.84:5174", "http://47.84.106.154:5174"]
 HDR = {"Content-Type": "application/json", "User-Agent": "supertrend-bt/1.0"}
 
 
@@ -24,10 +24,10 @@ def get(url):
         return json.loads(resp.read())
 
 
-def main():
-    live = get(LIVE + "/api/trade/symbols")
-    syms = live["symbols"]
-    print(f"线上共 {len(syms)} 个品种\n")
+def process(host: str):
+    print(f"\n######## {host} ########", flush=True)
+    syms = get(host + "/api/trade/symbols")["symbols"]
+    print(f"品种 {len(syms)} 个\n", flush=True)
     for sym in syms:
         er = sym.get("exit_rules") or {}
         erq = sym.get("exit_rules_quick") or {}
@@ -40,7 +40,7 @@ def main():
             "exit_rules": {"max_loss_enabled": False},
             "exit_rules_quick": {"max_loss_enabled": False},
         }
-        r = post(LIVE + "/api/trade/symbols", body)
+        r = post(host + "/api/trade/symbols", body)
         if not r.get("ok"):
             print(f"  POST 失败: {r.get('error')}", flush=True)
             continue
@@ -51,13 +51,14 @@ def main():
               f"({er2.get('max_loss_pct')}) | quick ml="
               f"{erq2.get('max_loss_enabled')}({erq2.get('max_loss_pct')})",
               flush=True)
-    # 最终全量确认
-    print("\n=== 最终 GET 确认 ===", flush=True)
-    for sym in get(LIVE + "/api/trade/symbols")["symbols"]:
-        er = sym.get("exit_rules") or {}
-        erq = sym.get("exit_rules_quick") or {}
-        print(f"{sym['symbol']:<20} normal.ml_enabled={er.get('max_loss_enabled')}"
-              f"  quick.ml_enabled={erq.get('max_loss_enabled')}", flush=True)
+
+
+def main():
+    for host in HOSTS:
+        try:
+            process(host)
+        except Exception as e:
+            print(f"\n######## {host} ######## ERROR: {e}", flush=True)
 
 
 if __name__ == "__main__":

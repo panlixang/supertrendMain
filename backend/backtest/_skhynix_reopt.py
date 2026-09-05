@@ -2,7 +2,7 @@
 
 不在线上交易列表，出场对齐海力士现盘模板：
   10U×10x、TP1 1%/30 → TP2 2%/40 → 反向可下单信号全平、
-  保本、ST 跟踪、极端止损 3%。
+  保本、ST 跟踪、极端止损关（2026-09-05 起线上关闭）。
 口径：方案A er_min=0.12（弱档并入正常档），quick off。
 数据：本地 _live_data/SKHYNIX.json（1h 1925 根 + bias 周期，2026-06 上线）。
 """
@@ -39,7 +39,7 @@ LIVE_EXIT = {
     "move_sl_to_entry": True,
     "sl_mode": "st", "sl_pct": 3.0,
     "trail_with_st": True,
-    "max_loss_enabled": True, "max_loss_pct": 3.0,
+    "max_loss_enabled": False, "max_loss_pct": 3.0,
     "sl_buffer_atr": 0.5, "sl_min_pct": 1.2,
     "protect_profit_at": 1.5, "protect_trail_pct": 0.8,
 }
