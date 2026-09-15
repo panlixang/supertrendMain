@@ -335,7 +335,7 @@ def run_backtest(
                     candles_by_tf=_cbtf_at(i), p=p,
                 )
                 if sc["total_score"] < min_total_score:
-                    return False, profile
+                    return False, profile, 1.0
                 # 彻底关弱档：非 tradable（edge/range）信号直接拦掉，只下标准档。
                 # 实盘打分制默认不拦（executor 只看分数）；此开关用于「假设关弱档」回测。
                 if block_untradable and not sc["regime"].get("tradable", True):
@@ -584,6 +584,7 @@ def run_backtest(
         "alpha_pct":     round(ret - hold, 2),
         "max_dd_pct":    round(max_dd, 2),
         "trades":        len(trades),
+        "trades_list":   trades,   # 逐笔明细，供 regime 归因按笔贴标签（不改策略逻辑）
         "wins":          len(wins),
         "win_rate":      round(len(wins) / len(trades) * 100, 1) if trades else 0.0,
         "avg_win":       round(sum(t["pnl_pct"] for t in wins) / len(wins), 2) if wins else 0.0,

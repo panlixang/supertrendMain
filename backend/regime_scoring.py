@@ -19,7 +19,8 @@ Score V2（cfg.score_v2=True，默认关）：
       - mtf_alignment：大周期方向软分（0-20），4h 同向 20 / 中性 12 /
         刚反向(切换中) 8 / 稳定强反向 4；
       - er_momentum / breakout_boost / penalties：与 v1 完全一致。
-    raw 满分 = 30+25+15+20+20 = 110 → total = (raw + penalties) / 110 × 100。
+    各分项容量 30/25/15/20/20；权重 _V2_FACTOR_WEIGHTS 全 1.0（平衡冻结基线，
+    网格搜索未见稳健更优解）→ total = (weighted + penalties) / 110 × 100。
     ⚠️ 分数口径变化后 scoring_full/half/alert 阈值须重新标定再上线。
 """
 
@@ -310,6 +311,22 @@ def _mtf_soft_part(sig: dict, candles_by_tf: dict, p: dict,
     return s_strong, {**info, "note": "大周期稳定反向，强反"}
 
 
+# ===== V2 因子权重 =====
+# 2026-09 网格搜索（24 组合，ER×SQ×4H 三轴，train 03-06 选阈值 / OOS 07-09 评估）：
+# 各品种 OOS 期望在权重组合间基本持平（ETH 在所有组合下 OOS E 恒为 0.34；
+# MU/SPCX 的波动与阈值选择同量级，并非权重所致）。权重是低杠杆旋钮，无稳健更优解。
+# 故冻结为平衡基线：各分项按自然容量 30/25/15/20/20，权重全 1.0（与已验证的 40/44/44 阈值一致）。
+# 若日后要再调权重，改这里的乘子即可（有效容量 = 自然容量 × 乘子，cap 同步更新）。
+_V2_FACTOR_WEIGHTS = {
+    "signal_quality": 1.0,   # 30
+    "er_momentum":    1.0,   # 25
+    "volatility":     1.0,   # 15
+    "mtf_alignment":  1.0,   # 20
+    "breakout_boost": 1.0,   # 20
+}
+_V2_WEIGHTED_CAP = 110.0             # 30+25+15+20+20
+
+
 def _parts_v2(sig: dict, candles: list[dict], cfg: TradeConfig,
               candles_by_tf: dict = None, p: dict = None) -> tuple[dict, list[str], float, dict]:
     breakdown: dict[str, float] = {}
@@ -361,10 +378,16 @@ def _parts_v2(sig: dict, candles: list[dict], cfg: TradeConfig,
     breakdown["penalties"] = float(penalties)
     reasons += penalty_reasons
 
-    # 归一：raw 满分 110 → 100
-    raw = sum(v for k, v in breakdown.items() if k != "penalties")
-    total = max(0.0, min(100.0, (raw + penalties) / 110.0 * 100.0))
-    detail["raw"] = round(raw, 2)
+    # 归一：各分项按自然容量算出原始分后，乘 _V2_FACTOR_WEIGHTS 重新分配权重，
+    # 再除以加权满分(_V2_WEIGHTED_CAP=110)归一化到 0-100。
+    # 当前权重(2026-09 消融结论)：ER40 / 4H25 / Signal15 / ATR15 / Breakout15
+    weighted = 0.0
+    for k, v in breakdown.items():
+        if k == "penalties":
+            continue
+        weighted += v * _V2_FACTOR_WEIGHTS.get(k, 1.0)
+    total = max(0.0, min(100.0, (weighted + penalties) / _V2_WEIGHTED_CAP * 100.0))
+    detail["raw"] = round(weighted, 2)
     return breakdown, reasons, total, detail
 
 
