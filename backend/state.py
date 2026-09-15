@@ -22,6 +22,8 @@ from typing import Optional
 
 from fastapi import WebSocket
 
+import trade_log
+
 logger = logging.getLogger(__name__)
 
 # 面板参数的持久化文件：改动即写、启动即读，重启不再丢配置
@@ -410,6 +412,8 @@ class AppState:
     def add_order(self, order: dict):
         self.orders.append(order)
         self.orders = self.orders[-200:]
+        # 内存只留 200 条、重启即丢，这里同步落盘，事后才能按品种对账
+        trade_log.log_order(order)
 
     # ── 持久化 ──────────────────────────────────────────────────
     def save_settings(self):

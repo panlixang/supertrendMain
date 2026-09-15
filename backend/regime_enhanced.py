@@ -169,6 +169,37 @@ def adaptive_thresholds(candles: list[dict], base_cfg: TradeConfig) -> dict:
     return adjustments
 
 
+def _engine_is_v3(cfg: TradeConfig) -> bool:
+    try:
+        from regime_scoring import resolve_engine
+        return resolve_engine(cfg) in ("v3", "v3v1")
+    except Exception:
+        return False
+
+
+def _adaptive_evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
+                       candles_by_tf: dict = None, p: dict = None) -> dict:
+    """自适应阈值 + 原评估（含打分制 → regime_scoring）链路。"""
+    adjustments = adaptive_thresholds(candles, cfg)
+    if adjustments:
+        from dataclasses import replace
+        adjusted_cfg = replace(
+            cfg,
+            er_min=adjustments.get("er_min", cfg.er_min),
+            er_trend=adjustments.get("er_trend", cfg.er_trend)
+        )
+    else:
+        adjusted_cfg = cfg
+
+    result = regime.evaluate(sig, candles, adjusted_cfg, candles_by_tf, p)
+
+    # 注意：打分制路径（regime.evaluate → regime_scoring.evaluate_enhanced）返回不含
+    # filters 键，直接索引会 KeyError，导致整个增强链路被 integration 静默回退。
+    if adjustments:
+        result.setdefault("filters", {})["adaptive"] = adjustments
+    return result
+
+
 def evaluate_enhanced(sig: dict, candles: list[dict], cfg: TradeConfig,
                       candles_by_tf: dict = None, p: dict = None) -> dict:
     """增强版闸门评估
@@ -189,6 +220,11 @@ def evaluate_enhanced(sig: dict, candles: list[dict], cfg: TradeConfig,
                 f"周期 {sig.get('tf')} 不在允许范围")
         result["profile"] = None
         return result
+
+    # 0.5 V3 引擎：动量捷径会直接 trade=True 绕过评分，Chase Blocker 就形同虚设，
+    #     所以 V3 只走"自适应阈值 + 评分"链路（Chase/Pullback 判定都在评分里）。
+    if _engine_is_v3(cfg):
+        return _adaptive_evaluate(sig, candles, cfg, candles_by_tf, p)
 
     # 1. 动量突破优先：即使ER低也放行（仍须过等级/强度，上面已过周期）
     momentum = detect_momentum_breakout(candles, sig, lookback=20)
@@ -240,27 +276,5 @@ def evaluate_enhanced(sig: dict, candles: list[dict], cfg: TradeConfig,
             "filters": {"false_breakout": True}
         }
 
-    # 3. 自适应阈值调整
-    adjustments = adaptive_thresholds(candles, cfg)
-    if adjustments:
-        # 创建调整后的配置
-        from dataclasses import replace
-        adjusted_cfg = replace(
-            cfg,
-            er_min=adjustments.get("er_min", cfg.er_min),
-            er_trend=adjustments.get("er_trend", cfg.er_trend)
-        )
-    else:
-        adjusted_cfg = cfg
-
-    # 4. 使用原有评估逻辑（但用调整后的阈值）
-    result = regime.evaluate(sig, candles, adjusted_cfg, candles_by_tf, p)
-
-    # 附加自适应信息
-    # 注意：打分制路径（regime.evaluate → regime_scoring.evaluate_enhanced）返回不含
-    # filters 键，直接索引会 KeyError，导致整个增强链路被 integration 静默回退——
-    # 动量/假突破检测就从未真正生效。用 setdefault 安全写入。
-    if adjustments:
-        result.setdefault("filters", {})["adaptive"] = adjustments
-
-    return result
+    # 3~4. 自适应阈值 + 原有评估（含打分制）
+    return _adaptive_evaluate(sig, candles, cfg, candles_by_tf, p)

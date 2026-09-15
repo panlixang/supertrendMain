@@ -18,6 +18,7 @@ import time
 import position
 import regime
 import trade
+import trade_log
 
 # 尝试导入增强版，失败则用原版
 try:
@@ -33,6 +34,28 @@ except ImportError:
     EnhancedPosition = None
 
 logger = logging.getLogger(__name__)
+
+# 交易所返回的「没仓可平」提示。命中就说明本地持仓是幽灵，必须清掉，
+# 否则每根 K 线都会重试一次平仓 —— 9/3 CL 曾在 9 分钟内刷出 167 条失败单。
+_NO_POS_HINTS = (
+    "51169",                        # OKX：该方向没有可平的持仓
+    "22002",                        # Bitget：暂无仓位可平
+    "don't have any positions",
+    "do not have any positions",
+    "no position",
+    "position does not exist",
+    "暂无仓位可平",
+    "无仓位可平",
+    "没有持仓",
+)
+
+# 止盈下单失败后的重试冷却（秒）。止损不冷却 —— 那是风控，必须尽快重试。
+REDUCE_FAIL_COOLDOWN = 60.0
+
+
+def is_no_position_error(err) -> bool:
+    text = str(err or "").lower()
+    return any(h.lower() in text for h in _NO_POS_HINTS)
 
 
 def _spot_key(sym: str) -> str:
@@ -62,6 +85,7 @@ class Executor:
         # 同一时刻只允许一个下单流程，避免 ticker 与信号并发重复平仓
         self._lock = asyncio.Lock()
         self._lev_set: set = set()      # 已设置过杠杆的 (symbol, leverage)
+        self._tp_fail_until: float = 0.0    # 止盈下单失败后的冷却截止时刻
 
     # ── 工具 ────────────────────────────────────────────────────
     @property
@@ -383,6 +407,9 @@ class Executor:
 
             if not act:
                 return
+            # 止盈刚失败过：冷却期内不再重试（止损不冷却，那是风控必须尽快重试）
+            if act.get("action") in ("tp1", "tp2", "tp3") and time.time() < self._tp_fail_until:
+                return
 
             # 处理三级止盈和极端保护止损
             if act["action"] in ("tp1", "tp2", "tp3"):
@@ -416,6 +443,11 @@ class Executor:
         if not r.get("ok"):
             logger.warning(f"[止盈失败] {r.get('error')}")
             kind = act["action"] if act["action"] in ("tp1", "tp2", "tp3") else "tp1"
+            # 交易所已经没仓了 —— 本地是幽灵持仓，清掉，别每根 K 线重试一次
+            if is_no_position_error(r.get("error")) and await self._ghost_clear(pos, kind):
+                return
+            # 其他失败：冷却后再试，避免把订单记录刷爆
+            self._tp_fail_until = time.time() + REDUCE_FAIL_COOLDOWN
             await self._record(r, {"kind": kind, "tf": pos.tf, "reason": act["reason"]})
             return
 
@@ -443,9 +475,38 @@ class Executor:
     def _finalize(self, pos, price: float, reason: str):
         """仓位归零后的统一收尾：落进历史、清空当前持仓。"""
         logger.info(f"[持仓结束] {pos.symbol} {reason}，本笔已实现 {pos.realized:+.4f} USDT")
-        self.store.closed.append({**pos.to_dict(price), "sym": self.store.symbol})
+        row = {**pos.to_dict(price), "sym": self.store.symbol,
+               "close_reason": reason, "exit_ts": int(time.time() * 1000)}
+        self.store.closed.append(row)
         self.store.closed = self.store.closed[-50:]
+        trade_log.log_closed(row)
         self.store.position = None
+
+    async def _ghost_clear(self, pos, kind: str = "tp1") -> bool:
+        """交易所已无仓、本地却还有持仓（幽灵持仓）时清账。返回 True 表示已清理。
+
+        不清理的后果：每根 K 线都会再下一次减仓单并失败，
+        9/3 的 CL 就是这样在 9 分钟里刷出 167 条失败单，还把订单记录挤没了。
+        """
+        real = {"ok": False, "data": []}
+        try:
+            real = await trade.get_positions(pos.symbol, self.cfg.category, sim=self.cfg.paper)
+        except Exception as e:
+            logger.warning(f"[幽灵仓对账失败] {pos.symbol} {e}")
+            return False
+        if not real.get("ok") or self._exchange_qty(real.get("data"), pos.symbol) > 0:
+            return False
+        px = self.store.ticker.last or getattr(pos, "entry", 0)
+        logger.warning(f"[清空幽灵持仓] {pos.symbol} 交易所已无仓，本地持仓作废（{kind} 失败）")
+        await self._record(
+            {"ok": True, "price": px, "qty": 0, "fill_confirmed": False},
+            {"kind": "ghost_clear", "tf": pos.tf,
+             "reason": f"{kind} 失败：交易所无仓位，本地持仓作废",
+             "profile": pos.profile, "realized": round(pos.realized, 4)},
+        )
+        self._finalize(pos, px, f"幽灵持仓清理（{kind} 失败）")
+        await self._push_position()
+        return True
 
     def _exchange_qty(self, rows, inst_id: str) -> float:
         tot = 0.0

@@ -1204,7 +1204,15 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     <option value="">自动（默认 V1 口径）</option>
                     <option value="trend_follow_v1">V1 · trend_follow_v1</option>
                     <option value="quality_filter_v2">V2 · quality_filter_v2</option>
+                    <option value="event_timing_v3">V3 · event_timing_v3（V2底座+回踩再启动）</option>
+                    <option value="event_timing_v3_v1">V3v1 · event_timing_v3_v1（V1底座+回踩再启动）</option>
                   </select>
+                  {engine.startsWith('event_timing_v3') && (
+                    <div style={{ fontSize: 8.5, color: '#e0a458', marginTop: 3, lineHeight: 1.45 }}>
+                      ⚠ V3 最终分 = 0.65×V2 + 0.20×时机 + 0.15×历史 − 风险扣分，量纲与 V1/V2 不同，
+                      切换后必须重新标定阈值（沿用 V1/V2 的阈值可能几乎不出单）
+                    </div>
+                  )}
                 </Row>
                 <Row label="Shadow" hint="副引擎对照采集（logs/shadow_*.jsonl），留空关闭">
                   <select value={shadowEngine}
@@ -1213,6 +1221,8 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     <option value="">关闭</option>
                     <option value="trend_follow_v1">对比 V1 · trend_follow_v1</option>
                     <option value="quality_filter_v2">对比 V2 · quality_filter_v2</option>
+                    <option value="event_timing_v3">对比 V3 · event_timing_v3</option>
+                    <option value="event_timing_v3_v1">对比 V3v1 · event_timing_v3_v1</option>
                   </select>
                 </Row>
               </div>

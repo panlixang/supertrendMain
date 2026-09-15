@@ -18,6 +18,7 @@ import notify
 import regime
 import strategy
 import trade
+import trade_log
 from history import fetch_candles, load_history
 from indicators import compute
 from state import BIAS_TFS, MAX_SYMBOLS, TF_CONFIG, TFS, state
@@ -919,9 +920,12 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     # Shadow Mode（阶段3）：另一引擎名 = 双引擎对照采集；"" = 关闭。白名单防手滑。
     if body.shadow_engine is not None:
         _se = (body.shadow_engine or "").strip().lower()
-        if _se not in ("", "v1", "v2", "trend_follow_v1", "quality_filter_v2"):
+        if _se not in ("", "v1", "v2", "v3", "v3v1", "trend_follow_v1",
+                       "quality_filter_v2", "event_timing_v3",
+                       "event_timing_v3_v1", "v3_timing"):
             return {"ok": False,
-                    "error": "shadow_engine 仅支持 空 / v1 / v2 / trend_follow_v1 / quality_filter_v2"}
+                    "error": "shadow_engine 仅支持 空 / v1 / v2 / v3 / trend_follow_v1 "
+                             "/ quality_filter_v2 / event_timing_v3"}
         c.shadow_engine = _se
 
     # 指标参数
@@ -1064,6 +1068,15 @@ async def set_lev(body: LeverageIn):
 @router.get("/api/trade/orders")
 async def trade_orders(limit: int = 50):
     return state.orders[-limit:]
+
+
+@router.get("/api/trade/history")
+async def trade_history(months: int = 3, sym: Optional[str] = None, recent: int = 50):
+    """落盘账本的总账（重启不丢）：按品种的已平仓笔数 / 已实现盈亏 / 胜负。
+
+    months=0 表示统计全部历史；sym 只筛单个品种；recent 是回传的最近笔数。
+    """
+    return trade_log.summary(months=months, sym=sym, recent=recent)
 
 
 @router.get("/api/trade/ping")

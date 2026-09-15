@@ -225,13 +225,16 @@ def run_backtest(
         })
         pos, cur = None, None
 
-    def open_pos(i: int, price: float, typ: str, profile: str = "normal"):
+    def open_pos(i: int, price: float, typ: str, profile: str = "normal",
+                 mul: float = 1.0):
+        """mul = 仓位系数（0.5 = 半仓，对齐实盘 executor 保证金减半）。"""
         nonlocal equity, pos, cur, n_skip
         if fixed:
-            if equity < margin_usdt:
+            m = margin_usdt * mul
+            if equity < m:
                 n_skip += 1
                 return
-            notional = margin_usdt * lev
+            notional = m * lev
             qty = notional / price
             equity -= qty * price * fee_rate
         else:
@@ -239,6 +242,8 @@ def run_backtest(
             qty = equity / price
             equity -= qty * price * fee_rate
             qty = equity / price
+            if mul != 1.0:
+                qty *= mul
 
         sig = {"price": price, "type": typ, "line": st_line(i)}
         # enhanced_stop: 对齐实盘 enhanced_initial_stop（3% 保底 / sl_min 下限 /
@@ -306,13 +311,17 @@ def run_backtest(
         if pos.qty <= 0:
             finalize(i)
 
-    def eval_open_gate(i: int, typ: str) -> tuple[bool, str]:
-        """此根 typ 方向是否过闸门可开仓（与 executor 一致）。"""
+    def eval_open_gate(i: int, typ: str) -> tuple[bool, str, float]:
+        """此根 typ 方向是否过闸门可开仓（与 executor 一致）。
+
+        返回 (是否开仓, profile, 仓位系数)：仓位系数 0.5 表示半仓，
+        对齐实盘 executor（trade_half → 保证金减半）。默认 1.0。
+        """
         profile = "normal"
         if live_gate:
             sig = sig_by_ts.get(candles[i]["ts"])
             if not sig or sig["type"] != typ:
-                return False, profile
+                return False, profile, 1.0
             # bias_filter 面板开关：只接受与 MA 偏向一致的开仓（实盘面板可勾选）
             if bias_filter:
                 b = biases[i] if i < len(biases) else None
@@ -330,8 +339,9 @@ def run_backtest(
                 # 彻底关弱档：非 tradable（edge/range）信号直接拦掉，只下标准档。
                 # 实盘打分制默认不拦（executor 只看分数）；此开关用于「假设关弱档」回测。
                 if block_untradable and not sc["regime"].get("tradable", True):
-                    return False, profile
-                return True, sc["regime"].get("profile") or "normal"
+                    return False, profile, 1.0
+                return True, sc["regime"].get("profile") or "normal", (
+                    0.5 if sc.get("action") == "trade_half" else 1.0)
             gate = enhanced_signal_handler(
                 full, candles[: i + 1], live_gate,
                 candles_by_tf=_cbtf_at(i), p=p,
@@ -339,8 +349,9 @@ def run_backtest(
                 use_adaptive=True,
             )
             if gate.get("hidden") or not gate.get("trade"):
-                return False, profile
-            return True, gate.get("profile") or "normal"
+                return False, profile, 1.0
+            return True, gate.get("profile") or "normal", (
+                0.5 if gate.get("trade_half") else 1.0)
         ok = True
         if bias_filter:
             b = biases[i] if i < len(biases) else None
@@ -370,7 +381,58 @@ def run_backtest(
             adx_val = adx_latest(candles[:i + 1], adx_period)
             if adx_val is not None and adx_val < adx_min:
                 ok = False
-        return ok, profile
+        return ok, profile, 1.0
+
+    # ── V3 延迟入场支持：候选回踩后 Relaunch 时补单（对齐 feed._check_v3_relaunch）──
+    v3_on = False
+    if live_gate is not None and getattr(live_gate, "score_engine", None):
+        try:
+            from regime_scoring import resolve_engine
+            v3_on = resolve_engine(live_gate) in ("v3", "v3v1")
+        except Exception:
+            v3_on = False
+
+    def _v3_relaunch_sigs(i: int) -> list[dict]:
+        """本根K触发 Relaunch 的候选 → 构造可判单的信号副本。"""
+        if not v3_on:
+            return []
+        try:
+            import v3_signal as v3
+        except Exception:
+            return []
+        sl = candles[: i + 1]
+        out: list[dict] = []
+        for cand in v3.LIFECYCLE.pending(tf=gate_tf):
+            if not v3.LIFECYCLE.advance(cand["key"], sl).get("trigger"):
+                continue
+            orig = dict(cand.get("orig_sig") or {})
+            if not orig:
+                continue
+            cur = candles[i]
+            typ = orig.get("type", "buy")
+            sig = {**orig, "ts": cur["ts"], "price": round(cur["c"], 6),
+                   "line": (up[i] if typ == "buy" else dn[i]),
+                   "v3_orig_ts": cand.get("ts0") or orig.get("ts")}
+            a = (v3.atr_series(sl) or [None])[-1] or 0.0
+            if a:
+                sig["atr"] = a
+                sig["body_atr"] = round(abs(cur["c"] - cur["o"]) / a, 3)
+            base = [x["vol"] for x in sl[-21:-1] if x.get("vol")]
+            if base:
+                avg = sum(base) / len(base)
+                if avg > 0:
+                    sig["vol_ratio"] = round((cur.get("vol") or 0.0) / avg, 2)
+            if a and cand.get("level"):
+                sig["dist_atr"] = round(abs(cur["c"] - cand["level"]) / a, 3)
+            out.append(sig)
+        return out
+
+    if v3_on:
+        try:
+            import v3_signal as v3
+            v3.LIFECYCLE.reset()      # 每个品种独立，避免候选跨品种串味
+        except Exception:
+            pass
 
     for i, c in enumerate(candles):
         rules = rules_by[pos.profile] if pos else rules_normal
@@ -438,7 +500,7 @@ def run_backtest(
         typ = flip_at.get(i)
         if typ:
             price = c["c"]
-            gate_ok, profile = eval_open_gate(i, typ)
+            gate_ok, profile, size_mul = eval_open_gate(i, typ)
             # 反向持仓先平 —— 第三档 reverse_signal 仅在同周期反向且过闸门时平剩余
             if pos and ((pos.long and typ == "sell") or (not pos.long and typ == "buy")):
                 rules_r = rules_by[pos.profile]
@@ -469,11 +531,19 @@ def run_backtest(
                 aligned = d is None or ((d == 1 and typ == "buy")
                                         or (d == -1 and typ == "sell"))
                 if gate_ok and aligned:
-                    open_pos(i, price, typ, profile)
+                    open_pos(i, price, typ, profile, size_mul)
                 elif aligned and (live_gate or er_min is not None):
                     n_block += 1
                 elif not aligned:
                     n_align_block += 1
+
+        # ── 2.5) V3 延迟入场：候选回踩后 Relaunch（没有新翻转也要补单） ──
+        if v3_on and pos is None and not typ:
+            for rsig in _v3_relaunch_sigs(i):
+                sig_by_ts[rsig["ts"]] = rsig      # 让 eval_open_gate 能取到信号
+                g_ok, prof, r_mul = eval_open_gate(i, rsig["type"])
+                if g_ok:
+                    open_pos(i, c["c"], rsig["type"], prof, r_mul)
 
         # ── 3) 收盘后随超趋线移动止损（对应 feed.on_st_line） ──
         # 注意重取规则：本根刚开的仓，循环顶部的 rules 还是开仓前的旧值

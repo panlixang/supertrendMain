@@ -9,3 +9,5 @@ backend/settings.json
 backend/.okx_credentials.json
 backend/candle_data.db
 backend/candle_data.db-*
+# 成交账本（运行数据，按月滚动的 jsonl）
+backend/logs/
