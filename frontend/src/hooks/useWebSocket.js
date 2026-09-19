@@ -14,6 +14,7 @@ const lastFetch = {};
 
 export function useWebSocket() {
   const timer = useRef(null);
+  const retryTimer = useRef(null);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -58,6 +59,22 @@ export function useWebSocket() {
       short.forEach((tf) => fetchFullCandles(tf));
     }
 
+    // 后端缓冲可能晚于首帧才灌满，隔几秒对仍为空的周期补拉（最多重试 5 次）
+    let retryCount = 0;
+    function retryAfterSnapshot() {
+      if (dead || retryCount >= 5) return;
+      retryCount += 1;
+      retryTimer.current = setTimeout(async () => {
+        if (dead) return;
+        const cur = useStore.getState().candles;
+        const empty = ALL_TFS.filter((tf) => !(cur[tf] || []).length);
+        if (!empty.length) return;
+        await Promise.all(empty.map((tf) => fetchFullCandles(tf)));
+        empty.forEach((tf) => fetchIndicators(tf, true));
+        retryAfterSnapshot();
+      }, 5000);
+    }
+
     function handle(msg) {
       const s = useStore.getState();
       const isChart = !msg.symbol || msg.symbol === s.symbol;   // 是否图表当前品种
@@ -83,6 +100,8 @@ export function useWebSocket() {
           s.clearIndicators();
           fetchCandlesPreferLong().then(() => {
             ALL_TFS.forEach((tf) => fetchIndicators(tf, true));
+            // 后端刚启动 / 刚换品种时 K 线缓冲可能还没灌满，晚几秒对仍为空的周期补拉一次
+            retryAfterSnapshot();
           });
           fetchOverview();
           break;
@@ -93,8 +112,15 @@ export function useWebSocket() {
           break;
         case 'candle':
           if (!isChart) break;              // 图表只画当前品种
+          // s 是 handle 开始时的状态快照，这里用它判断「拉全量之前是否为空」
+          const wasEmpty = !(s.candles[msg.tf] || []).length;
           s.upsertCandle(msg.tf, msg.data);
-          fetchIndicators(msg.tf);
+          if (wasEmpty) {
+            // 之前没拉到（后端缓冲空），现在有实时推送了，重新拉一次全量并刷新指标
+            fetchFullCandles(msg.tf).then(() => fetchIndicators(msg.tf, true));
+          } else {
+            fetchIndicators(msg.tf);
+          }
           break;
         case 'trade_config':
           s.setTradeConfig(msg.data);
@@ -191,6 +217,7 @@ export function useWebSocket() {
       dead = true;
       clearInterval(iv);
       clearTimeout(timer.current);
+      clearTimeout(retryTimer.current);
       wsRef.current?.close();
     };
   }, []);
