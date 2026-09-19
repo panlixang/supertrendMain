@@ -1,4 +1,38 @@
+import React, { Component } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+
+// 路由级错误边界：任一页面渲染抛错时，只显示可读报错而非整页黑屏
+class RouteErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidCatch(err, info) {
+    console.error("[RouteError]", err, info);
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div style={{ padding: 40, fontFamily: "var(--font-mono)", lineHeight: 1.6 }}>
+          <h2 style={{ color: "#e05263", marginBottom: 12 }}>页面渲染出错</h2>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#8b93a0" }}>
+            {String(this.state.err?.stack || this.state.err?.message || this.state.err)}
+          </pre>
+          <button
+            onClick={() => this.setState({ err: null })}
+            style={{ marginTop: 16, padding: "8px 16px", background: "#00c9a7", color: "#000", border: "none", borderRadius: 6, cursor: "pointer" }}
+          >
+            重试
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const MENU_ITEMS = [
   { path: "/", label: "信号终端", icon: "📊" },
@@ -33,7 +67,9 @@ export default function Layout() {
       </aside>
 
       <main style={sty.main}>
-        <Outlet />
+        <RouteErrorBoundary>
+          <Outlet />
+        </RouteErrorBoundary>
       </main>
     </div>
   );

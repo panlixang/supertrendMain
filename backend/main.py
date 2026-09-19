@@ -22,13 +22,13 @@ import trade
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# 导入机器学习 API
+# 导入机器学习 API（在 logger 定义之后）
 try:
     from ml_api import ml_router
     ML_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     ML_AVAILABLE = False
-    logger.warning("机器学习模块未安装，相关功能将不可用")
+    logger.warning(f"机器学习模块未安装，相关功能将不可用: {e}")
 
 
 @asynccontextmanager
