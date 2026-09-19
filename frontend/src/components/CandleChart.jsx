@@ -293,7 +293,7 @@ export default function CandleChart() {
   }, [focusTs, sorted]);
 
   return (
-    <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+    <div style={{ height: '100%', minHeight: 0, position: 'relative' }}>
       <div ref={boxRef} style={{ width: '100%', height: '100%' }} />
       <ChartOverlay ind={ind} />
     </div>
