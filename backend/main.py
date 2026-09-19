@@ -19,6 +19,9 @@ from integration import create_enhanced_executor
 from adopt import adopt_exchange_position
 import trade
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
 # 导入机器学习 API
 try:
     from ml_api import ml_router
@@ -26,9 +29,6 @@ try:
 except ImportError:
     ML_AVAILABLE = False
     logger.warning("机器学习模块未安装，相关功能将不可用")
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager

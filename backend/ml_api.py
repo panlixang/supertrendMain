@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .ml_service import DEFAULT_MODEL_PARAMS, FlipPredictor
+from ml_service import DEFAULT_MODEL_PARAMS, FlipPredictor
 
 # 创建路由
 ml_router = APIRouter(prefix="/api/ml", tags=["machine-learning"])
