@@ -1,19 +1,52 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ALL_TFS, useStore } from '../stores/useStore';
+import { API } from '../utils/format';
 import CandleChart from '../components/CandleChart';
 import SymbolSelector from '../components/SymbolSelector';
 import './ResearchPage.css';
 
+const FLIPS_KEY = 'st.research.flips';
+const GATE_KEY = 'st.research.gateConfig';
+
+const DEFAULT_GATE_CONFIG = {
+  gateA: { enabled: true, bodyAtrThreshold: 1.5 },
+  gateB: { enabled: true, densityThreshold: 0.15, lookback: 20 },
+  gateC: { enabled: true, wickRatioThreshold: 0.6 },
+  gateD: { enabled: true, trendAgeThreshold: 50 },
+  gateE: { enabled: true, gapRatioThreshold: 0.5 },
+};
+
+// 读本地缓存，坏数据/无数据都回落到默认值，避免页面打不开
+function loadLocal(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const v = JSON.parse(raw);
+    return v ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveLocal(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.warn('[research] 本地保存失败（可能超出容量）', e);
+  }
+}
+
 export default function ResearchPage() {
   const [activeSection, setActiveSection] = useState('visual');
-  const [flips, setFlips] = useState([]);
-  const [gateConfig, setGateConfig] = useState({
-    gateA: { enabled: true, bodyAtrThreshold: 1.5 },
-    gateB: { enabled: true, densityThreshold: 0.15, lookback: 20 },
-    gateC: { enabled: true, wickRatioThreshold: 0.6 },
-    gateD: { enabled: true, trendAgeThreshold: 50 },
-    gateE: { enabled: true, gapRatioThreshold: 0.5 },
-  });
+  // 刷新不丢：flips / gateConfig 都持久化到 localStorage
+  const [flips, setFlips] = useState(() => loadLocal(FLIPS_KEY, []));
+  const [gateConfig, setGateConfig] = useState(() => ({
+    ...DEFAULT_GATE_CONFIG,
+    ...loadLocal(GATE_KEY, {}),
+  }));
+
+  useEffect(() => { saveLocal(FLIPS_KEY, flips); }, [flips]);
+  useEffect(() => { saveLocal(GATE_KEY, gateConfig); }, [gateConfig]);
 
   const symbol = useStore((s) => s.symbol);
   const tf = useStore((s) => s.tf);
@@ -230,7 +263,17 @@ function SectionContent({ section, flips, gateConfig, setGateConfig, onExtractFl
     case 'visual':
       return <VisualSection flips={flips} gateConfig={gateConfig} />;
     case 'dataset':
-      return <DatasetSection flips={flips} onExtract={onExtractFlips} />;
+      return (
+        <DatasetSection
+          flips={flips}
+          onExtract={onExtractFlips}
+          onClear={() => {
+            if (window.confirm(`确定清空已保存的 ${flips.length} 条 Flip 数据？`)) {
+              setFlips([]);
+            }
+          }}
+        />
+      );
     case 'gates':
       return <GatesSection config={gateConfig} setConfig={setGateConfig} flips={flips} />;
     case 'confirm':
@@ -258,6 +301,20 @@ function VisualSection({ flips, gateConfig }) {
   const tf = useStore((s) => s.tf);
   const symbol = useStore((s) => s.symbol);
   const tfSignals = signals.filter(s => s.tf === tf && s.symbol === symbol);
+  const [full, setFull] = useState(false);
+
+  // 全屏遮罩：Esc 关闭 + 锁定背景滚动（手机上避免背景跟着滑动）
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e) => { if (e.key === 'Escape') setFull(false); };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [full]);
 
   // 应用 Gate 过滤
   const flipsWithGateInfo = flips.map(flip => ({
@@ -274,7 +331,14 @@ function VisualSection({ flips, gateConfig }) {
         直观展示策略的买卖点信号,验证 Gate 过滤效果。
       </p>
 
-      <Card title="实时K线图表">
+      <Card
+        title="实时K线图表"
+        extra={
+          <button style={sty.iconBtn} onClick={() => setFull(true)} title="全屏查看">
+            ⛶ 全屏
+          </button>
+        }
+      >
         <div style={sty.chartContainer}>
           <CandleChart />
         </div>
@@ -338,12 +402,35 @@ function VisualSection({ flips, gateConfig }) {
           <FlipTableWithGates flips={flipsWithGateInfo} />
         </Card>
       )}
+
+      {full && (
+        <div style={sty.fullscreen}>
+          <div style={sty.fullscreenHeader}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#e8eaed' }}>
+                实时K线图表
+              </div>
+              <div style={{ fontSize: 11, color: '#8b93a0', marginTop: 2 }}>
+                {symbol} · {tf} · 手机上横屏看更清楚
+              </div>
+            </div>
+            <button style={sty.iconBtn} onClick={() => setFull(false)} title="退出全屏">
+              ✕ 退出
+            </button>
+          </div>
+          <div style={sty.fullscreenBody}>
+            <div style={sty.fullscreenChart}>
+              <CandleChart />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ===== Dataset Section =====
-function DatasetSection({ flips, onExtract }) {
+function DatasetSection({ flips, onExtract, onClear }) {
   const signals = useStore((s) => s.signals);
   const tf = useStore((s) => s.tf);
 
@@ -406,6 +493,13 @@ function DatasetSection({ flips, onExtract }) {
           <button style={sty.btnPrimary} onClick={onExtract}>📥 从当前图表采集 Flip</button>
           <button style={sty.btnSecondary} onClick={handleImport}>📂 导入历史数据</button>
           <button style={sty.btnSecondary} onClick={handleExport} disabled={flips.length === 0}>💾 导出数据集</button>
+          <button
+            style={{ ...sty.btnSecondary, color: '#e05263' }}
+            onClick={onClear}
+            disabled={flips.length === 0}
+          >
+            🗑 清空数据
+          </button>
         </div>
         <div style={sty.hint}>
           💡 提示：切换到「首页」加载不同币种和时间周期，然后返回这里采集 Flip 数据
@@ -1357,7 +1451,7 @@ function MLSection({ flips }) {
       }));
 
       // 调用后端训练 API
-      const response = await fetch('http://localhost:8000/api/ml/train', {
+      const response = await fetch(`${API}/api/ml/train`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1404,7 +1498,7 @@ function MLSection({ flips }) {
     setPredicting(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/ml/predict', {
+      const response = await fetch(`${API}/api/ml/predict`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1737,10 +1831,19 @@ function BacktestSection() {
 
 // ===== Reusable Components =====
 
-function Card({ title, children }) {
+function Card({ title, children, extra }) {
   return (
     <div style={sty.card}>
-      <h3 style={sty.cardTitle}>{title}</h3>
+      {extra ? (
+        <div style={sty.cardTitleRow}>
+          <h3 style={{ ...sty.cardTitle, borderBottom: 'none', flex: 1, paddingRight: 8 }}>
+            {title}
+          </h3>
+          {extra}
+        </div>
+      ) : (
+        <h3 style={sty.cardTitle}>{title}</h3>
+      )}
       <div style={sty.cardBody}>{children}</div>
     </div>
   );
@@ -2364,6 +2467,56 @@ const sty = {
   },
   cardBody: {
     padding: 20,
+  },
+  cardTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    paddingRight: 12,
+    borderBottom: '1px solid var(--border)',
+  },
+  iconBtn: {
+    padding: '6px 10px',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    background: 'transparent',
+    color: '#8b93a0',
+    fontSize: 12,
+    lineHeight: 1,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+  },
+  fullscreen: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
+    background: 'var(--bg)',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  fullscreenHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '12px 16px',
+    borderBottom: '1px solid var(--border)',
+    flexShrink: 0,
+  },
+  fullscreenBody: {
+    flex: 1,
+    minHeight: 0,
+    position: 'relative',
+  },
+  fullscreenChart: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    bottom: 12,
   },
   problemSolution: {
     padding: '16px 0',
