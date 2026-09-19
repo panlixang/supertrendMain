@@ -2863,7 +2863,9 @@ const sty = {
   },
   chartContainer: {
     width: '100%',
-    padding: '20px 0',
+    height: 360,
+    display: 'flex',
+    flexDirection: 'column',
   },
   histogram: {
     display: 'flex',

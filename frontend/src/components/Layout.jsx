@@ -18,8 +18,23 @@ class RouteErrorBoundary extends Component {
       return (
         <div style={{ padding: 40, fontFamily: "var(--font-mono)", lineHeight: 1.6 }}>
           <h2 style={{ color: "#e05263", marginBottom: 12 }}>页面渲染出错</h2>
+          <div
+            style={{
+              padding: "12px 16px",
+              marginBottom: 16,
+              background: "#e0526318",
+              border: "1px solid #e0526355",
+              borderRadius: 8,
+              color: "#ffb4bd",
+              fontSize: 14,
+              fontWeight: 600,
+              wordBreak: "break-all",
+            }}
+          >
+            {String(this.state.err?.message || this.state.err)}
+          </div>
           <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#8b93a0" }}>
-            {String(this.state.err?.stack || this.state.err?.message || this.state.err)}
+            {String(this.state.err?.stack || "")}
           </pre>
           <button
             onClick={() => this.setState({ err: null })}
