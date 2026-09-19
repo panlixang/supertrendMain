@@ -169,9 +169,18 @@ export function useWebSocket() {
       };
       ws.onerror = () => ws.close();
       ws.onmessage = (e) => {
+        let msg;
         try {
-          handle(JSON.parse(e.data));
-        } catch {}
+          msg = JSON.parse(e.data);
+        } catch (err) {
+          console.error("[ws] 消息不是合法 JSON", err);
+          return;
+        }
+        try {
+          handle(msg);
+        } catch (err) {
+          console.error(`[ws] 处理 ${msg.type} 消息出错`, err);
+        }
       };
     }
 
