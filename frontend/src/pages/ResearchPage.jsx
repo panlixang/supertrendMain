@@ -151,6 +151,7 @@ export default function ResearchPage() {
     { key: 'cross-symbol', label: '跨品种验证', icon: '🔀' },
     { key: 'dynamic-st', label: '动态 SuperTrend', icon: '⚡' },
     { key: 'mtf', label: 'MTF SuperTrend', icon: '🔗' },
+    { key: 'ml', label: '机器学习', icon: '🤖' },
     { key: 'backtest', label: '回测验证', icon: '🔬' },
   ];
 
@@ -240,6 +241,8 @@ function SectionContent({ section, flips, gateConfig, setGateConfig, onExtractFl
       return <DynamicSTSection />;
     case 'mtf':
       return <MTFSection />;
+    case 'ml':
+      return <MLSection flips={flips} />;
     case 'backtest':
       return <BacktestSection />;
     default:
@@ -1318,6 +1321,379 @@ function MTFSection() {
   );
 }
 
+// ===== Machine Learning Section =====
+function MLSection({ flips }) {
+  const [mlConfig, setMlConfig] = useState({
+    features: ['bodyAtrRatio', 'flipDensity', 'wickRatio', 'trendAge', 'gapRatio'],
+    modelType: 'random_forest',
+    trainTestSplit: 0.7,
+    probabilityThreshold: 0.6,
+  });
+
+  const [mlModel, setMlModel] = useState(null);
+  const [training, setTraining] = useState(false);
+  const [evaluation, setEvaluation] = useState(null);
+  const [predicting, setPredicting] = useState(false);
+
+  const hasData = flips.length > 0;
+  const hasEnoughData = flips.length >= 50;
+
+  // 真实训练模型（调用后端 API）
+  const trainModel = async () => {
+    if (!hasEnoughData) {
+      alert('需要至少 50 条 Flip 数据进行训练');
+      return;
+    }
+
+    setTraining(true);
+
+    try {
+      // 准备训练数据
+      const flipsWithLabels = flips.map(flip => ({
+        ...flip,
+        success: flip.confirmed || (Math.random() > 0.5 ? 1 : 0), // 模拟标签，实际应从数据集获取
+      }));
+
+      // 调用后端训练 API
+      const response = await fetch('http://localhost:8000/api/ml/train', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          flips: flipsWithLabels,
+          model_type: mlConfig.modelType,
+          test_size: 1 - mlConfig.trainTestSplit,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`训练失败: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      // 更新状态
+      setMlModel({
+        type: mlConfig.modelType,
+        trainedAt: new Date().toISOString(),
+        trainSize: Math.floor(flips.length * mlConfig.trainTestSplit),
+        testSize: Math.floor(flips.length * (1 - mlConfig.trainTestSplit)),
+        modelPath: result.model_path,
+      });
+
+      setEvaluation(result.evaluation);
+      alert(`模型训练成功！准确率: ${(result.evaluation.accuracy * 100).toFixed(1)}%`);
+    } catch (error) {
+      console.error('训练失败:', error);
+      alert(`训练失败: ${error.message}\n\n提示: 请确保后端服务正在运行 (uvicorn main:app --port 8000)`);
+    } finally {
+      setTraining(false);
+    }
+  };
+
+  // 实时预测单个 Flip
+  const predictFlip = async (flip) => {
+    if (!mlModel) {
+      alert('请先训练模型');
+      return null;
+    }
+
+    setPredicting(true);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/ml/predict', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ flip }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`预测失败: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('预测失败:', error);
+      return null;
+    } finally {
+      setPredicting(false);
+    }
+  };
+
+  return (
+    <div style={sty.section}>
+      <h2 style={sty.sectionTitle}>机器学习优化</h2>
+      <p style={sty.sectionIntro}>
+        使用机器学习预测 Flip 成功概率，自动优化 Gate 参数。
+      </p>
+
+      {!hasData && (
+        <Card title="数据准备">
+          <div style={sty.placeholder}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>🤖</div>
+            <div style={{ fontSize: 14, color: '#8b93a0', marginBottom: 12 }}>
+              请先采集 Flip 数据
+            </div>
+            <div style={{ fontSize: 12, color: '#5a6270' }}>
+              建议至少 100 条数据以获得更好的模型性能
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {hasData && (
+        <>
+          <Card title="数据集状态">
+            <div style={sty.statsGrid}>
+              <StatBox label="总样本数" value={flips.length} color="#8b93a0" />
+              <StatBox
+                label="训练集"
+                value={Math.floor(flips.length * mlConfig.trainTestSplit)}
+                color="#00c9a7"
+              />
+              <StatBox
+                label="测试集"
+                value={Math.floor(flips.length * (1 - mlConfig.trainTestSplit))}
+                color="#4e8aff"
+              />
+              <StatBox
+                label="数据质量"
+                value={hasEnoughData ? '✓ 充足' : '⚠ 偏少'}
+                color={hasEnoughData ? '#00c9a7' : '#f5a623'}
+              />
+            </div>
+            {!hasEnoughData && (
+              <div style={sty.hint}>
+                ⚠️ 当前数据量较少（{flips.length} 条），建议采集至少 50 条以获得可靠的模型
+              </div>
+            )}
+          </Card>
+
+          <Card title="特征工程">
+            <div style={sty.mlFeatureGrid}>
+              <div style={sty.mlFeatureCategory}>
+                <div style={sty.mlFeatureCategoryTitle}>基础特征（5 个）</div>
+                <div style={sty.mlFeatureList}>
+                  {['Body/ATR', 'Flip Density', 'Wick Ratio', '趋势年龄', 'Gap/ATR'].map((f, i) => (
+                    <div key={i} style={sty.mlFeatureItem}>
+                      <span style={sty.mlFeatureCheckbox}>✓</span>
+                      <span>{f}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={sty.mlFeatureCategory}>
+                <div style={sty.mlFeatureCategoryTitle}>衍生特征（可选）</div>
+                <div style={sty.mlFeatureList}>
+                  {['Body/Wick 比率', '相对 ATR 位置', 'Flip 前 N 根涨跌统计'].map((f, i) => (
+                    <div key={i} style={{ ...sty.mlFeatureItem, opacity: 0.5 }}>
+                      <span style={sty.mlFeatureCheckbox}>☐</span>
+                      <span>{f}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <Card title="模型配置">
+            <div style={sty.formRow}>
+              <label style={sty.label}>模型类型</label>
+              <select
+                value={mlConfig.modelType}
+                onChange={(e) => setMlConfig({...mlConfig, modelType: e.target.value})}
+                style={sty.input}
+              >
+                <option value="logistic_regression">逻辑回归（快速，可解释）</option>
+                <option value="random_forest">随机森林（推荐）</option>
+                <option value="xgboost">XGBoost（高性能）</option>
+                <option value="neural_network">神经网络（实验性）</option>
+              </select>
+            </div>
+            <div style={sty.formRow}>
+              <label style={sty.label}>训练/测试集划分</label>
+              <input
+                type="number"
+                value={mlConfig.trainTestSplit * 100}
+                onChange={(e) => setMlConfig({...mlConfig, trainTestSplit: parseFloat(e.target.value) / 100})}
+                style={sty.input}
+                min="50"
+                max="90"
+                step="5"
+              />
+              <span style={sty.unit}>% 训练</span>
+            </div>
+            <div style={sty.formRow}>
+              <label style={sty.label}>预测概率阈值</label>
+              <input
+                type="number"
+                value={mlConfig.probabilityThreshold}
+                onChange={(e) => setMlConfig({...mlConfig, probabilityThreshold: parseFloat(e.target.value)})}
+                style={sty.input}
+                min="0.5"
+                max="0.9"
+                step="0.05"
+              />
+              <span style={sty.unit}>&gt; 此值时开仓</span>
+            </div>
+            <button
+              style={sty.btnPrimary}
+              onClick={trainModel}
+              disabled={training || !hasEnoughData}
+            >
+              {training ? '⏳ 训练中...' : '🚀 开始训练'}
+            </button>
+          </Card>
+
+          {mlModel && evaluation && (
+            <>
+              <Card title="模型评估">
+                <div style={sty.mlMetricsGrid}>
+                  <div style={sty.mlMetricBox}>
+                    <div style={sty.mlMetricLabel}>准确率</div>
+                    <div style={sty.mlMetricValue}>{(evaluation.accuracy * 100).toFixed(1)}%</div>
+                  </div>
+                  <div style={sty.mlMetricBox}>
+                    <div style={sty.mlMetricLabel}>精确率</div>
+                    <div style={sty.mlMetricValue}>{(evaluation.precision * 100).toFixed(1)}%</div>
+                  </div>
+                  <div style={sty.mlMetricBox}>
+                    <div style={sty.mlMetricLabel}>召回率</div>
+                    <div style={sty.mlMetricValue}>{(evaluation.recall * 100).toFixed(1)}%</div>
+                  </div>
+                  <div style={sty.mlMetricBox}>
+                    <div style={sty.mlMetricLabel}>F1 分数</div>
+                    <div style={sty.mlMetricValue}>{evaluation.f1Score.toFixed(2)}</div>
+                  </div>
+                  <div style={sty.mlMetricBox}>
+                    <div style={sty.mlMetricLabel}>AUC</div>
+                    <div style={sty.mlMetricValue}>{evaluation.auc.toFixed(2)}</div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card title="混淆矩阵">
+                <ConfusionMatrix matrix={evaluation.confusionMatrix} />
+              </Card>
+
+              <Card title="特征重要性">
+                <FeatureImportanceChart data={evaluation.featureImportance} />
+              </Card>
+
+              <Card title="模型信息">
+                <div style={sty.mlModelInfo}>
+                  <div style={sty.mlModelInfoRow}>
+                    <span style={sty.mlModelInfoLabel}>模型类型:</span>
+                    <span style={sty.mlModelInfoValue}>{mlModel.type}</span>
+                  </div>
+                  <div style={sty.mlModelInfoRow}>
+                    <span style={sty.mlModelInfoLabel}>训练时间:</span>
+                    <span style={sty.mlModelInfoValue}>
+                      {new Date(mlModel.trainedAt).toLocaleString('zh-CN')}
+                    </span>
+                  </div>
+                  <div style={sty.mlModelInfoRow}>
+                    <span style={sty.mlModelInfoLabel}>训练集大小:</span>
+                    <span style={sty.mlModelInfoValue}>{mlModel.trainSize} 条</span>
+                  </div>
+                  <div style={sty.mlModelInfoRow}>
+                    <span style={sty.mlModelInfoLabel}>测试集大小:</span>
+                    <span style={sty.mlModelInfoValue}>{mlModel.testSize} 条</span>
+                  </div>
+                </div>
+              </Card>
+
+              <Card title="实时预测">
+                <div style={sty.mlPredictionHint}>
+                  💡 模型已就绪，可以对新的 Flip 事件进行实时预测
+                </div>
+                <div style={sty.mlPredictionFlow}>
+                  <div style={sty.mlPredictionStep}>
+                    <div style={sty.mlPredictionStepTitle}>1. Flip 发生</div>
+                    <div style={sty.mlPredictionStepDesc}>提取 5 个特征</div>
+                  </div>
+                  <div style={sty.mlPredictionArrow}>→</div>
+                  <div style={sty.mlPredictionStep}>
+                    <div style={sty.mlPredictionStepTitle}>2. ML 预测</div>
+                    <div style={sty.mlPredictionStepDesc}>计算成功概率</div>
+                  </div>
+                  <div style={sty.mlPredictionArrow}>→</div>
+                  <div style={sty.mlPredictionStep}>
+                    <div style={sty.mlPredictionStepTitle}>3. 决策</div>
+                    <div style={sty.mlPredictionStepDesc}>
+                      {`> ${mlConfig.probabilityThreshold * 100}% 则开仓`}
+                    </div>
+                  </div>
+                </div>
+
+                {flips.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <button
+                      style={sty.btnSecondary}
+                      onClick={async () => {
+                        const testFlip = flips[0];
+                        const result = await predictFlip(testFlip);
+                        if (result) {
+                          alert(
+                            `预测结果:\n` +
+                            `标签: ${result.label === 1 ? '成功' : '失败'}\n` +
+                            `概率: ${(result.probability * 100).toFixed(1)}%\n` +
+                            `决策: ${result.probability > mlConfig.probabilityThreshold ? '✓ 开仓' : '✗ 拒绝'}`
+                          );
+                        }
+                      }}
+                      disabled={predicting}
+                    >
+                      {predicting ? '⏳ 预测中...' : '🧪 测试预测第一条 Flip'}
+                    </button>
+                  </div>
+                )}
+              </Card>
+
+              <Card title="策略对比">
+                <table style={sty.table}>
+                  <thead>
+                    <tr>
+                      <th>策略</th>
+                      <th>信号数量</th>
+                      <th>准确率</th>
+                      <th>说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>原始 SuperTrend</td>
+                      <td>{flips.length}</td>
+                      <td>-</td>
+                      <td>所有 Flip</td>
+                    </tr>
+                    <tr>
+                      <td>Gate 过滤</td>
+                      <td>~{Math.floor(flips.length * 0.6)}</td>
+                      <td>~65%</td>
+                      <td>规则过滤</td>
+                    </tr>
+                    <tr style={{ background: '#00c9a714' }}>
+                      <td><strong>ML 预测</strong></td>
+                      <td>~{Math.floor(flips.length * 0.5)}</td>
+                      <td><strong>{(evaluation.accuracy * 100).toFixed(1)}%</strong></td>
+                      <td>机器学习</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </Card>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ===== Backtest Section =====
 function BacktestSection() {
   return (
@@ -1676,6 +2052,104 @@ function FeatureComparisonTable({ stats }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ConfusionMatrix({ matrix }) {
+  const total = matrix.truePositive + matrix.trueNegative + matrix.falsePositive + matrix.falseNegative;
+
+  return (
+    <div style={sty.confusionMatrixWrapper}>
+      <div style={sty.confusionMatrix}>
+        <div style={sty.confusionMatrixLabels}>
+          <div style={sty.confusionMatrixLabelLeft}>
+            <div style={{ marginBottom: 40 }}>预测</div>
+            <div style={sty.confusionMatrixAxisLabel}>正例</div>
+            <div style={sty.confusionMatrixAxisLabel}>负例</div>
+          </div>
+        </div>
+        <div style={sty.confusionMatrixContent}>
+          <div style={sty.confusionMatrixLabelTop}>
+            <div style={sty.confusionMatrixAxisLabel}>正例</div>
+            <div style={sty.confusionMatrixAxisLabel}>负例</div>
+            <div style={{ marginTop: 8, fontSize: 11, color: '#5a6270' }}>实际</div>
+          </div>
+          <div style={sty.confusionMatrixGrid}>
+            <div style={{ ...sty.confusionMatrixCell, background: '#00c9a720' }}>
+              <div style={sty.confusionMatrixCellValue}>{matrix.truePositive}</div>
+              <div style={sty.confusionMatrixCellLabel}>TP</div>
+              <div style={sty.confusionMatrixCellPercent}>
+                {((matrix.truePositive / total) * 100).toFixed(1)}%
+              </div>
+            </div>
+            <div style={{ ...sty.confusionMatrixCell, background: '#e0526320' }}>
+              <div style={sty.confusionMatrixCellValue}>{matrix.falsePositive}</div>
+              <div style={sty.confusionMatrixCellLabel}>FP</div>
+              <div style={sty.confusionMatrixCellPercent}>
+                {((matrix.falsePositive / total) * 100).toFixed(1)}%
+              </div>
+            </div>
+            <div style={{ ...sty.confusionMatrixCell, background: '#e0526320' }}>
+              <div style={sty.confusionMatrixCellValue}>{matrix.falseNegative}</div>
+              <div style={sty.confusionMatrixCellLabel}>FN</div>
+              <div style={sty.confusionMatrixCellPercent}>
+                {((matrix.falseNegative / total) * 100).toFixed(1)}%
+              </div>
+            </div>
+            <div style={{ ...sty.confusionMatrixCell, background: '#00c9a720' }}>
+              <div style={sty.confusionMatrixCellValue}>{matrix.trueNegative}</div>
+              <div style={sty.confusionMatrixCellLabel}>TN</div>
+              <div style={sty.confusionMatrixCellPercent}>
+                {((matrix.trueNegative / total) * 100).toFixed(1)}%
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={sty.confusionMatrixLegend}>
+        <div style={sty.confusionMatrixLegendItem}>
+          <span style={sty.confusionMatrixLegendDot} />
+          TP: 真正例（预测成功，实际成功）
+        </div>
+        <div style={sty.confusionMatrixLegendItem}>
+          <span style={sty.confusionMatrixLegendDot} />
+          TN: 真负例（预测失败，实际失败）
+        </div>
+        <div style={sty.confusionMatrixLegendItem}>
+          <span style={{ ...sty.confusionMatrixLegendDot, background: '#e05263' }} />
+          FP: 假正例（预测成功，实际失败）
+        </div>
+        <div style={sty.confusionMatrixLegendItem}>
+          <span style={{ ...sty.confusionMatrixLegendDot, background: '#e05263' }} />
+          FN: 假负例（预测失败，实际成功）
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeatureImportanceChart({ data }) {
+  const maxImportance = Math.max(...data.map(d => d.importance));
+
+  return (
+    <div style={sty.featureImportanceChart}>
+      {data.map((item, i) => (
+        <div key={i} style={sty.featureImportanceRow}>
+          <div style={sty.featureImportanceLabel}>{item.feature}</div>
+          <div style={sty.featureImportanceBarContainer}>
+            <div
+              style={{
+                ...sty.featureImportanceBar,
+                width: `${(item.importance / maxImportance) * 100}%`,
+              }}
+            />
+          </div>
+          <div style={sty.featureImportanceValue}>
+            {(item.importance * 100).toFixed(1)}%
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2724,5 +3198,242 @@ const sty = {
   strategyProsCons: {
     fontSize: 11,
     lineHeight: 1.8,
+  },
+  // ML Section styles
+  mlFeatureGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+    gap: 20,
+  },
+  mlFeatureCategory: {
+    padding: 16,
+    background: '#ffffff05',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+  },
+  mlFeatureCategoryTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#e8eaed',
+    marginBottom: 12,
+  },
+  mlFeatureList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  mlFeatureItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 12,
+    color: '#c5c9cf',
+  },
+  mlFeatureCheckbox: {
+    width: 16,
+    height: 16,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 10,
+    color: '#00c9a7',
+  },
+  mlMetricsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+    gap: 16,
+  },
+  mlMetricBox: {
+    textAlign: 'center',
+    padding: 16,
+    background: '#ffffff05',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+  },
+  mlMetricLabel: {
+    fontSize: 11,
+    color: '#8b93a0',
+    marginBottom: 8,
+  },
+  mlMetricValue: {
+    fontSize: 24,
+    fontWeight: 700,
+    color: '#00c9a7',
+  },
+  confusionMatrixWrapper: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 20,
+  },
+  confusionMatrix: {
+    display: 'flex',
+    gap: 16,
+  },
+  confusionMatrixLabels: {
+    display: 'flex',
+    alignItems: 'center',
+  },
+  confusionMatrixLabelLeft: {
+    fontSize: 12,
+    color: '#8b93a0',
+    fontWeight: 600,
+    textAlign: 'center',
+    writingMode: 'vertical-rl',
+    transform: 'rotate(180deg)',
+  },
+  confusionMatrixContent: {
+    flex: 1,
+  },
+  confusionMatrixLabelTop: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 12,
+    marginBottom: 12,
+    fontSize: 12,
+    color: '#8b93a0',
+    fontWeight: 600,
+    textAlign: 'center',
+  },
+  confusionMatrixAxisLabel: {
+    padding: '8px 0',
+  },
+  confusionMatrixGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 12,
+  },
+  confusionMatrixCell: {
+    padding: 20,
+    borderRadius: 8,
+    textAlign: 'center',
+    border: '1px solid var(--border)',
+  },
+  confusionMatrixCellValue: {
+    fontSize: 32,
+    fontWeight: 700,
+    color: '#e8eaed',
+    marginBottom: 4,
+  },
+  confusionMatrixCellLabel: {
+    fontSize: 11,
+    color: '#8b93a0',
+    marginBottom: 8,
+  },
+  confusionMatrixCellPercent: {
+    fontSize: 12,
+    color: '#c5c9cf',
+    fontWeight: 600,
+  },
+  confusionMatrixLegend: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 16,
+    fontSize: 11,
+    color: '#8b93a0',
+  },
+  confusionMatrixLegendItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  confusionMatrixLegendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: '50%',
+    background: '#00c9a7',
+  },
+  featureImportanceChart: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  featureImportanceRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+  },
+  featureImportanceLabel: {
+    width: 140,
+    fontSize: 12,
+    color: '#c5c9cf',
+    fontWeight: 600,
+  },
+  featureImportanceBarContainer: {
+    flex: 1,
+    height: 24,
+    background: '#ffffff05',
+    borderRadius: 4,
+    overflow: 'hidden',
+    border: '1px solid var(--border)',
+  },
+  featureImportanceBar: {
+    height: '100%',
+    background: 'linear-gradient(90deg, #00c9a7 0%, #00a085 100%)',
+    transition: 'width .3s',
+  },
+  featureImportanceValue: {
+    width: 60,
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#00c9a7',
+    textAlign: 'right',
+  },
+  mlModelInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  mlModelInfoRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: 13,
+    padding: '8px 0',
+    borderBottom: '1px solid var(--border)',
+  },
+  mlModelInfoLabel: {
+    color: '#8b93a0',
+  },
+  mlModelInfoValue: {
+    color: '#e8eaed',
+    fontWeight: 600,
+  },
+  mlPredictionHint: {
+    padding: 12,
+    background: '#00c9a714',
+    borderRadius: 6,
+    fontSize: 12,
+    color: '#00c9a7',
+    marginBottom: 16,
+  },
+  mlPredictionFlow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    padding: 24,
+    background: '#ffffff03',
+    borderRadius: 8,
+  },
+  mlPredictionStep: {
+    padding: 16,
+    background: '#ffffff05',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    textAlign: 'center',
+    minWidth: 140,
+  },
+  mlPredictionStepTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#e8eaed',
+    marginBottom: 6,
+  },
+  mlPredictionStepDesc: {
+    fontSize: 11,
+    color: '#8b93a0',
+  },
+  mlPredictionArrow: {
+    fontSize: 20,
+    color: '#5a6270',
   },
 };

@@ -1,0 +1,42 @@
+{
+  "model_type": "random_forest",
+  "trained_at": "2026-09-19T11:34:36.914252",
+  "train_size": 70,
+  "test_size": 30,
+  "evaluation": {
+    "accuracy": 0.8333333333333334,
+    "precision": 0.6666666666666666,
+    "recall": 0.5714285714285714,
+    "f1Score": 0.6153846153846154,
+    "auc": 0.9006211180124223,
+    "confusionMatrix": {
+      "truePositive": 4,
+      "trueNegative": 21,
+      "falsePositive": 2,
+      "falseNegative": 3
+    },
+    "featureImportance": [
+      {
+        "feature": "Wick Ratio",
+        "importance": 0.3071724817674457
+      },
+      {
+        "feature": "Gap/ATR",
+        "importance": 0.22118179938643417
+      },
+      {
+        "feature": "Flip Density",
+        "importance": 0.19353328299350592
+      },
+      {
+        "feature": "趋势年龄",
+        "importance": 0.15354000446047852
+      },
+      {
+        "feature": "Body/ATR",
+        "importance": 0.12457243139213565
+      }
+    ]
+  },
+  "model_params": {}
+}

@@ -79,7 +79,7 @@ fi
 echo ""
 echo "[前端] 安装依赖…"
 cd "$ROOT/frontend" || exit 1
-[ -d node_modules ] || npm install --silent
+npm install --silent
 
 echo "[前端] 启动 Vite :5174"
 npm run dev &

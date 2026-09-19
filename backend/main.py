@@ -19,6 +19,14 @@ from integration import create_enhanced_executor
 from adopt import adopt_exchange_position
 import trade
 
+# 导入机器学习 API
+try:
+    from ml_api import ml_router
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+    logger.warning("机器学习模块未安装，相关功能将不可用")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -93,3 +101,10 @@ app.add_middleware(
 )
 
 app.include_router(router)
+
+# 集成机器学习 API
+if ML_AVAILABLE:
+    app.include_router(ml_router)
+    logger.info("机器学习 API 已启用")
+else:
+    logger.warning("机器学习 API 未启用（缺少依赖）")
