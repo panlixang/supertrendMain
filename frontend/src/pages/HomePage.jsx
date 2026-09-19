@@ -8,7 +8,6 @@ import SignalModal from '../components/SignalModal';
 import TickerBar from '../components/TickerBar';
 import Toasts from '../components/Toasts';
 import TradePanel from '../components/TradePanel';
-import { useWebSocket } from '../hooks/useWebSocket';
 import { useStore } from '../stores/useStore';
 
 const TABS = [
@@ -20,7 +19,6 @@ const TABS = [
 ];
 
 export default function HomePage() {
-  useWebSocket();
   const [tab, setTab] = useState('bias');
   const signals = useStore((s) => s.signals);
   const tf = useStore((s) => s.tf);

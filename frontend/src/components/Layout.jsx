@@ -1,5 +1,6 @@
 import React, { Component, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+import { useWebSocket } from "../hooks/useWebSocket";
 
 // 路由级错误边界：任一页面渲染抛错时，只显示可读报错而非整页黑屏
 class RouteErrorBoundary extends Component {
@@ -57,6 +58,8 @@ const MENU_ITEMS = [
 const SIDEBAR_COLLAPSED_KEY = "st.sidebar.collapsed";
 
 export default function Layout() {
+  // WS 连接放在 Layout(常驻壳层):切页面不断线,研究页也能拿到实时数据
+  useWebSocket();
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
   );
