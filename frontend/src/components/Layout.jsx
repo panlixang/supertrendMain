@@ -1,4 +1,4 @@
-import React, { Component } from "react";
+import React, { Component, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
 // 路由级错误边界：任一页面渲染抛错时，只显示可读报错而非整页黑屏
@@ -39,31 +39,52 @@ const MENU_ITEMS = [
   { path: "/research", label: "策略研究", icon: "🔬" },
 ];
 
+const SIDEBAR_COLLAPSED_KEY = "st.sidebar.collapsed";
+
 export default function Layout() {
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
+  );
+  const toggle = () =>
+    setCollapsed((c) => {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, c ? "0" : "1");
+      return !c;
+    });
+
   return (
     <div style={sty.root}>
-      <aside style={sty.sidebar}>
-        <div style={sty.logo}>
+      <aside style={{ ...sty.sidebar, ...(collapsed ? sty.sidebarCollapsed : {}) }}>
+        <div style={{ ...sty.logo, ...(collapsed ? sty.logoCollapsed : {}) }}>
           <div style={sty.logoIcon}>ST</div>
-          <div style={sty.logoText}>SuperTrend</div>
+          {!collapsed && <div style={sty.logoText}>SuperTrend</div>}
         </div>
 
-        <nav style={sty.nav}>
+        <nav style={{ ...sty.nav, ...(collapsed ? sty.navCollapsed : {}) }}>
           {MENU_ITEMS.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
               end={item.path === "/"}
+              title={collapsed ? item.label : undefined}
               style={({ isActive }) => ({
                 ...sty.navItem,
+                ...(collapsed ? sty.navItemCollapsed : {}),
                 ...(isActive ? sty.navItemActive : {}),
               })}
             >
               <span style={sty.navIcon}>{item.icon}</span>
-              <span style={sty.navLabel}>{item.label}</span>
+              {!collapsed && <span style={sty.navLabel}>{item.label}</span>}
             </NavLink>
           ))}
         </nav>
+
+        <button
+          onClick={toggle}
+          title={collapsed ? "展开菜单" : "收起菜单"}
+          style={{ ...sty.toggle, ...(collapsed ? sty.toggleCollapsed : {}) }}
+        >
+          {collapsed ? "»" : "«"}
+        </button>
       </aside>
 
       <main style={sty.main}>
@@ -90,6 +111,11 @@ const sty = {
     display: "flex",
     flexDirection: "column",
     padding: "16px 0",
+    transition: "width .2s ease",
+    overflow: "hidden",
+  },
+  sidebarCollapsed: {
+    width: 56,
   },
   logo: {
     display: "flex",
@@ -98,6 +124,10 @@ const sty = {
     padding: "0 16px 20px",
     borderBottom: "1px solid var(--border)",
     marginBottom: 12,
+  },
+  logoCollapsed: {
+    justifyContent: "center",
+    padding: "0 0 20px",
   },
   logoIcon: {
     width: 32,
@@ -121,6 +151,11 @@ const sty = {
     flexDirection: "column",
     gap: 4,
     padding: "0 8px",
+    flex: 1,
+  },
+  navCollapsed: {
+    padding: "0 8px",
+    alignItems: "center",
   },
   navItem: {
     display: "flex",
@@ -134,6 +169,12 @@ const sty = {
     fontWeight: 500,
     transition: "all .15s",
     cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  navItemCollapsed: {
+    justifyContent: "center",
+    padding: "10px 0",
+    width: 40,
   },
   navItemActive: {
     background: "#00c9a714",
@@ -146,6 +187,21 @@ const sty = {
   },
   navLabel: {
     flex: 1,
+  },
+  toggle: {
+    margin: "0 12px",
+    padding: "8px 0",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "#8b93a0",
+    fontSize: 16,
+    lineHeight: 1,
+    cursor: "pointer",
+    transition: "all .15s",
+  },
+  toggleCollapsed: {
+    margin: "0 8px",
   },
   main: {
     flex: 1,
