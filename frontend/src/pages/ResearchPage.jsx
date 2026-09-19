@@ -19,6 +19,7 @@ export default function ResearchPage() {
   const tf = useStore((s) => s.tf);
   const candles = useStore((s) => s.candles[tf]);
   const signals = useStore((s) => s.signals);
+  const connected = useStore((s) => s.connected);
 
   // 从当前图表提取 Flip 事件
   const extractFlips = () => {
