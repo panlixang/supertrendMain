@@ -53,6 +53,7 @@ class RouteErrorBoundary extends Component {
 const MENU_ITEMS = [
   { path: "/", label: "信号终端", icon: "📊" },
   { path: "/research", label: "策略研究", icon: "🔬" },
+  { path: "/model", label: "策略模型", icon: "🔬" },
 ];
 
 const SIDEBAR_COLLAPSED_KEY = "st.sidebar.collapsed";

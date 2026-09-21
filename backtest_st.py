@@ -210,6 +210,11 @@ def backtest(candles, signals, apply_fees=True, tp1_pct=TP1_PCT, tp2_pct=TP2_PCT
     for k in range(len(signals)):
         sig = signals[k]
         ei = sig["i"]
+        if sig.get("action") == "close":   # Market Filter 平仓信号: 只平不新开
+            if side != 0:
+                close_full(c[ei], True)
+            curve.append(equity)
+            continue
         if side != 0:                      # 反向信号 -> 平旧仓剩余(翻仓, 市价taker)
             close_full(c[ei], True)
         open_pos(c[ei], sig["action"])

@@ -2786,17 +2786,6 @@ const sty = {
     color: '#4e8aff',
     marginRight: 8,
   },
-  statsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-    gap: 16,
-  },
-  statBox: {
-    padding: 16,
-    background: '#ffffff03',
-    borderRadius: 8,
-    textAlign: 'center',
-  },
   statValue: {
     fontSize: 24,
     fontWeight: 700,
