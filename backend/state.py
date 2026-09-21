@@ -142,6 +142,10 @@ class SymbolTradeConfig:
     # 用于验证回测引擎优势是否转移到实时（主引擎不变，只做对照采集）。
     # 取值同 score_engine："" / "v1" / "v2" / "trend_follow_v1" / "quality_filter_v2"。
     shadow_engine:          str   = ""
+    # ── 4h MA30 方向门（高周期方向过滤，回测验证可降回撤/提胜率）──
+    ma30_dir_enabled: bool  = False   # 是否启用 4h MA30 方向门
+    ma30_tf:          str   = "4h"    # 方向参考周期
+    ma30_period:      int   = 30      # MA 周期
 
 
 # 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；
@@ -390,6 +394,10 @@ class AppState:
             # 评分引擎（Engine Profile）+ Shadow Mode（阶段3）
             score_engine=sc.score_engine,
             shadow_engine=sc.shadow_engine,
+            # 4h MA30 方向门
+            ma30_dir_enabled=sc.ma30_dir_enabled,
+            ma30_tf=sc.ma30_tf,
+            ma30_period=sc.ma30_period,
         )
 
     async def broadcast(self, msg: dict):
@@ -525,6 +533,10 @@ class AppState:
                     use_dynamic_threshold=e.get("use_dynamic_threshold", True),
                     score_engine=e.get("score_engine", ""),
                     shadow_engine=e.get("shadow_engine", ""),
+                    # 4h MA30 方向门（新字段，旧配置没有时用默认值）
+                    ma30_dir_enabled=e.get("ma30_dir_enabled", False),
+                    ma30_tf=e.get("ma30_tf", "4h"),
+                    ma30_period=e.get("ma30_period", 30),
                 )
                 # 覆盖其他字段
                 if "enabled" in e:

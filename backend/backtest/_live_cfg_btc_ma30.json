@@ -1,0 +1,40 @@
+[
+  {
+    "st": "11×4 (线上)",
+    "trades": 26,
+    "pnl_u": 25.38,
+    "margin_roi_pct": 507.6,
+    "hold_pct": 8.91,
+    "max_dd_pct": 4.71,
+    "win_rate": 80.8,
+    "avg_win": 2.92,
+    "avg_loss": -1.61,
+    "profit_factor": 7.27,
+    "er_blocked": 30,
+    "align_blocked": 16,
+    "tp1": 16,
+    "tp2": 11,
+    "tp3": 0,
+    "stops": 17,
+    "reverses": 8
+  },
+  {
+    "st": "10×3 (覆盖)",
+    "trades": 29,
+    "pnl_u": 9.77,
+    "margin_roi_pct": 195.4,
+    "hold_pct": 8.91,
+    "max_dd_pct": 4.14,
+    "win_rate": 62.1,
+    "avg_win": 1.88,
+    "avg_loss": -1.04,
+    "profit_factor": 2.74,
+    "er_blocked": 42,
+    "align_blocked": 39,
+    "tp1": 17,
+    "tp2": 9,
+    "tp3": 0,
+    "stops": 18,
+    "reverses": 10
+  }
+]

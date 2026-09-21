@@ -38,6 +38,22 @@ from history import fetch_candles, load_history
 from indicators import st_signals, super_trend
 from state import AppState, Candle, SymbolStore, Ticker, TF_CONFIG
 from integration import enhanced_signal_handler
+
+
+def _ma30_direction(store, cfg) -> int | None:
+    """4h MA30 方向门：参考周期最新收盘 > MA(period) → 1(只多) / < → -1(只空)。
+
+    数据不足（参考周期 K 线数 < period）返回 None，表示「未知方向、不拦」。
+    仅用于拦新开仓；反向平仓不受影响（executor 在 gate 检查前先处理反向）。
+    """
+    tf = getattr(cfg, "ma30_tf", "4h") or "4h"
+    period = int(getattr(cfg, "ma30_period", 30) or 30)
+    arr = store.candles_by_tf(tf)
+    if not arr or len(arr) < period:
+        return None
+    closes = [c["c"] for c in arr]
+    ma = sum(closes[-period:]) / period
+    return 1 if closes[-1] > ma else -1
 import candle_store
 
 logger = logging.getLogger(__name__)
@@ -362,6 +378,23 @@ class OKXFeed:
         # 平衡型方案：打分制字段
         full["trade_half"] = gate.get("trade_half", False)
         full["score_detail"] = gate.get("score_detail")
+
+        # ── 4h MA30 方向门（高周期方向过滤，仅拦新开仓）──
+        # 与回测趋势对齐：参考周期收盘站上 MA → 只多；跌破 → 只空；未知方向不拦。
+        if getattr(cfg, "ma30_dir_enabled", False):
+            _dir = _ma30_direction(store, cfg)
+            if _dir is not None:
+                _want_long = sig.get("type") == "buy"
+                _aligned = (_want_long and _dir == 1) or (not _want_long and _dir == -1)
+                if not _aligned:
+                    logger.info(
+                        f"[方向门拦截] {store.symbol} {tf} {sig.get('type')} "
+                        f"— 4h MA{cfg.ma30_period} 方向={_dir:+d} 不符")
+                    gate = {**gate, "trade": False}
+                    full["will_trade"] = False
+                    _reason = f"4h MA{cfg.ma30_period} 方向不符（仅{'多' if _dir == 1 else '空'}）"
+                    if _reason not in (full.get("gate_reasons") or []):
+                        full["gate_reasons"] = list(full.get("gate_reasons") or []) + [_reason]
 
         # Shadow Mode（阶段3）：品种配置了 shadow_engine 时，双引擎对照落盘。
         # 只在 cfg 显式开启时生效，默认零开销；异常绝不影响主流程（内部捕获）。

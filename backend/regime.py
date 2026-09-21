@@ -139,6 +139,11 @@ class TradeConfig:
     mtf_neutral_score:      float = 12.0    # 大周期无方向 / seed / 数据不足
     mtf_recent_reverse_score: float = 8.0   # 大周期刚反向（切换中，轻微反）
     mtf_strong_reverse_score: float = 4.0   # 大周期稳定反向（强反，重罚）
+    # ── 4h MA30 方向门（高周期方向过滤，回测验证可降回撤/提胜率）──
+    # 仅拦新开仓：参考周期最新收盘 > MA(period) 才允许多，< 才允许空。
+    ma30_dir_enabled: bool = False   # 是否启用 4h MA30 方向门
+    ma30_tf:          str  = "4h"    # 方向参考周期
+    ma30_period:      int  = 30      # MA 周期
 
 
 def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,

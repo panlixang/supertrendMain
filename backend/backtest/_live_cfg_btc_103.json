@@ -1,0 +1,27 @@
+[
+  {
+    "name": "BTC",
+    "symbol": "BTC-USDT-SWAP",
+    "tf": "1h",
+    "params": "10×3.0",
+    "bars": 4500,
+    "start": "2026-03-17",
+    "end": "2026-09-21",
+    "pnl_u": 9.23,
+    "margin_roi_pct": 184.6,
+    "hold_pct": 10.86,
+    "max_dd_pct": 5.12,
+    "trades": 46,
+    "win_rate": 60.9,
+    "avg_win_pct": 1.58,
+    "avg_loss_pct": -1.18,
+    "profit_factor": 1.94,
+    "payoff": 1.34,
+    "blocked": 64,
+    "tp1": 24,
+    "tp2": 16,
+    "tp3": 0,
+    "stops": 29,
+    "reverses": 16
+  }
+]

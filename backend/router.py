@@ -770,6 +770,10 @@ class SymbolCfgIn(BaseModel):
     score_engine:            Optional[str]   = None
     # Shadow Mode（阶段3）：另一引擎名 = 每次判单双引擎对照落盘；"" = 关闭
     shadow_engine:           Optional[str]   = None
+    # 4h MA30 方向门
+    ma30_dir_enabled: Optional[bool] = None
+    ma30_tf:          Optional[str]  = None
+    ma30_period:      Optional[int]  = None
     # 止盈止损（品种独立）
     exit_rules:            Optional[ExitRulesPatch] = None
     exit_rules_quick:      Optional[ExitRulesPatch] = None
@@ -928,6 +932,11 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
                              "/ quality_filter_v2 / event_timing_v3"}
         c.shadow_engine = _se
 
+    # 4h MA30 方向门
+    if body.ma30_dir_enabled is not None: c.ma30_dir_enabled = body.ma30_dir_enabled
+    if body.ma30_tf          is not None: c.ma30_tf          = body.ma30_tf.strip()
+    if body.ma30_period      is not None: c.ma30_period      = max(2, min(500, body.ma30_period))
+
     # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
     if body.multiplier  is not None: st.params.multiplier = max(0.1, body.multiplier)
@@ -956,6 +965,7 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
         body.use_scoring, body.scoring_full_threshold, body.scoring_half_threshold,
         body.scoring_alert_threshold, body.use_dynamic_threshold,
         body.score_engine,
+        body.ma30_dir_enabled, body.ma30_tf, body.ma30_period,
     ])
     did_rescan = False
     if (body.rescan or _affects_signals) and state.feed:
