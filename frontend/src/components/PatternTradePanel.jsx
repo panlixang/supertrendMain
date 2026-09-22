@@ -76,7 +76,9 @@ export default function PatternTradePanel({ currentSymbol }) {
     tp1_pct: 1.5, tp1_ratio: 70, sl_pct: 2.0,
     move_sl_to_entry: true, trail_with_st: true,
   });
-  const [nt, setNt] = useState({ no_trend_adx: 15, no_trend_ma_gap: 0.2 });
+  const [nt, setNt] = useState({
+    squeeze_width_pct: 1.5, donchian_n: 20, waive_mom_pct: 1.2,
+  });
 
   const [keyForm, setKeyForm] = useState({ api_key: "", api_secret: "", passphrase: "" });
   const [addForm, setAddForm] = useState({ symbol: "", margin: 10, leverage: 3, allow: ["1h"] });
@@ -202,8 +204,9 @@ export default function PatternTradePanel({ currentSymbol }) {
   useEffect(() => {
     if (!cfg) return;
     setNt({
-      no_trend_adx: cfg.no_trend_adx ?? 15,
-      no_trend_ma_gap: cfg.no_trend_ma_gap ?? 0.2,
+      squeeze_width_pct: cfg.squeeze_width_pct ?? 1.5,
+      donchian_n: cfg.donchian_n ?? 20,
+      waive_mom_pct: cfg.waive_mom_pct ?? 1.2,
     });
   }, [cfg]);
 
@@ -328,28 +331,34 @@ export default function PatternTradePanel({ currentSymbol }) {
         </div>
         <div style={SZ.row}>
           <input
-            type="checkbox" checked={!!cfg.no_trend_block}
-            onChange={(e) => patch({ no_trend_block: e.target.checked })}
+            type="checkbox" checked={!!cfg.trend_filter}
+            onChange={(e) => patch({ trend_filter: e.target.checked })}
           />
           <span>
-            无趋势拦截（当前下单周期 ADX&lt;{nt.no_trend_adx} 且 MA20/60 间距&lt;{nt.no_trend_ma_gap}% 不开单）
+            综合趋势过滤（死水区拦截 + 二选一突破放行）
           </span>
         </div>
-        {!!cfg.no_trend_block && (
+        {!!cfg.trend_filter && (
           <div style={{ ...SZ.row, marginLeft: 20, flexWrap: "wrap" }}>
-            <span style={{ color: C.neutral }}>ADX(14)&lt;</span>
+            <span style={{ color: C.neutral }}>Squeeze 带宽&lt;</span>
             <input
-              style={{ ...SZ.inp, width: 56 }} type="number" step={1} min={0}
-              value={nt.no_trend_adx}
-              onChange={(e) => patchNt("no_trend_adx", Number(e.target.value))}
+              style={{ ...SZ.inp, width: 56 }} type="number" step={0.1} min={0}
+              value={nt.squeeze_width_pct}
+              onChange={(e) => patchNt("squeeze_width_pct", Number(e.target.value))}
             />
-            <span style={{ color: C.neutral }}>且 MA20/MA60 间距&lt;</span>
+            <span style={{ color: C.neutral }}>% 且缩量=死水拦截；Donchian 周期</span>
             <input
-              style={{ ...SZ.inp, width: 56 }} type="number" step={0.05} min={0}
-              value={nt.no_trend_ma_gap}
-              onChange={(e) => patchNt("no_trend_ma_gap", Number(e.target.value))}
+              style={{ ...SZ.inp, width: 52 }} type="number" step={1} min={2}
+              value={nt.donchian_n}
+              onChange={(e) => patchNt("donchian_n", Number(e.target.value))}
             />
-            <span style={{ color: C.neutral }}>%</span>
+            <span style={{ color: C.neutral }}>根；动量豁免 mom</span>
+            <input
+              style={{ ...SZ.inp, width: 52 }} type="number" step={0.1} min={0}
+              value={nt.waive_mom_pct}
+              onChange={(e) => patchNt("waive_mom_pct", Number(e.target.value))}
+            />
+            <span style={{ color: C.neutral }}>% 突破放行</span>
           </div>
         )}
         </div>

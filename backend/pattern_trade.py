@@ -4,7 +4,7 @@
 - 配置文件 pattern_trade.json、凭据文件 pattern_credentials.json，都不进 settings.json
 - 下单通过 creds 的 ContextVar 覆盖 —— Task 级隔离，两页可跑不同交易所 / 不同子账户
 - 信号用基础周期的「原始 SuperTrend」（ATR 10 / factor 3.0），与首页 15/9.1 无关
-- 过滤两个开关：block_4h（4h 形态反向拦截）+ no_trend_block（当前下单周期无趋势拦截）
+- 过滤两个开关：block_4h（4h 形态反向拦截）+ trend_filter（综合趋势过滤：Squeeze 死水区拦截 + Donchian/mom 二选一突破放行）
 - 出场用 position.ExitRules 默认档 = 回测验证过的 TP1 1.5% 平 70% + 保本 + 跟随 ST 跟踪
 
 同一品种两页都可能下单时不校验冲突（用户用不同子账户各自管理）。
@@ -25,7 +25,7 @@ import creds
 import history
 import trade
 from executor import Executor
-from indicators import ma, super_trend, ta_adx
+from indicators import ma, super_trend, ta_adx, ta_sma
 from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
 from regime import TradeConfig
@@ -66,12 +66,22 @@ class PatternConfig:
     price_offset: float = 0.05
     exchange:     str   = "okx"
     block_4h:     bool  = True     # True = 4h 形态反向则不下单
-    # 无趋势拦截：当前下单周期（如 1h）同时满足下面两条才判「无趋势」不开单
-    #   ADX(14) < no_trend_adx                      趋势强度不足
-    #   |MA20 - MA60| / MA60 * 100 < no_trend_ma_gap  快慢均线走平贴合
-    no_trend_block:   bool  = False  # True = 开启无趋势拦截
-    no_trend_adx:     float = 15.0   # ADX(14) 阈值（低于 = 趋势弱）
-    no_trend_ma_gap:  float = 0.2    # MA20/MA60 间距阈值（%，低于 = 走平）
+    # 综合趋势过滤器（替代原「无趋势拦截」），公式：
+    #   Allow = Align4H AND NOT Squeeze AND (Donchian OR Mom12)
+    #   Align4H 由 block_4h 负责；本过滤器负责 Squeeze 死水区拦截 + 二选一突破放行
+    trend_filter:       bool  = True    # True = 开启综合趋势过滤
+    # 条件 1：Squeeze 极度窄幅死水区（极窄幅布林收口 AND 缩量，须同时满足才判死水）
+    squeeze_bb_n:       int   = 20      # 布林带周期
+    squeeze_bb_mult:    float = 2.0     # 布林带倍数
+    squeeze_width_pct:  float = 1.5     # 带宽% 低于该值 = 极窄幅（死水）
+    squeeze_vol_n:      int   = 20      # 量能 MA 周期
+    squeeze_vol_mult:   float = 0.8     # 当前量 < MA(Vol,n)*该倍数 = 缩量
+    # 条件 2：Donchian 通道突破放行（价格收在前 N 根高低点之外）
+    donchian_n:         int   = 20      # 通道周期
+    # 条件 3：纯动量启动豁免（单根下单周期动量爆破）
+    waive_mom_n:        int   = 12      # 动量观察根数（下单周期）
+    waive_mom_pct:      float = 1.2     # 朝信号方向累计涨跌% 阈值
+
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
     # 出场参数（回测验证档，面板可配置）
@@ -479,10 +489,10 @@ class PatternTrader:
                 last = self._last_order_at.get(key, 0)
                 if time.time() - last < self.cfg.cooldown_sec:
                     continue
-            # 3) 过滤器：4h 形态方向 + 当前下单周期无趋势
+            # 3) 过滤器：4h 形态方向 + 综合趋势过滤（Squeeze/Donchian/mom）
             if self.cfg.block_4h and not await self._allow_by_4h(sym, sig):
                 continue
-            if self.cfg.no_trend_block and not await self._allow_by_no_trend(sym, sig):
+            if self.cfg.trend_filter and not await self._allow_by_trend(sym, sig):
                 continue
             self._last_order_at[key] = time.time()
             await ex.on_signal(sig, {"trade": True, "profile": "normal"})
@@ -554,43 +564,78 @@ class PatternTrader:
         pdir = pmap[pts[idx]].get("dir")
         return pdir != -sig_dir(sig)
 
-    async def _allow_by_no_trend(self, sym: str, sig: dict) -> bool:
-        """True=放行。当前下单周期「无趋势」则拦截（只拦开新仓，不影响反向平仓）。
+    async def _allow_by_trend(self, sym: str, sig: dict) -> bool:
+        """True=放行。综合趋势过滤（替代原「无趋势拦截」）。
 
-        无趋势判定 —— 两条【同时满足】才算无趋势（不是满足任一）：
-          - ADX(14) < self.cfg.no_trend_adx                  趋势强度不足
-          - |MA20 - MA60| / MA60 * 100 < self.cfg.no_trend_ma_gap   均线走平贴合
-        周期取「当前选择下单的 K 线周期」= sig["tf"]（如 1h），不是固定 4h。
-        数据不足（ADX / MA60 未预热）一律放行，不拦。
+        公式：Allow = Align4H AND NOT Squeeze AND (Donchian OR Mom12)
+          - Align4H 由 block_4h + _allow_by_4h 在调用处负责（顺大势硬门槛）
+          - 条件 1 Squeeze：极窄幅(布林收口) AND 缩量 → 死水区，一律拦截
+          - 条件 2 Donchian：价格收在前 N 根高低点之外 → 有效突破，放行
+          - 条件 3 Mom12：朝信号方向近 N 根累计涨跌% >= 阈值 → 动量爆破，豁免放行
+        数据不足一律放行，不拦。
         """
         tf = sig.get("tf") or "1h"
         try:
-            cs = await self._kline(sym, tf, 500)
+            cs = await self._kline(sym, tf, 600)
         except Exception as e:
-            logger.warning(f"[形态下单] {sym} {tf} 无趋势判定取数失败: {e}")
+            logger.warning(f"[形态下单] {sym} {tf} 趋势过滤取数失败: {e}")
             return True
-        # ADX(14) 需约 2*14 根预热，MA60 需 60 根，留足余量
-        if len(cs) < 80:
+        cfg = self.cfg
+        need = max(cfg.squeeze_bb_n, cfg.squeeze_vol_n,
+                   cfg.donchian_n + 1, cfg.waive_mom_n + 1)
+        if len(cs) < need + 5:
             return True
+        closes = [c["c"] for c in cs]
         highs = [c["h"] for c in cs]
         lows = [c["l"] for c in cs]
-        closes = [c["c"] for c in cs]
-        adx = ta_adx(highs, lows, closes, 14)
-        m20 = ma(closes, 20, "EMA")
-        m60 = ma(closes, 60, "EMA")
-        a, f, s = adx[-1], m20[-1], m60[-1]
-        if a is None or f is None or s is None or not s:
-            return True
-        gap_pct = abs(f - s) / s * 100.0
-        no_trend = (a < self.cfg.no_trend_adx) and (gap_pct < self.cfg.no_trend_ma_gap)
-        if no_trend:
+        vols = [c["vol"] for c in cs]
+        sd = sig_dir(sig)
+        # —— 条件 1：Squeeze 极度窄幅死水区（极窄幅 AND 缩量，须同时满足）——
+        bb_n = cfg.squeeze_bb_n
+        mid = ta_sma(closes, bb_n)[-1]
+        win = closes[-bb_n:]
+        var = sum((x - mid) ** 2 for x in win) / bb_n
+        std = var ** 0.5
+        upper = mid + cfg.squeeze_bb_mult * std
+        lower = mid - cfg.squeeze_bb_mult * std
+        width_pct = (upper - lower) / mid * 100.0 if mid else 0.0
+        vn = cfg.squeeze_vol_n
+        vol_ma = ta_sma(vols, vn)[-1]
+        low_vol = vol_ma > 0 and vols[-1] < vol_ma * cfg.squeeze_vol_mult
+        squeeze = (width_pct < cfg.squeeze_width_pct) and low_vol
+        if squeeze:
             logger.info(
-                "[形态下单] %s %s 无趋势拦截: ADX=%.1f(<%.1f) 且 "
-                "MA20/60间距=%.3f%%(<%.2f%%)",
-                sym, tf, a, self.cfg.no_trend_adx,
-                gap_pct, self.cfg.no_trend_ma_gap,
+                "[形态下单] %s %s Squeeze死水区拦截: BB宽=%.2f%%(<%.2f%%) "
+                "量=%.0f(<%.0f*%.2f)",
+                sym, tf, width_pct, cfg.squeeze_width_pct,
+                vols[-1], vol_ma, cfg.squeeze_vol_mult,
             )
-        return not no_trend
+            return False
+        # —— 条件 2：Donchian 通道突破（价格收在前 N 根高低点之外）——
+        N = cfg.donchian_n
+        win_h = highs[-N - 1:-1]
+        win_l = lows[-N - 1:-1]
+        don = False
+        if len(win_h) >= N:
+            hh, ll = max(win_h), min(win_l)
+            don = (closes[-1] > hh) if sd > 0 else (closes[-1] < ll)
+        # —— 条件 3：纯动量启动豁免 ——
+        m = cfg.waive_mom_n
+        mom = (closes[-1] / closes[-1 - m] - 1) * sd * 100.0 if len(closes) > m else 0.0
+        mom_pass = mom >= cfg.waive_mom_pct
+        if don or mom_pass:
+            logger.info(
+                "[形态下单] %s %s 趋势过滤放行: Donchian=%s "
+                "mom%d=%.2f%%(>=%.2f%%)",
+                sym, tf, don, m, mom, cfg.waive_mom_pct,
+            )
+            return True
+        logger.info(
+            "[形态下单] %s %s 趋势过滤拦截: 非死水但无突破 "
+            "(Donchian=False mom%d=%.2f%%<%.2f%%)",
+            sym, tf, m, mom, cfg.waive_mom_pct,
+        )
+        return False
 
 
 def sig_dir(sig: dict) -> int:
