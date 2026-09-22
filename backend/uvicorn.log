@@ -1,57 +1,93 @@
-2026-09-22 20:16:55,119 [WARNING] 机器学习模块未安装，相关功能将不可用: No module named 'joblib'
-2026-09-22 20:16:55,128 [WARNING] 机器学习 API 未启用（缺少依赖）
-INFO:     Started server process [49779]
+2026-09-22 20:25:21,945 [WARNING] 机器学习模块未安装，相关功能将不可用: No module named 'joblib'
+2026-09-22 20:25:21,954 [WARNING] 机器学习 API 未启用（缺少依赖）
+INFO:     Started server process [82680]
 INFO:     Waiting for application startup.
-2026-09-22 20:16:55,128 [INFO] 拉取历史K线 [BTC-USDT] …
-2026-09-22 20:16:55,148 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
-2026-09-22 20:16:55,159 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
-2026-09-22 20:16:55,160 [INFO] 历史K线[BTC-USDT 1m] 拉取 0 根（0 页）
-2026-09-22 20:16:55,160 [INFO] 历史就绪[BTC-USDT 1m] 内存 0/600（本地 0 + REST 0）
-2026-09-22 20:16:55,322 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,332 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,333 [INFO] 历史K线[BTC-USDT 5m] 拉取 0 根（0 页）
-2026-09-22 20:16:55,333 [INFO] 历史就绪[BTC-USDT 5m] 内存 0/600（本地 0 + REST 0）
-2026-09-22 20:16:55,495 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,505 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,506 [INFO] 历史K线[BTC-USDT 15m] 拉取 0 根（0 页）
-2026-09-22 20:16:55,506 [INFO] 历史就绪[BTC-USDT 15m] 内存 0/9000（本地 0 + REST 0）
-2026-09-22 20:16:55,667 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,678 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,679 [INFO] 历史K线[BTC-USDT 30m] 拉取 0 根（0 页）
-2026-09-22 20:16:55,679 [INFO] 历史就绪[BTC-USDT 30m] 内存 0/800（本地 0 + REST 0）
-2026-09-22 20:16:55,840 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,852 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:55,853 [INFO] 历史K线[BTC-USDT 1h] 拉取 0 根（0 页）
-2026-09-22 20:16:55,853 [INFO] 历史就绪[BTC-USDT 1h] 内存 0/4500（本地 0 + REST 0）
-2026-09-22 20:16:56,036 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
-2026-09-22 20:16:56,053 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
-2026-09-22 20:16:56,054 [INFO] 历史K线[BTC-USDT 4h] 拉取 0 根（0 页）
-2026-09-22 20:16:56,054 [INFO] 历史就绪[BTC-USDT 4h] 内存 0/1200（本地 0 + REST 0）
-2026-09-22 20:16:56,225 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
-2026-09-22 20:16:56,237 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:56,238 [INFO] 历史K线[BTC-USDT 1d] 拉取 0 根（0 页）
-2026-09-22 20:16:56,238 [INFO] 历史就绪[BTC-USDT 1d] 内存 0/220（本地 0 + REST 0）
-2026-09-22 20:16:56,402 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
-2026-09-22 20:16:56,411 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:56,412 [INFO] 历史K线[BTC-USDT 1w] 拉取 0 根（0 页）
-2026-09-22 20:16:56,412 [INFO] 历史就绪[BTC-USDT 1w] 内存 0/300（本地 0 + REST 0）
-2026-09-22 20:16:56,585 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
-2026-09-22 20:16:56,601 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
-2026-09-22 20:16:56,602 [INFO] 历史K线[BTC-USDT 1M] 拉取 0 根（0 页）
-2026-09-22 20:16:56,602 [INFO] 历史就绪[BTC-USDT 1M] 内存 0/200（本地 0 + REST 0）
-2026-09-22 20:16:56,754 [INFO] 历史加载完成（1 个品种），启动实时行情
-2026-09-22 20:16:56,754 [INFO] [形态下单] 后台循环已启动（paper=True，品种 0 个）
+2026-09-22 20:25:21,955 [INFO] 拉取历史K线 [BTC-USDT] …
+2026-09-22 20:25:26,147 [INFO] 历史K线[BTC-USDT 1m] 拉取 600 根（2 页）
+2026-09-22 20:25:26,147 [INFO] 历史就绪[BTC-USDT 1m] 内存 600/600（本地 0 + REST 600）
+2026-09-22 20:25:28,050 [INFO] 历史K线[BTC-USDT 5m] 拉取 600 根（2 页）
+2026-09-22 20:25:28,050 [INFO] 历史就绪[BTC-USDT 5m] 内存 600/600（本地 0 + REST 600）
+2026-09-22 20:26:03,053 [INFO] 历史K线[BTC-USDT 15m] 拉取 9000 根（30 页）
+2026-09-22 20:26:03,094 [INFO] 历史就绪[BTC-USDT 15m] 内存 9000/9000（本地 0 + REST 9000）
+2026-09-22 20:26:05,595 [INFO] 历史K线[BTC-USDT 30m] 拉取 800 根（3 页）
+2026-09-22 20:26:05,595 [INFO] 历史就绪[BTC-USDT 30m] 内存 800/800（本地 0 + REST 800）
+2026-09-22 20:26:37,827 [INFO] 历史K线[BTC-USDT 1h] 拉取 4500 根（15 页）
+2026-09-22 20:26:37,847 [INFO] 历史就绪[BTC-USDT 1h] 内存 4500/4500（本地 0 + REST 4500）
+2026-09-22 20:26:45,466 [INFO] 历史K线[BTC-USDT 4h] 拉取 1200 根（4 页）
+2026-09-22 20:26:45,477 [INFO] 历史就绪[BTC-USDT 4h] 内存 1200/1200（本地 0 + REST 1200）
+2026-09-22 20:26:46,648 [INFO] 历史K线[BTC-USDT 1d] 拉取 220 根（1 页）
+2026-09-22 20:26:46,653 [INFO] 历史就绪[BTC-USDT 1d] 内存 220/220（本地 0 + REST 220）
+2026-09-22 20:26:47,404 [INFO] 历史K线[BTC-USDT 1w] 拉取 300 根（1 页）
+2026-09-22 20:26:47,404 [INFO] 历史就绪[BTC-USDT 1w] 内存 300/300（本地 0 + REST 300）
+2026-09-22 20:26:48,752 [INFO] 历史K线[BTC-USDT 1M] 拉取 108 根（1 页）
+2026-09-22 20:26:48,753 [INFO] 历史就绪[BTC-USDT 1M] 内存 108/200（本地 0 + REST 108）
+2026-09-22 20:26:48,944 [INFO] [自适应调整] 波动率=0.05%, 倍数=0.02
+2026-09-22 20:26:48,946 [INFO] [自适应调整] 波动率=0.08%, 倍数=0.03
+2026-09-22 20:26:48,948 [INFO] [自适应调整] 波动率=0.12%, 倍数=0.05
+2026-09-22 20:26:48,951 [INFO] [自适应调整] 波动率=0.13%, 倍数=0.05
+2026-09-22 20:26:48,953 [INFO] [动量突破] 15m buy - 动量突破（区间0.1%，量能放大）
+2026-09-22 20:26:48,956 [INFO] [自适应调整] 波动率=0.05%, 倍数=0.02
+2026-09-22 20:26:48,958 [INFO] [自适应调整] 波动率=0.07%, 倍数=0.03
+2026-09-22 20:26:48,960 [INFO] [动量突破] 15m sell - 动量突破（区间0.7%，量能放大）
+2026-09-22 20:26:48,963 [INFO] [动量突破] 15m buy - 动量突破（区间0.7%，量能放大）
+2026-09-22 20:26:48,965 [INFO] [自适应调整] 波动率=0.2%, 倍数=0.08
+2026-09-22 20:26:48,968 [INFO] [动量突破] 15m buy - 动量突破（区间0.6%，量能放大）
+2026-09-22 20:26:48,971 [INFO] [动量突破] 15m sell - 动量突破（区间0.5%，量能放大）
+2026-09-22 20:26:48,973 [INFO] [动量突破] 15m buy - 动量突破（区间0.5%，量能放大）
+2026-09-22 20:26:48,976 [INFO] [自适应调整] 波动率=0.16%, 倍数=0.06
+2026-09-22 20:26:48,979 [INFO] [自适应调整] 波动率=0.21%, 倍数=0.08
+2026-09-22 20:26:48,982 [INFO] [自适应调整] 波动率=0.31%, 倍数=0.13
+2026-09-22 20:26:48,984 [INFO] [自适应调整] 波动率=0.09%, 倍数=0.04
+2026-09-22 20:26:48,987 [INFO] [自适应调整] 波动率=0.12%, 倍数=0.05
+2026-09-22 20:26:48,990 [INFO] [动量突破] 15m buy - 动量突破（区间1.4%，量能放大）
+2026-09-22 20:26:48,993 [INFO] [动量突破] 15m sell - 动量突破（区间0.2%，量能放大）
+2026-09-22 20:26:48,997 [INFO] [自适应调整] 波动率=0.14%, 倍数=0.05
+2026-09-22 20:26:49,000 [INFO] [自适应调整] 波动率=0.16%, 倍数=0.06
+2026-09-22 20:26:49,003 [INFO] [动量突破] 15m buy - 动量突破（区间0.4%，量能放大）
+2026-09-22 20:26:49,006 [INFO] [自适应调整] 波动率=0.12%, 倍数=0.05
+2026-09-22 20:26:49,009 [INFO] [动量突破] 15m buy - 动量突破（区间0.4%，量能放大）
+2026-09-22 20:26:49,012 [INFO] [自适应调整] 波动率=0.15%, 倍数=0.06
+2026-09-22 20:26:49,013 [INFO] [动量突破] 30m buy - 动量突破（区间1.4%，量能放大）
+2026-09-22 20:26:49,013 [INFO] [自适应调整] 波动率=0.31%, 倍数=0.13
+2026-09-22 20:26:49,014 [INFO] [自适应调整] 波动率=0.16%, 倍数=0.06
+2026-09-22 20:26:49,015 [INFO] [自适应调整] 波动率=0.22%, 倍数=0.09
+2026-09-22 20:26:49,016 [INFO] [假突破过滤] 30m buy - 已拦截
+2026-09-22 20:26:49,025 [INFO] [假突破过滤] 1h sell - 已拦截
+2026-09-22 20:26:49,026 [INFO] [自适应调整] 波动率=0.55%, 倍数=0.22
+2026-09-22 20:26:49,026 [INFO] [动量突破] 1h sell - 动量突破（区间1.6%，量能放大）
+2026-09-22 20:26:49,027 [INFO] [自适应调整] 波动率=0.43%, 倍数=0.17
+2026-09-22 20:26:49,028 [INFO] [自适应调整] 波动率=0.38%, 倍数=0.15
+2026-09-22 20:26:49,029 [INFO] [动量突破] 1h buy - 动量突破（区间1.6%，量能放大）
+2026-09-22 20:26:49,030 [INFO] [自适应调整] 波动率=0.28%, 倍数=0.11
+2026-09-22 20:26:49,031 [INFO] [自适应调整] 波动率=0.26%, 倍数=0.11
+2026-09-22 20:26:49,032 [INFO] [动量突破] 1h sell - 动量突破（区间0.8%，量能正常）
+2026-09-22 20:26:49,033 [INFO] [自适应调整] 波动率=0.35%, 倍数=0.14
+2026-09-22 20:26:49,034 [INFO] [自适应调整] 波动率=0.34%, 倍数=0.14
+2026-09-22 20:26:49,035 [INFO] [自适应调整] 波动率=0.41%, 倍数=0.16
+2026-09-22 20:26:49,036 [INFO] [动量突破] 1h sell - 动量突破（区间1.9%，量能放大）
+2026-09-22 20:26:49,038 [INFO] [自适应调整] 波动率=0.47%, 倍数=0.19
+2026-09-22 20:26:49,039 [INFO] [自适应调整] 波动率=0.3%, 倍数=0.12
+2026-09-22 20:26:49,041 [INFO] [自适应调整] 波动率=0.34%, 倍数=0.14
+2026-09-22 20:26:49,042 [INFO] [自适应调整] 波动率=0.26%, 倍数=0.1
+2026-09-22 20:26:49,044 [INFO] [自适应调整] 波动率=0.28%, 倍数=0.11
+2026-09-22 20:26:49,045 [INFO] [自适应调整] 波动率=0.18%, 倍数=0.07
+2026-09-22 20:26:49,047 [INFO] [自适应调整] 波动率=0.18%, 倍数=0.07
+2026-09-22 20:26:49,049 [INFO] [自适应调整] 波动率=0.31%, 倍数=0.12
+2026-09-22 20:26:49,051 [INFO] [自适应调整] 波动率=0.36%, 倍数=0.14
+2026-09-22 20:26:49,052 [INFO] [自适应调整] 波动率=0.36%, 倍数=0.14
+2026-09-22 20:26:49,054 [INFO] [动量突破] 1h buy - 动量突破（区间2.0%，量能放大）
+2026-09-22 20:26:49,058 [INFO] [自适应调整] 波动率=0.67%, 倍数=0.27
+2026-09-22 20:26:49,058 [INFO] [自适应调整] 波动率=0.7%, 倍数=0.28
+2026-09-22 20:26:49,059 [INFO] [自适应调整] 波动率=2.34%, 倍数=0.93
+2026-09-22 20:26:49,060 [INFO] [动量突破] 1d buy - 动量突破（区间6.0%，量能放大）
+2026-09-22 20:26:49,061 [INFO] 历史加载完成（1 个品种），启动实时行情
+2026-09-22 20:26:49,061 [INFO] [形态下单] 后台循环已启动（paper=True，品种 0 个）
 INFO:     Application startup complete.
-2026-09-22 20:16:56,755 [INFO] [public] 连接 wss://ws.okx.com:8443/ws/v5/public
-2026-09-22 20:16:56,772 [INFO] [business] 连接 wss://ws.okx.com:8443/ws/v5/business
+2026-09-22 20:26:49,061 [INFO] [public] 连接 wss://ws.okx.com:8443/ws/v5/public
+2026-09-22 20:26:49,070 [INFO] [business] 连接 wss://ws.okx.com:8443/ws/v5/business
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-2026-09-22 20:16:56,873 [WARNING] [business] 断开(1): ConnectionResetError
-2026-09-22 20:16:56,912 [WARNING] [public] 断开(1): ConnectionResetError
-2026-09-22 20:16:59,873 [INFO] [business] 连接 wss://ws.okx.com:8443/ws/v5/business
-2026-09-22 20:16:59,914 [INFO] [public] 连接 wss://ws.okx.com:8443/ws/v5/public
-2026-09-22 20:16:59,971 [WARNING] [public] 断开(2): ConnectionResetError
-2026-09-22 20:16:59,984 [WARNING] [business] 断开(2): ConnectionResetError
-2026-09-22 20:17:05,971 [INFO] [public] 连接 wss://ws.okx.com:8443/ws/v5/public
-2026-09-22 20:17:05,984 [INFO] [business] 连接 wss://ws.okx.com:8443/ws/v5/business
-2026-09-22 20:17:06,070 [WARNING] [public] 断开(3): ConnectionResetError
-2026-09-22 20:17:06,097 [WARNING] [business] 断开(3): ConnectionResetError
+2026-09-22 20:26:49,393 [INFO] [public] 订阅 ['BTC-USDT']
+2026-09-22 20:26:51,438 [INFO] [business] 订阅 ['BTC-USDT']
+INFO:     127.0.0.1:52623 - "GET /api/candles?tf=1h HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52624 - "GET /api/pattern?symbol=BTC-USDT&base_tf=1h HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52692 - "GET /api/tfs HTTP/1.1" 200 OK

@@ -73,6 +73,21 @@ fi
 pkill -f "uvicorn main:app --port 8000" >/dev/null 2>&1 || true
 sleep 1
 
+# 让 Python 信任系统根证书 + 本地代理(Quantumult X 等)的 MITM CA。
+# 否则经这类代理的 HTTPS 解密时，urllib 会报 SSL: UNEXPECTED_EOF_WHILE_READING，
+# 导致拉不到 OKX 行情（页面一直空白 / no_base_candles）。
+# macOS 上 curl 默认读系统钥匙串所以能通，但 Homebrew Python 用自带 OpenSSL、信任库为空，必须显式指定。
+CA_BUNDLE="$ROOT/backend/.ca-bundle.pem"
+if command -v security >/dev/null 2>&1; then
+  : >"$CA_BUNDLE"
+  security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain >>"$CA_BUNDLE" 2>/dev/null
+  security find-certificate -a -p "$HOME/Library/Keychains/login.keychain-db" >>"$CA_BUNDLE" 2>/dev/null
+  security find-certificate -c "Quantumult X" -a -p "$HOME/Library/Keychains/login.keychain-db" >>"$CA_BUNDLE" 2>/dev/null
+  export SSL_CERT_FILE="$CA_BUNDLE"
+  export REQUESTS_CA_BUNDLE="$CA_BUNDLE"
+  echo "[后端] 已注入 CA 信任包（$(grep -c 'BEGIN CERTIFICATE' "$CA_BUNDLE" 2>/dev/null) 张）"
+fi
+
 echo "[后端] 启动 FastAPI :8000"
 LOG="$ROOT/backend/uvicorn.log"
 .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 >"$LOG" 2>&1 &
