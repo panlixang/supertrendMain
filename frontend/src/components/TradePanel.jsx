@@ -1005,139 +1005,7 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
             <b style={{ color: '#8b93a0' }}>弱档/标准档</b>：控制是否下单，不影响图表显示。
           </div>
 
-          {/* ── 组合过滤器 ── */}
-          <div style={{ borderTop: '1px solid #1e1e1e', paddingTop: 6 }}>
-            <div style={{ fontSize: 10, fontWeight: 800, color: '#4e8aff', letterSpacing: 0.4, marginBottom: 6 }}>
-              ▸ 组合震荡过滤器
-            </div>
-            <div style={{ fontSize: 9, color: '#5a6270', lineHeight: 1.7, marginBottom: 6 }}>
-              叠加在 ER 之上的额外过滤维度，各品种独立开关和阈值。
-              全部关闭则退回仅 ER 过滤的原有逻辑。
-            </div>
-
-            {/* ATR 波动率过滤 */}
-            <div style={sty.filterBlock}>
-              <div style={sty.rowBetween}>
-                <div>
-                  <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>ATR 波动率过滤</div>
-                  <div style={{ fontSize: 8.5, color: '#4a5058' }}>
-                    当前ATR / 近期均值 &lt; 阈值 → 波动萎缩，拦截信号
-                  </div>
-                </div>
-                <Toggle on={atrOn} onClick={() => setAtrOn(!atrOn)} color="#4e8aff" />
-              </div>
-              {atrOn && (
-                <Row label="ATR比值下限" hint="典型值 0.7，低于此值视为波动萎缩">
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <input type="number" min={0.1} max={2} step={0.05} value={atrMin}
-                           onChange={(e) => setAtrMin(+e.target.value)} style={{ ...sty.input, width: 58 }} />
-                  </div>
-                </Row>
-              )}
-            </div>
-
-            {/* 区间震荡过滤 */}
-            <div style={sty.filterBlock}>
-              <div style={sty.rowBetween}>
-                <div>
-                  <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>区间震荡过滤</div>
-                  <div style={{ fontSize: 8.5, color: '#4a5058' }}>
-                    近期高低点区间小且反复触边 → 横盘震荡，拦截信号
-                  </div>
-                </div>
-                <Toggle on={rangeOn} onClick={() => setRangeOn(!rangeOn)} color="#4e8aff" />
-              </div>
-              {rangeOn && (
-                <>
-                  <Row label="区间大小上限 %" hint="高低点差/低点 < 此值才判为区间震荡">
-                    <input type="number" min={1} max={50} step={1} value={Math.round(rangeMax * 100)}
-                           onChange={(e) => setRangeMax(+e.target.value / 100)}
-                           style={{ ...sty.input, width: 58 }} />
-                  </Row>
-                  <Row label="触边次数下限" hint="近10根触碰高低点次数 ≥ 此值才拦截">
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {[2, 3, 4, 5].map((n) => (
-                        <button key={n} onClick={() => setRangeTouches(n)}
-                                style={{ ...sty.chip, fontSize: 10, padding: '2px 7px',
-                                         opacity: rangeTouches === n ? 1 : 0.3 }}>{n}</button>
-                      ))}
-                    </div>
-                  </Row>
-                </>
-              )}
-            </div>
-
-            {/* MTF 一致性过滤 */}
-            <div style={sty.filterBlock}>
-              <div style={sty.rowBetween}>
-                <div>
-                  <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>MTF 一致性过滤</div>
-                  <div style={{ fontSize: 8.5, color: '#4a5058' }}>
-                    多周期ST方向分歧 / 大周期频繁翻转 → 震荡，拦截信号
-                  </div>
-                </div>
-                <Toggle on={mtfOn} onClick={() => setMtfOn(!mtfOn)} color="#4e8aff" />
-              </div>
-              {mtfOn && (
-                <>
-                  <Row label="一致性下限" hint="≥60%的周期ST方向一致才通过，典型值 0.6">
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {[0.4, 0.5, 0.6, 0.7].map((v) => (
-                        <button key={v} onClick={() => setMtfMin(v)}
-                                style={{ ...sty.chip, fontSize: 9.5, padding: '2px 6px',
-                                         opacity: mtfMin === v ? 1 : 0.3 }}>{v}</button>
-                      ))}
-                    </div>
-                  </Row>
-                  <Row label="大周期翻转上限" hint="4h+1d近20根翻转次数 > 此值则拦截">
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {[3, 4, 5, 6, 8].map((n) => (
-                        <button key={n} onClick={() => setMtfFlipMax(n)}
-                                style={{ ...sty.chip, fontSize: 9.5, padding: '2px 6px',
-                                         opacity: mtfFlipMax === n ? 1 : 0.3 }}>{n}</button>
-                      ))}
-                    </div>
-                  </Row>
-                </>
-              )}
-            </div>
-
-            {/* ADX 趋势强度过滤 */}
-            <div style={sty.filterBlock}>
-              <div style={sty.rowBetween}>
-                <div>
-                  <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>ADX 趋势强度过滤</div>
-                  <div style={{ fontSize: 8.5, color: '#4a5058' }}>
-                    ADX &lt; 阈值 → 无趋势 / 震荡，拦截信号
-                  </div>
-                </div>
-                <Toggle on={adxOn} onClick={() => setAdxOn(!adxOn)} color="#4e8aff" />
-              </div>
-              {adxOn && (
-                <>
-                  <Row label="ADX 下限" hint="典型值 20：&lt;20 无趋势，&gt;25 趋势确认">
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {[15, 20, 25, 30].map((n) => (
-                        <button key={n} onClick={() => setAdxMin(n)}
-                                style={{ ...sty.chip, fontSize: 9.5, padding: '2px 6px',
-                                         opacity: adxMin === n ? 1 : 0.3 }}>{n}</button>
-                      ))}
-                    </div>
-                  </Row>
-                  <Row label="ADX 周期" hint="Wilder RMA 周期，典型值 14">
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {[10, 14, 20].map((n) => (
-                        <button key={n} onClick={() => setAdxPeriod(n)}
-                                style={{ ...sty.chip, fontSize: 9.5, padding: '2px 6px',
-                                         opacity: adxPeriod === n ? 1 : 0.3 }}>{n}</button>
-                      ))}
-                    </div>
-                  </Row>
-                </>
-              )}
-            </div>
-
-            {/* 平衡型方案：打分制 + 动态阈值 */}
+{/* 平衡型方案：打分制 + 动态阈值 */}
             <div style={{ borderTop: '1px solid #1e1e1e', paddingTop: 6, marginTop: 6 }}>
               <div style={{ fontSize: 10, fontWeight: 800, color: '#00c9a7', letterSpacing: 0.4, marginBottom: 6 }}>
                 ▸ 平衡型方案（打分制 + 动态阈值）
@@ -1204,15 +1072,7 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     <option value="">自动（默认 V1 口径）</option>
                     <option value="trend_follow_v1">V1 · trend_follow_v1</option>
                     <option value="quality_filter_v2">V2 · quality_filter_v2</option>
-                    <option value="event_timing_v3">V3 · event_timing_v3（V2底座+回踩再启动）</option>
-                    <option value="event_timing_v3_v1">V3v1 · event_timing_v3_v1（V1底座+回踩再启动）</option>
                   </select>
-                  {engine.startsWith('event_timing_v3') && (
-                    <div style={{ fontSize: 8.5, color: '#e0a458', marginTop: 3, lineHeight: 1.45 }}>
-                      ⚠ V3 最终分 = 0.65×V2 + 0.20×时机 + 0.15×历史 − 风险扣分，量纲与 V1/V2 不同，
-                      切换后必须重新标定阈值（沿用 V1/V2 的阈值可能几乎不出单）
-                    </div>
-                  )}
                 </Row>
                 <Row label="Shadow" hint="副引擎对照采集（logs/shadow_*.jsonl），留空关闭">
                   <select value={shadowEngine}
@@ -1221,8 +1081,6 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                     <option value="">关闭</option>
                     <option value="trend_follow_v1">对比 V1 · trend_follow_v1</option>
                     <option value="quality_filter_v2">对比 V2 · quality_filter_v2</option>
-                    <option value="event_timing_v3">对比 V3 · event_timing_v3</option>
-                    <option value="event_timing_v3_v1">对比 V3v1 · event_timing_v3_v1</option>
                   </select>
                 </Row>
               </div>
@@ -1245,7 +1103,6 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 )}
               </div>
             </div>
-          </div>
           <div style={{ padding: '2px 0' }}>
             <div style={{ fontSize: 11, color: '#c8ccd4', marginBottom: 4 }}>标准档三级止盈（价格幅度）</div>
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>

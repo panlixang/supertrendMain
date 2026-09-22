@@ -1,15 +1,17 @@
-/* Switch styles */
-input[type="checkbox"] {
+/* Switch styles —— 仅作用于开关组件(input[type=checkbox] + .switchSlider)。
+   不能写成全局 input[type="checkbox"], 否则会误隐藏其它原生 checkbox
+   (如 TradePanel 下单参数页的止盈止损 保本/跟踪/启用)。 */
+input.switch[type="checkbox"] {
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-input[type="checkbox"]:checked + .switchSlider {
+input.switch[type="checkbox"]:checked + .switchSlider {
   background: #00c9a7;
 }
 
-input[type="checkbox"]:checked + .switchSlider::before {
+input.switch[type="checkbox"]:checked + .switchSlider::before {
   transform: translateX(20px);
 }
 

@@ -2038,7 +2038,7 @@ function GateControl({ gate, title, problem, color, enabled, onToggle, children 
           <span style={sty.gateControlTitle}>{title}</span>
         </div>
         <label style={sty.switch}>
-          <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
+          <input type="checkbox" className="switch" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
           <span className="switchSlider"></span>
         </label>
       </div>

@@ -36,11 +36,6 @@ _ENGINE_ALIASES = {
     # 规范化名 → 实际公式族。新增引擎只需在此注册并给出对应分项函数。
     "v1": ("v1", "trend_follow_v1", "trend_follow"),
     "v2": ("v2", "quality_filter_v2", "quality_filter"),
-    # V3 = 底座分 + Event/Timing 层（大K线、突破、回踩、再启动、
-    # 追高阻断、历史统计）。设计见仓库根目录 v3.md。
-    # 底座可选：v3 → V2 底座；v3v1 → V1 底座（V1 型品种用 V1 底座更公平）。
-    "v3": ("v3", "event_timing_v3", "event_timing", "v3_timing"),
-    "v3v1": ("v3v1", "event_timing_v3_v1", "v3_v1", "v3v1_timing"),
 }
 
 
@@ -390,135 +385,6 @@ def _parts_v2(sig: dict, candles: list[dict], cfg: TradeConfig,
     detail["raw"] = round(weighted, 2)
     return breakdown, reasons, total, detail
 
-
-# ===== v3 分项（V2 底座 + Event/Timing 层）=====
-
-def _parts_v3(sig: dict, candles: list[dict], cfg: TradeConfig,
-              candles_by_tf: dict = None, p: dict = None,
-              base: str = "v2") -> tuple[dict, list[str], float, dict]:
-    """V3 = 0.65×底座 + 0.20×Timing + 0.15×Historical − RiskPenalty（v3.md 十三章）。
-
-    底座（base）决定"Alpha 是否有"：
-      base="v2" → V2 引擎总分（quality_filter_v2，默认，v3.md 原设计）
-      base="v1" → V1 引擎总分（trend_follow_v1，供 V1 型品种使用）
-    Timing/Historical/Risk 由 v3_signal 计算（现在是不是合适的入场时机）。
-
-    生命周期副作用：Chase Blocker 命中时把信号登记进 LIFECYCLE 成为 CANDIDATE，
-    之后由 advance() 推进到 PULLBACK_* / RELAUNCH；是否放行下单由 score_signal
-    依据 stage 决定（CANDIDATE / 回踩中 → 一律 alert_only，等 Relaunch）。
-    """
-    import v3_signal as v3
-
-    if base == "v1":
-        bd, reasons, stv2 = _parts_v1(sig, candles, cfg, candles_by_tf, p)
-        detail2 = None
-    else:
-        bd, reasons, stv2, detail2 = _parts_v2(sig, candles, cfg, candles_by_tf, p)
-    i = len(candles) - 1
-    atr = v3.atr_series(candles, v3.ATR_WINDOW)
-    atr_i = atr[i] if 0 <= i < len(atr) else None
-    side = "buy" if sig.get("type", "buy") == "buy" else "sell"
-
-    # ① 大K线事件 + 突破
-    em = v3.event_metrics(candles, i, atr_i, side)
-    # ② 追高检测
-    chase, chase_d = v3.chase_score(candles, i, atr_i, sig.get("line"), side,
-                                    em.get("event_atr"))
-    # ③ 历史相似事件统计（只用 i 之前的样本，无前视）
-    hist = v3.EventHistory.build(candles, p).query(
-        i, side, em.get("event_atr"), em.get("vol_ratio"), em.get("breakout"))
-
-    # ④ 生命周期：Chase 命中 → 登记候选；已登记 → 推进状态
-    lc = v3.LIFECYCLE
-    # Relaunch 补单信号的 ts 是"再启动那根"，但候选是按原始翻转K登记的，
-    # 所以用 v3_orig_ts 回指，否则会被当成新事件再判一次追高。
-    key = f"{sig.get('tf')}|{sig.get('v3_orig_ts') or sig.get('ts')}|{side}"
-    cand = lc.get(key)
-    stage, ps = None, None
-    chase_half = False
-    if cand is None:
-        chase_hit = (chase > v3.CHASE_BLOCK
-                     and (em.get("event_atr") or 0) >= v3.EVENT_NOTABLE)
-        if chase_hit and v3.CHASE_MODE == "block":
-            lc.register(key, symbol=sig.get("symbol", ""), tf=sig.get("tf"),
-                        orig_sig=dict(sig),
-                        side=side, i0=i, ts0=sig.get("ts"), level=em.get("level"),
-                        atr_b=atr_i, breakout_score=em.get("breakout_score", 0.0),
-                        event_atr=em.get("event_atr"), vol_ratio=em.get("vol_ratio"),
-                        chase=chase, stv2=stv2)
-            stage = v3.STAGE_CANDIDATE
-        elif chase_hit:
-            # CHASE_MODE="half"：不登记候选、不拦单，只标记降级半仓
-            chase_half = True
-    else:
-        adv = lc.advance(key, candles, atr)
-        stage, ps = adv.get("stage"), adv.get("ps")
-
-    # ⑤ Timing = 0.4×Breakout + 0.3×PullbackQuality + 0.3×Relaunch
-    px = candles[i]["c"] if candles else None
-    line = sig.get("line")
-    st_dir_ok = True if not line or not px else (px > line if side == "buy" else px < line)
-    if ps is not None and stage in (v3.STAGE_PULLBACK_WAIT,
-                                    v3.STAGE_PULLBACK_CONFIRMED,
-                                    v3.STAGE_RELAUNCH):
-        vr_now = em.get("vol_ratio")
-        pq, pq_d = v3.pullback_quality(ps, st_dir_ok, vr_now, cand.get("vol_ratio"),
-                                       atr_i, cand.get("atr_b"), side, candles, i)
-        rs = v3.relaunch_score(em.get("breakout_score", 0.0), vr_now,
-                               em.get("event_atr"), st_dir_ok)
-        timing = 0.4 * em.get("breakout_score", 0.0) + 0.3 * pq * 100 + 0.3 * rs
-    else:
-        pq, pq_d, rs = None, None, None
-        # 还没形成回踩：只拿突破分 + 中性 50，避免"无回踩"把 Timing 打到 0
-        timing = 0.4 * em.get("breakout_score", 0.0) + 0.6 * 50.0
-
-    # ⑥ 独立扣分（不摊进评分，单独减）
-    #    回踩后再启动（Relaunch）时，追高风险已经被回踩释放，若仍按原始 chase
-    #    扣分就是"同一件事罚两次"——等回踩进场的单必然比追进去分低，V3 会系统性
-    #    接不到好单。这里对已 Relaunch 的路径把 chase 折扣到 3 折。
-    relaunch_ok = (stage == v3.STAGE_RELAUNCH and ps is not None
-                   and (ps.get("depth") or 0) >= v3.PULLBACK_MIN)
-    chase_eff = chase * (0.3 if relaunch_ok else 1.0)
-    atr_ratio = atr_volatility(candles, atr_window=14, lookback=50)
-    rp, rp_d = v3.risk_penalty(chase_eff, atr_ratio, ps, em.get("vol_ratio"),
-                               chase_d.get("space_atr"))
-    rp_d["chase_raw"] = round(chase, 1)
-    rp_d["chase_discounted"] = bool(relaunch_ok)
-
-    total = (v3.W_STV2 * stv2 + v3.W_TIMING * timing
-             + v3.W_HIST * hist.get("hcs", 50.0) - rp)
-    total = max(0.0, min(100.0, total))
-
-    breakdown = dict(bd)
-    breakdown["v3_timing"] = round(v3.W_TIMING * timing, 2)
-    breakdown["v3_historical"] = round(v3.W_HIST * hist.get("hcs", 50.0), 2)
-    breakdown["v3_risk"] = round(-rp, 2)
-
-    ea = em.get("event_atr")
-    reasons.append(
-        f"{'🔥' if em['grade'] == 'extreme' else '✓'} V3事件 EventATR="
-        f"{ea:.2f}（{em['grade']}）突破={'YES' if em['breakout'] else 'NO'} "
-        f"B={em.get('breakout_score', 0):.0f}" if ea is not None else "V3事件 ATR不足")
-    reasons.append(
-        f"{'⏳' if chase > v3.CHASE_BLOCK else '✓'} 追高 Chase={chase:.0f}"
-        f"{'（>20 阻断，转候选等回踩）' if chase > v3.CHASE_BLOCK else ''}")
-    if hist.get("n"):
-        reasons.append(f"📊 历史相似 N={hist['n']} 3根延续={hist['p3']} "
-                       f"→ HCS={hist['hcs']:.0f}（置信{ hist['sc']}）")
-    else:
-        reasons.append("📊 历史相似样本不足，HCS 取中性 50")
-    if stage:
-        reasons.append(f"🔄 V3 阶段：{stage}")
-
-    detail = {
-        "engine": "v3", "stv2": round(stv2, 1), "timing": round(timing, 1),
-        "historical": hist, "chase": chase_d, "event": em, "risk": rp_d,
-        "stage": stage, "pullback": ps, "pq": pq_d, "relaunch_score": rs,
-        "atr_ratio": atr_ratio, "v2": detail2, "chase_half": chase_half,
-    }
-    return breakdown, reasons, total, detail
-
-
 def score_signal(sig: dict, candles: list[dict], cfg: TradeConfig,
                  candles_by_tf: dict = None, p: dict = None) -> dict:
     """给信号打分（0-100），返回详细的分项和建议。
@@ -539,13 +405,8 @@ def score_signal(sig: dict, candles: list[dict], cfg: TradeConfig,
     regime = classify(er, cfg.er_min, cfg.er_trend, cfg.er_weak_min, cfg.quick_enabled)
 
     engine = resolve_engine(cfg)
-    v3 = engine in ("v3", "v3v1")            # v3=V2 底座，v3v1=V1 底座
     v2 = engine == "v2"
-    if v3:
-        breakdown, reasons, total, detail = _parts_v3(
-            sig, candles, cfg, candles_by_tf, p,
-            base=("v1" if engine == "v3v1" else "v2"))
-    elif v2:
+    if v2:
         breakdown, reasons, total, detail = _parts_v2(sig, candles, cfg,
                                                       candles_by_tf, p)
     else:
@@ -581,32 +442,6 @@ def score_signal(sig: dict, candles: list[dict], cfg: TradeConfig,
         action = "alert_only"
         reasons.append(f"✗ 周期{sig.get('tf')}不在范围")
 
-    # V3 Entry Timing：追高中（CANDIDATE / 回踩未确认）一律不下单，
-    # 交给 Lifecycle 等回踩 → Relaunch 时再判（由 feed/backtest 的补单钩子触发）。
-    if v3 and detail:
-        import v3_signal as v3m
-        stage = detail.get("stage")
-        chase = (detail.get("chase") or {}).get("total", 0.0)
-        if detail.get("chase_half") and total >= half_thr:
-            # 追高但不禁止入场：降半仓试探（CHASE_MODE="half"）
-            confidence, action = "medium", "trade_half"
-            suggestion = (f"⚠ V3 追高降级（Chase {chase:.0f}"
-                          f">{v3m.CHASE_BLOCK:g}）：不追第一根，按半仓试探")
-            reasons.append(f"⚠ V3 追高降级半仓（Chase {chase:.0f}）")
-        elif stage in (v3m.STAGE_CANDIDATE, v3m.STAGE_PULLBACK_WAIT,
-                     v3m.STAGE_PULLBACK_CONFIRMED):
-            action = "alert_only"
-            suggestion = f"⏳ V3 追高阻断（Chase {chase:.0f}>20）：不追第一根，等回踩再启动"
-            reasons.append(f"⏳ V3 等回踩（{stage}），暂不开仓")
-        elif stage in (v3m.STAGE_EXPIRED, v3m.STAGE_INVALIDATED):
-            action = "alert_only"
-            suggestion = f"✗ V3 候选失效（{stage}）：回踩破位或超时，本次放弃"
-            reasons.append(f"✗ V3 候选失效（{stage}）")
-        elif stage == v3m.STAGE_RELAUNCH:
-            reasons.append("✓ V3 回踩后 Relaunch（再启动），允许入场")
-        out_v3_stage = stage
-    else:
-        out_v3_stage = None
 
     out = {
         "total_score": round(total, 1),
@@ -619,9 +454,8 @@ def score_signal(sig: dict, candles: list[dict], cfg: TradeConfig,
         "hidden": action == "silent",
         "engine": engine,
         "score_version": engine,
-        "v3_stage": out_v3_stage,
     }
-    if v2 or v3:
+    if v2:
         out["detail"] = detail
     return out
 

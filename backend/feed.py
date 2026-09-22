@@ -333,8 +333,6 @@ class OKXFeed:
         if sig:
             await self._handle_signal(store, tf, sig)
             return
-        # V3：没有新翻转也可能是"候选回踩后 Relaunch"，需要补一次入场判定
-        await self._check_v3_relaunch(store, tf, ts)
 
     async def _handle_signal(self, store: SymbolStore, tf: str, sig: dict):
         try:
@@ -467,66 +465,6 @@ class OKXFeed:
 
         if notify.enabled and tf in NOTIFY_TFS:
             asyncio.create_task(notify.push_signal(store.symbol, full, order))
-
-    async def _check_v3_relaunch(self, store: SymbolStore, tf: str, ts: int):
-        """V3 延迟入场：候选回踩后再启动（Relaunch）时补一次判单。
-
-        SuperTrend 没有新翻转就不会走 _handle_signal，所以这里单独推进
-        LIFECYCLE 里的候选；一旦 advance() 报告本根触发 Relaunch，就用当前
-        收盘价构造信号副本，走与正常翻转完全相同的闸门 + 下单流程。
-        """
-        cfg = self.state.cfg_for(store.symbol)
-        try:
-            from regime_scoring import resolve_engine
-            if resolve_engine(cfg) not in ("v3", "v3v1"):
-                return
-        except Exception:
-            return
-        if tf not in (cfg.allow_tfs or []):
-            return
-        candles = store.candles_by_tf(tf)
-        if not candles:
-            return
-
-        try:
-            import v3_signal as v3
-            hit = []
-            for cand in v3.LIFECYCLE.pending(store.symbol, tf):
-                if v3.LIFECYCLE.advance(cand["key"], candles).get("trigger"):
-                    hit.append(cand)
-        except Exception as e:
-            logger.warning(f"[{store.symbol} {tf}] V3 候选推进失败: {e}")
-            return
-
-        for cand in hit:
-            orig = dict(cand.get("orig_sig") or {})
-            if not orig:
-                continue
-            cur = candles[-1]
-            sig = {**orig, "ts": cur["ts"], "price": round(cur["c"], 6),
-                   "line": self._st_line(store, tf),
-                   "v3_orig_ts": cand.get("ts0") or orig.get("ts"),
-                   "v3_stage": "RELAUNCH"}
-            # 用「再启动这根K」重算事件度量，供 V2 底座与 V3 评分使用
-            try:
-                import v3_signal as v3b
-                a = (v3b.atr_series(candles) or [None])[-1] or 0.0
-                if a:
-                    sig["atr"] = a
-                    sig["body_atr"] = round(abs(cur["c"] - cur["o"]) / a, 3)
-                base = [x["vol"] for x in candles[-21:-1] if x.get("vol")]
-                if base:
-                    avg = sum(base) / len(base)
-                    if avg > 0:
-                        sig["vol_ratio"] = round((cur.get("vol") or 0.0) / avg, 2)
-                if a and cand.get("level"):
-                    sig["dist_atr"] = round(abs(cur["c"] - cand["level"]) / a, 3)
-            except Exception as e:
-                logger.warning(f"[{store.symbol} {tf}] V3 再启动度量失败: {e}")
-            sig["symbol"] = store.symbol
-            logger.info(f"[V3 Relaunch] {store.symbol} {tf} @ {sig['price']} "
-                        f"（原事件 ts={cand.get('ts0')}）")
-            await self._handle_signal(store, tf, sig)
 
     def rescan_signals(self, store: SymbolStore | None = None):
         """用内存 K 线重扫历史翻转，重建 store.signals。store=None 时扫全部。"""

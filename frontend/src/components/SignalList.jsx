@@ -127,10 +127,7 @@ export default function SignalList() {
                            key === 'volatility' ? '波动率' :
                            key === 'mtf_alignment' ? 'MTF共振' :
                            key === 'breakout_boost' ? '突破加成' :
-                           key === 'penalties' ? '扣分项' :
-                           key === 'v3_timing' ? 'V3入场时机' :
-                           key === 'v3_historical' ? 'V3历史统计' :
-                           key === 'v3_risk' ? 'V3风险扣分' : key}
+                           key === 'penalties' ? '扣分项' : key}
                         </span>
                         <div style={{ flex: 1, height: 4, background: '#1e1e1e', borderRadius: 2, overflow: 'hidden' }}>
                           <div style={{ width: `${Math.abs(val) * 4}%`, height: '100%',

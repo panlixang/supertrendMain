@@ -924,12 +924,9 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     # Shadow Mode（阶段3）：另一引擎名 = 双引擎对照采集；"" = 关闭。白名单防手滑。
     if body.shadow_engine is not None:
         _se = (body.shadow_engine or "").strip().lower()
-        if _se not in ("", "v1", "v2", "v3", "v3v1", "trend_follow_v1",
-                       "quality_filter_v2", "event_timing_v3",
-                       "event_timing_v3_v1", "v3_timing"):
+        if _se not in ("", "v1", "v2", "trend_follow_v1", "quality_filter_v2"):
             return {"ok": False,
-                    "error": "shadow_engine 仅支持 空 / v1 / v2 / v3 / trend_follow_v1 "
-                             "/ quality_filter_v2 / event_timing_v3"}
+                    "error": "shadow_engine 仅支持 空 / v1 / v2 / trend_follow_v1 / quality_filter_v2"}
         c.shadow_engine = _se
 
     # 4h MA30 方向门

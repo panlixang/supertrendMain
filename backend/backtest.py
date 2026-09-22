@@ -383,57 +383,6 @@ def run_backtest(
                 ok = False
         return ok, profile, 1.0
 
-    # ── V3 延迟入场支持：候选回踩后 Relaunch 时补单（对齐 feed._check_v3_relaunch）──
-    v3_on = False
-    if live_gate is not None and getattr(live_gate, "score_engine", None):
-        try:
-            from regime_scoring import resolve_engine
-            v3_on = resolve_engine(live_gate) in ("v3", "v3v1")
-        except Exception:
-            v3_on = False
-
-    def _v3_relaunch_sigs(i: int) -> list[dict]:
-        """本根K触发 Relaunch 的候选 → 构造可判单的信号副本。"""
-        if not v3_on:
-            return []
-        try:
-            import v3_signal as v3
-        except Exception:
-            return []
-        sl = candles[: i + 1]
-        out: list[dict] = []
-        for cand in v3.LIFECYCLE.pending(tf=gate_tf):
-            if not v3.LIFECYCLE.advance(cand["key"], sl).get("trigger"):
-                continue
-            orig = dict(cand.get("orig_sig") or {})
-            if not orig:
-                continue
-            cur = candles[i]
-            typ = orig.get("type", "buy")
-            sig = {**orig, "ts": cur["ts"], "price": round(cur["c"], 6),
-                   "line": (up[i] if typ == "buy" else dn[i]),
-                   "v3_orig_ts": cand.get("ts0") or orig.get("ts")}
-            a = (v3.atr_series(sl) or [None])[-1] or 0.0
-            if a:
-                sig["atr"] = a
-                sig["body_atr"] = round(abs(cur["c"] - cur["o"]) / a, 3)
-            base = [x["vol"] for x in sl[-21:-1] if x.get("vol")]
-            if base:
-                avg = sum(base) / len(base)
-                if avg > 0:
-                    sig["vol_ratio"] = round((cur.get("vol") or 0.0) / avg, 2)
-            if a and cand.get("level"):
-                sig["dist_atr"] = round(abs(cur["c"] - cand["level"]) / a, 3)
-            out.append(sig)
-        return out
-
-    if v3_on:
-        try:
-            import v3_signal as v3
-            v3.LIFECYCLE.reset()      # 每个品种独立，避免候选跨品种串味
-        except Exception:
-            pass
-
     for i, c in enumerate(candles):
         rules = rules_by[pos.profile] if pos else rules_normal
         # ── 1) 盘中止盈止损（先止损后止盈，同一根同时满足时算止损） ──
@@ -537,13 +486,7 @@ def run_backtest(
                 elif not aligned:
                     n_align_block += 1
 
-        # ── 2.5) V3 延迟入场：候选回踩后 Relaunch（没有新翻转也要补单） ──
-        if v3_on and pos is None and not typ:
-            for rsig in _v3_relaunch_sigs(i):
-                sig_by_ts[rsig["ts"]] = rsig      # 让 eval_open_gate 能取到信号
-                g_ok, prof, r_mul = eval_open_gate(i, rsig["type"])
-                if g_ok:
-                    open_pos(i, c["c"], rsig["type"], prof, r_mul)
+
 
         # ── 3) 收盘后随超趋线移动止损（对应 feed.on_st_line） ──
         # 注意重取规则：本根刚开的仓，循环顶部的 rules 还是开仓前的旧值

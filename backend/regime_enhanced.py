@@ -169,14 +169,6 @@ def adaptive_thresholds(candles: list[dict], base_cfg: TradeConfig) -> dict:
     return adjustments
 
 
-def _engine_is_v3(cfg: TradeConfig) -> bool:
-    try:
-        from regime_scoring import resolve_engine
-        return resolve_engine(cfg) in ("v3", "v3v1")
-    except Exception:
-        return False
-
-
 def _adaptive_evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
                        candles_by_tf: dict = None, p: dict = None) -> dict:
     """自适应阈值 + 原评估（含打分制 → regime_scoring）链路。"""
@@ -220,11 +212,6 @@ def evaluate_enhanced(sig: dict, candles: list[dict], cfg: TradeConfig,
                 f"周期 {sig.get('tf')} 不在允许范围")
         result["profile"] = None
         return result
-
-    # 0.5 V3 引擎：动量捷径会直接 trade=True 绕过评分，Chase Blocker 就形同虚设，
-    #     所以 V3 只走"自适应阈值 + 评分"链路（Chase/Pullback 判定都在评分里）。
-    if _engine_is_v3(cfg):
-        return _adaptive_evaluate(sig, candles, cfg, candles_by_tf, p)
 
     # 1. 动量突破优先：即使ER低也放行（仍须过等级/强度，上面已过周期）
     momentum = detect_momentum_breakout(candles, sig, lookback=20)
