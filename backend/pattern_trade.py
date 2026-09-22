@@ -329,16 +329,20 @@ class PatternTrader:
         if not price:
             return {"ok": False, "error": f"{sym} 暂无最新价"}
         paper = self.cfg.paper
+        # 杠杆是品种级字段（存在 SymbolTradeConfig 上），全局 PatternConfig 没有 leverage，
+        # 必须从品种配置取，不能用 self.cfg.leverage；未加入列表的品种默认 3 与 add_symbol 一致。
+        sc = self.symbols.get(sym)
+        lev = int(sc.leverage or 3) if sc else 3
         try:
             with creds.use(c):
                 if self.cfg.category != "SPOT":
-                    await trade.set_leverage(sym, self.cfg.leverage,
+                    await trade.set_leverage(sym, lev,
                                              self.cfg.margin_mode, sim=paper)
                 px = price * 0.97
                 r = await trade.place_order(
                     sym, "buy", px,
                     margin_usdt=10.0,
-                    leverage=self.cfg.leverage,
+                    leverage=lev,
                     category=self.cfg.category,
                     mgn_mode=self.cfg.margin_mode,
                     client_oid=f"ptest{int(time.time())}",
@@ -352,6 +356,7 @@ class PatternTrader:
                 self.orders = self.orders[-300:]
             return r
         except Exception as e:
+            logger.exception(f"[形态测试单] {sym} 下单异常")
             return {"ok": False, "error": f"测试单失败: {e}"}
 
     def current_creds(self) -> creds.Creds:
