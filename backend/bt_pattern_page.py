@@ -1,0 +1,339 @@
+"""形态识别页（/pattern）BTC 1h 策略回测 —— 与页面实盘逻辑逐条对齐。
+
+信号（router.get_pattern / pattern_trade）：
+    1h 原始 SuperTrend（ATR 周期 10 / factor 3.0 / change_atr=True）的 trend 翻转。
+
+过滤（pattern_trade.PatternConfig 默认值）：
+    block_4h=True     4h 形态方向明确反向才拦（无趋势 dir=0 / 数据不足 一律放行）
+    trend_filter=True Allow = NOT Squeeze AND (Donchian20 突破 OR Mom12 动量爆破)
+
+出场（position.ExitRules 默认档，页面面板可配）：
+    TP1 触及 +1.5% 平 70% 并把止损移到开仓价（保本）；
+    剩余 30% 跟随 SuperTrend 轨道跟踪（sl_mode="st"），或遇下一个反向翻转收盘平掉；
+    轨道无效时按固定 2% 兜底止损。
+
+成本：每笔名义 10,000 USDT（无复利）、OKX taker 单边 0.05%。
+
+用法：
+    python3 bt_pattern_page.py                    # 默认 BTC-USDT，近 6 个月 + 2026H1 + 2025全年
+    python3 bt_pattern_page.py ETH-USDT --window 6m
+"""
+from __future__ import annotations
+
+import argparse
+import bisect
+import datetime as dt
+import json
+import os
+import sys
+from collections import Counter
+from typing import Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import history
+from indicators import super_trend
+from pattern_recog import recognize as recognize_pattern
+from pattern_trade import PatternConfig, trend_gate
+
+SYM_DEFAULT = "BTC-USDT"
+BASE_TF, H4_TF = "1h", "4h"
+
+# ── 与 pattern_trade.PatternConfig / position.ExitRules 默认值一致 ──
+ST_PERIODS, ST_MULT = 10, 3.0
+TP1_PCT, TP1_RATIO = 1.5, 0.70
+SL_PCT_FALLBACK = 2.0
+FEE = 0.05 / 100                 # 单边 taker
+NOTIONAL = 10_000.0
+
+CFG = PatternConfig()   # 与 pattern_trade.PatternConfig 默认值一致（页面/实盘同源）
+
+def _cache_path(sym: str) -> str:
+    """缓存放系统临时目录，避免几 MB 的行情缓存落进仓库。"""
+    import tempfile
+    return os.path.join(tempfile.gettempdir(), f"bt_pattern_{sym}.json")
+
+
+# ── 数据 ────────────────────────────────────────────────────────
+def load(sym: str, use_cache: bool = True):
+    CACHE = _cache_path(sym)
+    if use_cache and os.path.exists(CACHE):
+        try:
+            c = json.load(open(CACHE))
+            if c.get("sym") == sym and c.get("base") and c.get("h4"):
+                ts = dt.datetime.fromtimestamp(c["fetched"] / 1000).strftime("%m-%d %H:%M")
+                print(f"（命中缓存 {CACHE}，抓取于 {ts}；加 --refresh 重新拉取）")
+                return c["base"], c["h4"]
+        except Exception:
+            pass
+    print(f"拉取 {sym} 1h 历史（约 1.7 年）…")
+    base = history.fetch_candles(BASE_TF, limit=15600, symbol=sym)
+    print(f"拉取 {sym} 4h 历史…")
+    h4 = history.fetch_candles(H4_TF, limit=4200, symbol=sym)
+    if not base or not h4:
+        print("抓取失败（网络/代理不可达 OKX）")
+        return None, None
+    rows_b = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol} for c in base]
+    rows_h = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol} for c in h4]
+    json.dump({"sym": sym, "fetched": int(dt.datetime.now().timestamp() * 1000),
+               "base": rows_b, "h4": rows_h}, open(CACHE, "w"))
+    print(f"抓取完成：1h {len(rows_b)} 根（{fmt(rows_b[0]['ts'])} ~ {fmt(rows_b[-1]['ts'])}）"
+          f"，4h {len(rows_h)} 根")
+    return rows_b, rows_h
+
+
+# ── 信号 ────────────────────────────────────────────────────────
+def build_signals(base, h4):
+    opens = [c["o"] for c in base]
+    highs = [c["h"] for c in base]
+    lows = [c["l"] for c in base]
+    closes = [c["c"] for c in base]
+    vols = [c["vol"] for c in base]
+    tss = [c["ts"] for c in base]
+
+    st = super_trend(opens, highs, lows, closes, periods=ST_PERIODS,
+                     multiplier=ST_MULT, change_atr=True)
+
+    # 4h 形态方向
+    pat = recognize_pattern([{"ts": c["ts"], "o": c["o"], "h": c["h"],
+                              "l": c["l"], "c": c["c"]} for c in h4])["pattern"]
+    pts = [p["ts"] for p in pat]
+    pmap = {p["ts"]: p for p in pat}
+
+    def dir_at(ts: int) -> Optional[int]:
+        idx = bisect.bisect_right(pts, ts) - 1
+        return pmap[pts[idx]].get("dir") if idx >= 0 else None
+
+    sigs = []
+    for f in st["flips"]:
+        i = f["i"]
+        if i >= len(base):
+            continue
+        sd = 1 if f["type"] == "buy" else -1
+        pdir = dir_at(tss[i])
+        allow, reason, stage = trend_gate(closes[:i + 1], highs[:i + 1],
+                                          lows[:i + 1], vols[:i + 1], i, sd, CFG)
+        sigs.append({
+            "i": i, "ts": tss[i], "type": f["type"], "dir": sd,
+            "price": closes[i], "pdir": pdir,
+            "pass_4h": (pdir != -sd),          # pattern_trade._allow_by_4h
+            "pass_trend": allow,               # pattern_trade.trend_gate
+            "trend_reason": reason,
+            "trend_stage": stage,
+        })
+    return sigs, opens, highs, lows, closes, st["up_plot"], st["dn_plot"], \
+        {f["i"] for f in st["flips"] if f["i"] < len(base)}
+
+
+def print_funnel(sigs):
+    """过滤漏斗：把页面/实盘那套过滤链按闸门逐层拆开，验证回测与页面一致。"""
+    from collections import Counter
+    total = len(sigs)
+    a4h = [s for s in sigs if s["pass_4h"]]
+    stages = Counter(s["trend_stage"] for s in a4h)
+    final = [s for s in sigs if s["pass_4h"] and s["pass_trend"]]
+    sq, don, mom, data, none = (stages.get("squeeze", 0), stages.get("donchian", 0),
+                                stages.get("mom", 0), stages.get("data", 0),
+                                stages.get("none", 0))
+    print("  ── 过滤漏斗（与形态页 /api/pattern → pattern_trade.trend_gate 一致）──")
+    print(f"     ① SuperTrend 翻转信号总数        : {total}")
+    print(f"     ② 过 4h 趋势对齐闸门            : {len(a4h)}  "
+          f"(拦截 {total - len(a4h)} = 4h 反向/数据不足)")
+    print(f"     ③ 非 Squeeze 死水区             : {len(a4h) - sq}  "
+          f"(死水区拦截 {sq})")
+    print(f"     ④ 满足 Donchian 突破放行        : {don}")
+    print(f"     ⑤ 满足 动量豁免(mom12>=1.2%)    : {mom}")
+    print(f"     ⑥ 数据不足放行 / 无突破拦截     : {data} / {none}")
+    print(f"     ⑦ 最终放行开仓                  : {len(final)}  "
+          f"(总拦截 {total - len(final)})")
+
+
+# ── 回测 ────────────────────────────────────────────────────────
+def backtest(sigs, highs, lows, closes, up_plot, dn_plot, flip_idx):
+    """出场对齐 position.ExitRules 默认档：TP1 1.5% 平 70% + 保本 + 跟随 ST 轨道。"""
+    trades = []
+    for s in sigs:
+        i, long = s["i"], s["dir"] > 0
+        entry = closes[i]
+        stp0 = up_plot[i] if long else dn_plot[i]
+        if stp0 is None or (long and stp0 >= entry) or (not long and stp0 <= entry):
+            stp0 = entry * (1 - SL_PCT_FALLBACK / 100) if long else entry * (1 + SL_PCT_FALLBACK / 100)
+        stop = stp0
+        tp1p = entry * (1 + TP1_PCT / 100) if long else entry * (1 - TP1_PCT / 100)
+        tp1 = False
+        coins = NOTIONAL / entry
+        pnl = -entry * coins * FEE
+        fee = entry * coins * FEE
+        reason, ex, ex_i = "末根平仓", closes[-1], len(closes) - 1
+        closed = False
+
+        for j in range(i + 1, len(closes)):
+            if long:
+                nl = up_plot[j]
+                if nl is not None and nl > stop:
+                    stop = nl
+                if lows[j] <= stop:                      # 先判止损（保守）
+                    px = stop
+                    rest = 1 - (TP1_RATIO if tp1 else 0)
+                    pnl += (px - entry) * coins * rest - px * coins * rest * FEE
+                    fee += px * coins * rest * FEE
+                    reason, ex, ex_i, closed = "止损", px, j, True
+                    break
+                if not tp1 and highs[j] >= tp1p:
+                    pnl += (tp1p - entry) * coins * TP1_RATIO - tp1p * coins * TP1_RATIO * FEE
+                    fee += tp1p * coins * TP1_RATIO * FEE
+                    tp1, stop = True, entry              # 保本
+            else:
+                nl = dn_plot[j]
+                if nl is not None and nl < stop:
+                    stop = nl
+                if highs[j] >= stop:
+                    px = stop
+                    rest = 1 - (TP1_RATIO if tp1 else 0)
+                    pnl += (entry - px) * coins * rest - px * coins * rest * FEE
+                    fee += px * coins * rest * FEE
+                    reason, ex, ex_i, closed = "止损", px, j, True
+                    break
+                if not tp1 and lows[j] <= tp1p:
+                    pnl += (entry - tp1p) * coins * TP1_RATIO - tp1p * coins * TP1_RATIO * FEE
+                    fee += tp1p * coins * TP1_RATIO * FEE
+                    tp1, stop = True, entry
+            if j in flip_idx:                            # 下一个翻转必为反向 → 平剩余
+                px = closes[j]
+                rest = 1 - (TP1_RATIO if tp1 else 0)
+                pnl += (px - entry) * coins * rest - px * coins * rest * FEE
+                fee += px * coins * rest * FEE
+                reason, ex, ex_i, closed = "反向信号", px, j, True
+                break
+        if not closed:
+            px = closes[-1]
+            rest = 1 - (TP1_RATIO if tp1 else 0)
+            pnl += (px - entry) * coins * rest - px * coins * rest * FEE
+            fee += px * coins * rest * FEE
+        trades.append({"ts": s["ts"], "dir": s["dir"], "entry": entry, "exit": ex,
+                       "i": s["i"], "j": ex_i, "pnl": pnl, "fee": fee,
+                       "gross": pnl + fee, "tp1": tp1, "reason": reason,
+                       "ret_pct": pnl / NOTIONAL * 100})
+    return trades
+
+
+def metrics(tr):
+    n = len(tr)
+    wins = sum(1 for t in tr if t["pnl"] > 0)
+    tot = sum(t["pnl"] for t in tr)
+    eq = peak = max_dd = 0.0
+    streak = worst_streak = 0
+    for t in tr:
+        eq += t["pnl"]
+        peak = max(peak, eq)
+        max_dd = max(max_dd, (peak - eq) / NOTIONAL * 100)
+        streak = 0 if t["pnl"] > 0 else streak + 1
+        worst_streak = max(worst_streak, streak)
+    return dict(n=n, wins=wins, wr=wins / n * 100 if n else 0, tot=tot,
+                ret=tot / NOTIONAL * 100, avg=tot / n / NOTIONAL * 100 if n else 0,
+                worst=min((t["ret_pct"] for t in tr), default=0),
+                max_dd=max_dd, streak=worst_streak)
+
+
+STRATS = [
+    ("A", "A) 无过滤（全部翻转）", lambda s: True),
+    ("B", "B) 仅 4h 形态过滤", lambda s: s["pass_4h"]),
+    ("C", "C) 页面默认(4h+趋势过滤)", lambda s: s["pass_4h"] and s["pass_trend"]),
+    ("D", "D) 页面默认 + 只做多", lambda s: s["pass_4h"] and s["pass_trend"] and s["dir"] > 0),
+]
+
+
+def run(base, h4, start, end, label):
+    sigs, opens, highs, lows, closes, up_plot, dn_plot, flip_idx = build_signals(base, h4)
+    win = [s for s in sigs if start <= s["ts"] < end]
+    print(f"\n===== {label} =====")
+    print(f"窗口信号数={len(win)}  4h方向分布: " + ", ".join(
+        f"{k}={v}" for k, v in sorted(Counter(
+            (s["pdir"] if s["pdir"] is not None else "None") for s in win).items(),
+            key=lambda x: str(x[0]))))
+
+    res = {k: backtest([s for s in win if ok(s)], highs, lows, closes,
+                       up_plot, dn_plot, flip_idx) for k, _, ok in STRATS}
+    m = {k: metrics(v) for k, v in res.items()}
+
+    hdr = (f"{'策略':<28}{'笔数':>6}{'胜率':>8}{'收益USDT':>11}{'收益率%':>9}"
+           f"{'均笔%':>8}{'最大单笔亏%':>12}{'最大回撤%':>10}{'最长连亏':>9}")
+    print(hdr)
+    print("-" * len(hdr))
+    for k, lab, _ in STRATS:
+        x = m[k]
+        print(f"{lab:<28}{x['n']:>6}{x['wr']:>7.1f}%{x['tot']:>11.0f}{x['ret']:>9.2f}"
+              f"{x['avg']:>8.3f}{x['worst']:>12.2f}{x['max_dd']:>10.2f}{x['streak']:>9}")
+
+    print("  放行/拦截（信号总数=%d）：" % len(win) + "  ".join(
+        f"{k}={sum(1 for s in win if ok(s))}" for k, _, ok in STRATS))
+    print_funnel(win)
+    rc = Counter(t["reason"] for t in res["C"])
+    print("  C 出场原因：" + "  ".join(f"{k}={v}" for k, v in rc.most_common()))
+    diagnose(res["C"], "C) 页面默认")
+    if res["D"]:
+        d = metrics(res["D"])
+        print(f"  仅多头对照：D) {d['n']} 笔 胜率 {d['wr']:.1f}%  "
+              f"净 {d['ret']:+.2f}% 最大回撤 {d['max_dd']:.2f}% 最长连亏 {d['streak']}")
+    return m
+
+
+def diagnose(tr, label):
+    """把「策略本身有没有钱赚」和「手续费吃掉多少」拆开看。"""
+    if not tr:
+        return
+    n = len(tr)
+    fee = sum(t["fee"] for t in tr)
+    gross = sum(t["gross"] for t in tr)
+    net = sum(t["pnl"] for t in tr)
+    tp1_n = sum(1 for t in tr if t["tp1"])
+    hold = sum(t["j"] - t["i"] for t in tr) / n
+    lg = [t for t in tr if t["dir"] > 0]
+    sh = [t for t in tr if t["dir"] < 0]
+    print(f"  ── {label} 成本/结构诊断（C 策略，名义 {NOTIONAL:,.0f} U/笔）──")
+    print(f"     毛利 {gross:>8.0f} U（{gross/NOTIONAL*100:+.2f}%）  "
+          f"手续费 {fee:>7.0f} U  净利 {net:>8.0f} U（{net/NOTIONAL*100:+.2f}%）")
+    print(f"     手续费占名义 {fee/NOTIONAL/n*100:.3f}%/笔，"
+          f"{'手续费吃掉了全部毛利' if gross > 0 and net < 0 else ('毛利本身为负' if gross < 0 else '毛利为正')}")
+    print(f"     TP1(+{TP1_PCT}%)命中 {tp1_n}/{n}（{tp1_n/n*100:.0f}%）  平均持仓 {hold:.1f} 根≈{hold:.1f}h")
+    print(f"     多头 {len(lg)} 笔 {sum(t['pnl'] for t in lg)/NOTIONAL*100:+.2f}%   "
+          f"空头 {len(sh)} 笔 {sum(t['pnl'] for t in sh)/NOTIONAL*100:+.2f}%")
+    # 零费 + maker 费率下的理论上限，判断是不是纯粹被成本拖死
+    print(f"     若零手续费：{gross/NOTIONAL*100:+.2f}%；若 maker 单边 0.02%："
+          f"{(gross - fee*0.4)/NOTIONAL*100:+.2f}%")
+
+
+def fmt(ms):
+    return dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+WINDOWS = [
+    ("近 6 个月（形态页可见窗口）", lambda now: (now - dt.timedelta(days=182), now)),
+    ("2026 H1", lambda now: (dt.datetime(2026, 1, 1), dt.datetime(2026, 7, 1))),
+    ("2025 全年", lambda now: (dt.datetime(2025, 1, 1), dt.datetime(2026, 1, 1))),
+]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("symbol", nargs="?", default=SYM_DEFAULT)
+    ap.add_argument("--window", choices=["6m", "2026h1", "2025", "all"], default="all")
+    ap.add_argument("--refresh", action="store_true", help="忽略本地缓存重新拉取")
+    a = ap.parse_args()
+
+    base, h4 = load(a.symbol, use_cache=not a.refresh)
+    if not base:
+        return
+    tss = [c["ts"] for c in base]
+    print(f"1h 数据：{fmt(tss[0])} ~ {fmt(tss[-1])}（{len(base)} 根）")
+
+    now = dt.datetime.utcfromtimestamp(tss[-1] / 1000) + dt.timedelta(hours=1)
+    pick = {"6m": WINDOWS[:1], "2026h1": WINDOWS[1:2], "2025": WINDOWS[2:3], "all": WINDOWS}[a.window]
+    for label, f in pick:
+        s, e = f(now)
+        run(base, h4, int(s.replace(tzinfo=dt.timezone.utc).timestamp() * 1000),
+            int(e.replace(tzinfo=dt.timezone.utc).timestamp() * 1000), label)
+
+
+if __name__ == "__main__":
+    main()

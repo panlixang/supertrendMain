@@ -58,7 +58,15 @@ echo "[后端] 当前 venv Python $VPY"
 echo "[后端] 安装依赖…"
 .venv/bin/pip install -r requirements.txt -q
 
-# 重复执行 start.sh 时旧 uvicorn 还占着 8000，会在 _serve 里直接崩
+# 重复执行 start.sh 时旧 uvicorn 还占着 8000，会在 _serve 里直接崩。
+# 注意：占位的可能是别的项目 / 旧版入口（如 api.main:app），按命令行 pkill 匹配不到，
+# 必须按端口清理；否则后端起不来，前端所有接口都是 404（形态页会一直空白）。
+PIDS_8000=$(lsof -ti tcp:8000 2>/dev/null)
+if [ -n "$PIDS_8000" ]; then
+  echo "→ 端口 8000 已被占用（PID: $PIDS_8000），先停掉再启动本项目后端"
+  kill $PIDS_8000 2>/dev/null || true
+  sleep 1
+fi
 if command -v fuser >/dev/null 2>&1; then
   fuser -k 8000/tcp >/dev/null 2>&1 || true
 fi

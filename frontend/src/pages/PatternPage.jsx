@@ -43,9 +43,11 @@ const fmtBJDate = (t) => {
 const BASE_TFS = ["15m", "1h", "4h", "1d"];
 
 function chartOptions(el) {
+  // 首帧容器可能还没布局完（clientWidth/Height 为 0），直接按 0 建图会导致整张图空白。
+  // 这里退一步用父容器尺寸起步，之后由 ResizeObserver 校正到真实尺寸。
   return {
-    width: el.clientWidth,
-    height: el.clientHeight,
+    width: el.clientWidth || el.parentElement?.clientWidth || 800,
+    height: el.clientHeight || el.parentElement?.clientHeight || 320,
     layout: { background: { color: C.bg }, textColor: C.text, fontSize: 11 },
     grid: { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
     crosshair: {
@@ -201,16 +203,26 @@ export default function PatternPage() {
     const id = ++reqId.current;
     try {
       const r = await fetch(`/api/pattern?symbol=${encodeURIComponent(sym)}&base_tf=${tf}`);
-      const j = await r.json();
+      const j = await r.json().catch(() => null);
       if (id !== reqId.current) return;
-      if (j.error) {
-        setError("无 " + tf + " 历史 K 线（该周期未持久化或尚未采集）");
+      if (!r.ok || !j) {
+        // 最常见：后端没启动 / 8000 端口被别的服务占了 → 这里拿到的是 404 的 {"detail":...}
+        setError(`接口不可用（HTTP ${r.status}）— 请确认本项目后端已启动且未被其它服务占用 8000`);
         setData(null);
-      } else {
-        setData(j);
+        return;
       }
+      if (j.error || !j.base?.candles?.length) {
+        setError(
+          j.error === "no_base_candles"
+            ? `无 ${tf} 历史 K 线（该周期未持久化或尚未采集）`
+            : `${sym} / ${tf} 暂无数据`
+        );
+        setData(null);
+        return;
+      }
+      setData(j);
     } catch (e) {
-      if (id === reqId.current) setError(String(e));
+      if (id === reqId.current) { setError("请求失败：" + String(e)); setData(null); }
     } finally {
       if (id === reqId.current) setLoading(false);
     }
@@ -288,7 +300,7 @@ export default function PatternPage() {
       <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "6px 14px", fontSize: 12, color: "#8b93a0", borderBottom: "1px solid #1e1e1e", flexWrap: "wrap" }}>
         <span><i style={dot(C.up)} /> 上行 / 允许买</span>
         <span><i style={dot(C.down)} /> 下行 / 允许卖</span>
-        <span><i style={dot(C.neutral)} /> 4h 反向→不下单（无趋势照常下单）</span>
+        <span><i style={dot(C.neutral)} /> 4h 反向 / Squeeze死水区 / 无突破→不下单（无趋势照常下单）</span>
         <span style={{ marginLeft: "auto" }}>
           信号 {sigs.length} 笔 · <b style={{ color: C.up }}>允许 {allowN}</b> · <b style={{ color: C.neutral }}>不下单 {blockN}</b>
         </span>
@@ -305,16 +317,16 @@ export default function PatternPage() {
       {/* 主图 */}
       <div style={{ flex: 1.5, minHeight: 0, position: "relative" }}>
         <div style={tag("主图 · 原始 SuperTrend 信号 10/3.0（" + baseTf + "）")} />
-        {data?.base ? <div ref={mainRef} style={{ position: "absolute", inset: 0, padding: 6 }} /> : (
-          <Empty err={error} />
+        {data?.base?.candles?.length ? <div ref={mainRef} style={{ position: "absolute", inset: 0, padding: 6 }} /> : (
+          <Empty err={error} loading={loading} />
         )}
       </div>
 
       {/* 4h 副图 */}
       <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid #1e1e1e", position: "relative" }}>
         <div style={tag("4h · 趋势形态识别（MA20/MA60 · 极值点 · 方向色带）")} />
-        {data?.h4 ? <div ref={h4Ref} style={{ position: "absolute", inset: 0, padding: 6 }} /> : (
-          <Empty err={error} />
+        {data?.h4?.candles?.length ? <div ref={h4Ref} style={{ position: "absolute", inset: 0, padding: 6 }} /> : (
+          <Empty err={error} loading={loading} />
         )}
       </div>
       </div>
@@ -343,8 +355,8 @@ const tag = (text) => ({
   position: "absolute", top: 10, left: 14, zIndex: 2, fontSize: 10.5, fontWeight: 700,
   color: "#8b93a0", letterSpacing: 0.3, pointerEvents: "none",
 });
-const Empty = ({ err }) => (
-  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#5a6270", fontSize: 13 }}>
-    {err ? "暂无数据" : "加载中…"}
+const Empty = ({ err, loading }) => (
+  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#5a6270", fontSize: 13, padding: 16, textAlign: "center" }}>
+    {loading ? "加载中…" : err || "暂无数据"}
   </div>
 );

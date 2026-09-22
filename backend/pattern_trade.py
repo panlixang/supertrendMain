@@ -573,6 +573,7 @@ class PatternTrader:
           - 条件 2 Donchian：价格收在前 N 根高低点之外 → 有效突破，放行
           - 条件 3 Mom12：朝信号方向近 N 根累计涨跌% >= 阈值 → 动量爆破，豁免放行
         数据不足一律放行，不拦。
+        核心判定委托给模块级纯函数 trend_gate，与 /api/pattern 页面展示、回测三处共用。
         """
         tf = sig.get("tf") or "1h"
         try:
@@ -590,52 +591,65 @@ class PatternTrader:
         lows = [c["l"] for c in cs]
         vols = [c["vol"] for c in cs]
         sd = sig_dir(sig)
-        # —— 条件 1：Squeeze 极度窄幅死水区（极窄幅 AND 缩量，须同时满足）——
-        bb_n = cfg.squeeze_bb_n
-        mid = ta_sma(closes, bb_n)[-1]
-        win = closes[-bb_n:]
-        var = sum((x - mid) ** 2 for x in win) / bb_n
-        std = var ** 0.5
-        upper = mid + cfg.squeeze_bb_mult * std
-        lower = mid - cfg.squeeze_bb_mult * std
-        width_pct = (upper - lower) / mid * 100.0 if mid else 0.0
-        vn = cfg.squeeze_vol_n
-        vol_ma = ta_sma(vols, vn)[-1]
-        low_vol = vol_ma > 0 and vols[-1] < vol_ma * cfg.squeeze_vol_mult
-        squeeze = (width_pct < cfg.squeeze_width_pct) and low_vol
-        if squeeze:
-            logger.info(
-                "[形态下单] %s %s Squeeze死水区拦截: BB宽=%.2f%%(<%.2f%%) "
-                "量=%.0f(<%.0f*%.2f)",
-                sym, tf, width_pct, cfg.squeeze_width_pct,
-                vols[-1], vol_ma, cfg.squeeze_vol_mult,
-            )
-            return False
-        # —— 条件 2：Donchian 通道突破（价格收在前 N 根高低点之外）——
-        N = cfg.donchian_n
-        win_h = highs[-N - 1:-1]
-        win_l = lows[-N - 1:-1]
-        don = False
-        if len(win_h) >= N:
-            hh, ll = max(win_h), min(win_l)
-            don = (closes[-1] > hh) if sd > 0 else (closes[-1] < ll)
-        # —— 条件 3：纯动量启动豁免 ——
-        m = cfg.waive_mom_n
-        mom = (closes[-1] / closes[-1 - m] - 1) * sd * 100.0 if len(closes) > m else 0.0
-        mom_pass = mom >= cfg.waive_mom_pct
-        if don or mom_pass:
-            logger.info(
-                "[形态下单] %s %s 趋势过滤放行: Donchian=%s "
-                "mom%d=%.2f%%(>=%.2f%%)",
-                sym, tf, don, m, mom, cfg.waive_mom_pct,
-            )
-            return True
-        logger.info(
-            "[形态下单] %s %s 趋势过滤拦截: 非死水但无突破 "
-            "(Donchian=False mom%d=%.2f%%<%.2f%%)",
-            sym, tf, m, mom, cfg.waive_mom_pct,
-        )
-        return False
+        allow, reason, _ = trend_gate(closes, highs, lows, vols,
+                                      len(closes) - 1, sd, cfg)
+        logger.info("[形态下单] %s %s 趋势过滤: %s（%s）", sym, tf,
+                    "放行" if allow else "拦截", reason)
+        return allow
+
+
+def trend_gate(closes: list[float], highs: list[float], lows: list[float],
+               vols: list[float], idx: int, sd: int, cfg) -> tuple[bool, str, str]:
+    """综合趋势过滤纯函数（页面 / 实盘 / 回测 三处共用，保证判定完全一致）。
+
+    决策树（对应形态页过滤，idx 仅保留调用对称性——判定始终针对传入序列的
+    最后一
+
+根，调用方按需把序列截断到「当前 bar」即可）：
+      ① 数据不足                          → 放行
+      ② Squeeze 死水区(极窄幅 AND 缩量)    → 拦截
+      ③ Donchian 突破(收在前 N 根高低点外) → 放行
+      ④ momN >= 阈值%(朝信号方向累计涨跌)  → 豁免放行
+      ⑤ 否则                              → 拦截
+    返回 (是否放行, 原因, 决定闸门)。
+    """
+    n = len(closes)
+    need = max(cfg.squeeze_bb_n, cfg.squeeze_vol_n,
+               cfg.donchian_n + 1, cfg.waive_mom_n + 1)
+    if n < need + 5:
+        return True, "数据不足(放行)", "data"
+    # —— 条件 1：Squeeze 极度窄幅死水区（极窄幅 AND 缩量，须同时满足）——
+    bb_n = cfg.squeeze_bb_n
+    mid = ta_sma(closes, bb_n)[-1]
+    win = closes[-bb_n:]
+    var = sum((x - mid) ** 2 for x in win) / bb_n
+    std = var ** 0.5
+    upper = mid + cfg.squeeze_bb_mult * std
+    lower = mid - cfg.squeeze_bb_mult * std
+    width_pct = (upper - lower) / mid * 100.0 if mid else 0.0
+    vn = cfg.squeeze_vol_n
+    vol_ma = ta_sma(vols, vn)[-1]
+    low_vol = vol_ma > 0 and vols[-1] < vol_ma * cfg.squeeze_vol_mult
+    squeeze = (width_pct < cfg.squeeze_width_pct) and low_vol
+    if squeeze:
+        return False, (f"死水区(带宽{width_pct:.2f}%<{cfg.squeeze_width_pct}%"
+                       f"且缩量)"), "squeeze"
+    # —— 条件 2：Donchian 通道突破（价格收在前 N 根高低点之外）——
+    N = cfg.donchian_n
+    win_h = highs[-N - 1:-1]
+    win_l = lows[-N - 1:-1]
+    don = False
+    if len(win_h) >= N:
+        hh, ll = max(win_h), min(win_l)
+        don = (closes[-1] > hh) if sd > 0 else (closes[-1] < ll)
+    # —— 条件 3：纯动量启动豁免 ——
+    m = cfg.waive_mom_n
+    mom = (closes[-1] / closes[-1 - m] - 1) * sd * 100.0 if len(closes) > m else 0.0
+    if don:
+        return True, f"Donchian突破(+{N})", "donchian"
+    if mom >= cfg.waive_mom_pct:
+        return True, f"动量豁免(mom{m}={mom:.2f}%>={cfg.waive_mom_pct}%)", "mom"
+    return False, f"无突破(mom{m}={mom:.2f}%<{cfg.waive_mom_pct}%)", "none"
 
 
 def sig_dir(sig: dict) -> int:

@@ -4,6 +4,7 @@ import asyncio
 import bisect
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import replace
@@ -17,6 +18,7 @@ import backtest as bt
 import candle_store
 import instruments
 import notify
+import pattern_trade
 import regime
 import strategy
 import trade
@@ -87,6 +89,48 @@ async def get_signals(tf: Optional[str] = None, limit: int = 100):
     return sigs[-limit:]
 
 
+def _finite(v):
+    """JSON 标准里没有 NaN / Infinity，Python 序列化出来前端 JSON.parse 会直接抛错。
+
+    指标在极端行情（除零、全平 K 线）下可能算出非有限值，这里统一转成 None，
+    前端按断线处理，避免整个形态页因一次解析失败而空白。
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+async def _pattern_candles(symbol: str, tf: str, limit: int) -> list:
+    """形态页取数：本地 SQLite → 内存（已加载的品种）→ OKX REST 现拉一次。
+
+    只读本地库时，冷启动还没落盘 / 该周期从未持久化 的情况下会取到空数组，
+    页面就一直空白。补上后两级兜底，保证只要行情源正常就能出图。
+    """
+    if tf not in TF_CONFIG:
+        return []
+    cs = candle_store.load_candles(symbol, tf, limit)
+    if cs:
+        return cs
+    st = state.stores.get(symbol)
+    if st is None and state.view_store and state.view_store.symbol == symbol:
+        st = state.view_store
+    if st:
+        dq = st.candles.get(tf)
+        if dq:
+            return list(dq)[-limit:]
+    loop = asyncio.get_event_loop()
+    try:
+        got = await loop.run_in_executor(None, fetch_candles, tf, limit, symbol)
+    except Exception as e:      # REST 不可达（无网/被限频）时不拖垮整页
+        logger.warning(f"形态页 REST 取数失败 [{symbol} {tf}]: {e}")
+        return []
+    return got or []
+
+
 @router.get("/api/pattern")
 async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600):
     """形态识别页：基础周期 SuperTrend 信号 + 4h 趋势形态识别过滤。
@@ -97,9 +141,10 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
              注意：此处使用「原始信号」参数，与首页默认（periods=15, multiplier=9.1）无关。
     - h4   : 4h K 线 + 极值点 + 每根 K 的形态方向（dir / label）。
     """
-    base = candle_store.load_candles(symbol, base_tf, limit)
+    symbol = (symbol or "BTCUSDT").strip().upper()
+    base = await _pattern_candles(symbol, base_tf, limit)
     # 4h 取数上限调大（原 500≈83天），覆盖更长回看窗口，避免长周期下 4h 形态"数据不足"
-    h4 = candle_store.load_candles(symbol, "4h", 2000)
+    h4 = await _pattern_candles(symbol, "4h", 2000)
     if not base:
         return {"symbol": symbol, "base_tf": base_tf, "error": "no_base_candles",
                 "base": None, "h4": None}
@@ -110,13 +155,23 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
     highs = [c["h"] for c in bcandles]
     lows = [c["l"] for c in bcandles]
     closes = [c["c"] for c in bcandles]
+    vols = [c["vol"] for c in bcandles]
     # 形态识别页专用「原始 SuperTrend 信号」：ATR 周期=10, factor=3.0（对应 supertrend原始代码.md）。
     # 与首页默认参数（periods=15, multiplier=9.1）无关，仅本页使用。
     st = super_trend(opens, highs, lows, closes, periods=10, multiplier=3.0, change_atr=True)
+    st["up_plot"] = [_finite(v) for v in st["up_plot"]]
+    st["dn_plot"] = [_finite(v) for v in st["dn_plot"]]
 
     signals = []
     h4dict = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c} for c in h4] if h4 else []
     hpat = recognize_pattern(h4dict) if h4 else {"pattern": [], "pivots": []}
+    for p in hpat.get("pattern", []):
+        for k in ("adx", "ma20", "ma60", "dph", "dpl", "or_up", "or_down"):
+            if k in p:
+                p[k] = _finite(p[k])
+    for pv in hpat.get("pivots", []):
+        if "price" in pv:
+            pv["price"] = _finite(pv["price"])
     if h4:
         pat = hpat["pattern"]
         pmap = {p["ts"]: p for p in pat}
@@ -131,22 +186,33 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
             if i >= len(bcandles):
                 continue
             c = bcandles[i]
-            sig_dir = 1 if f["type"] == "buy" else -1
+            sd = 1 if f["type"] == "buy" else -1
             pdir = dir_at(c["ts"])
-            # 形态识别不再拦截「4h 无趋势」：pdir==0 也正常下单，仅拦 pdir 反向 / 数据不足。
-            # 依据 BTC/ETH × 2025全年/2026H1 四窗口回测：
-            #   放行 dir==0 → 收益提升；ETH 2026H1 最大回撤 9.76% → 4.40%、最长连亏 3→2。
+            # ① 4h 形态对齐闸门（不再拦「无趋势」：pdir==0 也正常下单，仅拦反向/数据不足）。
+            # 依据 BTC/ETH × 2025全年/2026H1 四窗口回测：放行 dir==0 → 收益提升；
+            # ETH 2026H1 最大回撤 9.76% → 4.40%、最长连亏 3→2。
             if pdir is None:
-                decision = "block"
-                reason = "4h 数据不足"
-            elif pdir == 0 or pdir == sig_dir:
-                decision = "allow"
-                reason = "4h 无趋势(正常下单)" if pdir == 0 else "4h 同向"
+                h4_ok, h4_reason = False, "4h 数据不足"
+            elif pdir == 0 or pdir == sd:
+                h4_ok, h4_reason = True, ("4h 无趋势(正常下单)" if pdir == 0 else "4h 同向")
             else:
-                decision = "block"
-                reason = "4h 反向"
+                h4_ok, h4_reason = False, "4h 反向"
+            # ② 综合趋势过滤闸门（Squeeze/Donchian/mom）—— 与 pattern_trade.trend_gate 同逻辑
+            cfg = pattern_trade.trader.cfg
+            trend_ok, trend_reason = True, ""
+            if cfg.trend_filter:
+                allow, trend_reason, _ = pattern_trade.trend_gate(
+                    closes[:i + 1], highs[:i + 1], lows[:i + 1], vols[:i + 1], i, sd, cfg)
+                trend_ok = allow
+            if not h4_ok:
+                decision, reason = "block", h4_reason
+            elif not trend_ok:
+                decision, reason = "block", "趋势过滤拦截:" + trend_reason
+            else:
+                decision = "allow"
+                reason = h4_reason + (" / " + trend_reason if cfg.trend_filter else "")
             signals.append({
-                "ts": c["ts"], "type": f["type"], "dir": sig_dir,
+                "ts": c["ts"], "type": f["type"], "dir": sd,
                 "price": round(c["c"], 6), "decision": decision, "reason": reason,
                 "pdir": pdir,
             })
