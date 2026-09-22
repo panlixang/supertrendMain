@@ -24,6 +24,9 @@ class CfgIn(BaseModel):
     price_offset:  Optional[float] = None
     exchange:      Optional[str]   = None
     block_4h:      Optional[bool]  = None
+    no_trend_block:   Optional[bool]  = None
+    no_trend_adx:     Optional[float] = None
+    no_trend_ma_gap:  Optional[float] = None
     cooldown_sec:  Optional[int]   = None
     poll_sec:      Optional[int]   = None
     tp1_pct:         Optional[float] = None

@@ -84,7 +84,8 @@ def backtest(allow_set, opens, highs, lows, closes, up_plot, dn_plot, flip_idx):
         i = s["i"]
         long = s["type"] == "buy"
         entry = closes[i]
-        stp0 = dn_plot[i] if long else up_plot[i]
+        # 多头跟上升轨 up_plot、空头跟下降轨 dn_plot（不能用反，反了恒为 None、跟踪失效）
+        stp0 = up_plot[i] if long else dn_plot[i]
         if stp0 is None or (long and stp0 >= entry) or (not long and stp0 <= entry):
             stp0 = entry * (1 - SL_PCT_FALLBACK / 100) if long else entry * (1 + SL_PCT_FALLBACK / 100)
         stop = stp0
@@ -96,7 +97,7 @@ def backtest(allow_set, opens, highs, lows, closes, up_plot, dn_plot, flip_idx):
         ex = None
         for j in range(i + 1, len(closes)):
             if long:
-                nl = dn_plot[j]
+                nl = up_plot[j]
                 if nl is not None and nl > stop:
                     stop = nl
                 if lows[j] <= stop:
@@ -110,7 +111,7 @@ def backtest(allow_set, opens, highs, lows, closes, up_plot, dn_plot, flip_idx):
                     pnl += (tp1p - entry) * coins * TP1_RATIO - tp1p * coins * TP1_RATIO * FEE
                     tp1 = True; stop = entry
             else:
-                nl = up_plot[j]
+                nl = dn_plot[j]
                 if nl is not None and nl < stop:
                     stop = nl
                 if highs[j] >= stop:

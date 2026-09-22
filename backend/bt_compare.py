@@ -97,13 +97,13 @@ def main():
             i = s["i"]
             long = s["type"] == "buy"
             entry = closes[i]
-            # 初始止损 = 超趋线轨道
+            # 初始止损 = 超趋线轨道（多头用上升轨 up_plot，空头用下降轨 dn_plot）
             if long:
-                stp0 = dn_plot[i]
+                stp0 = up_plot[i]
                 if stp0 is None or stp0 >= entry:
                     stp0 = entry * (1 - SL_PCT_FALLBACK / 100)
             else:
-                stp0 = up_plot[i]
+                stp0 = dn_plot[i]
                 if stp0 is None or stp0 <= entry:
                     stp0 = entry * (1 + SL_PCT_FALLBACK / 100)
             stop = stp0

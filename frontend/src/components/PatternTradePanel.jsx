@@ -6,7 +6,7 @@
  *
  * 面板只暴露用户要的参数：
  *   交易所配置（OKX / Bitget + 各自 Key + 模拟盘）
- *   是否开启 4h 方向拦截
+ *   是否开启 4h 方向拦截 / 无趋势拦截（含 ADX、MA20/MA60 间距阈值）
  *   下单品种的下单仓位保证金 / 杠杆 / 允许周期
  * 出场规则固定用回测验证档（TP1 1.5% 平 70% + 保本 + 跟随 SuperTrend 跟踪）。
  */
@@ -76,6 +76,7 @@ export default function PatternTradePanel({ currentSymbol }) {
     tp1_pct: 1.5, tp1_ratio: 70, sl_pct: 2.0,
     move_sl_to_entry: true, trail_with_st: true,
   });
+  const [nt, setNt] = useState({ no_trend_adx: 15, no_trend_ma_gap: 0.2 });
 
   const [keyForm, setKeyForm] = useState({ api_key: "", api_secret: "", passphrase: "" });
   const [addForm, setAddForm] = useState({ symbol: "", margin: 10, leverage: 3, allow: ["1h"] });
@@ -197,6 +198,20 @@ export default function PatternTradePanel({ currentSymbol }) {
     });
   }, [cfg]);
 
+  // 无趋势拦截阈值（从后端 cfg 同步，改动即时下发）
+  useEffect(() => {
+    if (!cfg) return;
+    setNt({
+      no_trend_adx: cfg.no_trend_adx ?? 15,
+      no_trend_ma_gap: cfg.no_trend_ma_gap ?? 0.2,
+    });
+  }, [cfg]);
+
+  const patchNt = (k, v) => {
+    setNt((x) => ({ ...x, [k]: v }));
+    patch({ [k]: v });
+  };
+
   const patchXr = (k, v) => {
     setXr((x) => ({ ...x, [k]: v }));
     patch({ [k]: v });
@@ -311,6 +326,32 @@ export default function PatternTradePanel({ currentSymbol }) {
           <input type="checkbox" checked={cfg.block_4h} onChange={(e) => patch({ block_4h: e.target.checked })} />
           <span>开启 4h 方向拦截（仅拦 4h 明确反向）</span>
         </div>
+        <div style={SZ.row}>
+          <input
+            type="checkbox" checked={!!cfg.no_trend_block}
+            onChange={(e) => patch({ no_trend_block: e.target.checked })}
+          />
+          <span>
+            无趋势拦截（当前下单周期 ADX&lt;{nt.no_trend_adx} 且 MA20/60 间距&lt;{nt.no_trend_ma_gap}% 不开单）
+          </span>
+        </div>
+        {!!cfg.no_trend_block && (
+          <div style={{ ...SZ.row, marginLeft: 20, flexWrap: "wrap" }}>
+            <span style={{ color: C.neutral }}>ADX(14)&lt;</span>
+            <input
+              style={{ ...SZ.inp, width: 56 }} type="number" step={1} min={0}
+              value={nt.no_trend_adx}
+              onChange={(e) => patchNt("no_trend_adx", Number(e.target.value))}
+            />
+            <span style={{ color: C.neutral }}>且 MA20/MA60 间距&lt;</span>
+            <input
+              style={{ ...SZ.inp, width: 56 }} type="number" step={0.05} min={0}
+              value={nt.no_trend_ma_gap}
+              onChange={(e) => patchNt("no_trend_ma_gap", Number(e.target.value))}
+            />
+            <span style={{ color: C.neutral }}>%</span>
+          </div>
+        )}
         </div>
 
       {/* 默认出场 · 止盈止损 */}

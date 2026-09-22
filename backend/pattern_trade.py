@@ -4,7 +4,7 @@
 - 配置文件 pattern_trade.json、凭据文件 pattern_credentials.json，都不进 settings.json
 - 下单通过 creds 的 ContextVar 覆盖 —— Task 级隔离，两页可跑不同交易所 / 不同子账户
 - 信号用基础周期的「原始 SuperTrend」（ATR 10 / factor 3.0），与首页 15/9.1 无关
-- 过滤只剩一个开关：block_4h（4h 形态方向反向是否拦截）
+- 过滤两个开关：block_4h（4h 形态反向拦截）+ no_trend_block（当前下单周期无趋势拦截）
 - 出场用 position.ExitRules 默认档 = 回测验证过的 TP1 1.5% 平 70% + 保本 + 跟随 ST 跟踪
 
 同一品种两页都可能下单时不校验冲突（用户用不同子账户各自管理）。
@@ -25,7 +25,7 @@ import creds
 import history
 import trade
 from executor import Executor
-from indicators import super_trend
+from indicators import ma, super_trend, ta_adx
 from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
 from regime import TradeConfig
@@ -66,6 +66,12 @@ class PatternConfig:
     price_offset: float = 0.05
     exchange:     str   = "okx"
     block_4h:     bool  = True     # True = 4h 形态反向则不下单
+    # 无趋势拦截：当前下单周期（如 1h）同时满足下面两条才判「无趋势」不开单
+    #   ADX(14) < no_trend_adx                      趋势强度不足
+    #   |MA20 - MA60| / MA60 * 100 < no_trend_ma_gap  快慢均线走平贴合
+    no_trend_block:   bool  = False  # True = 开启无趋势拦截
+    no_trend_adx:     float = 15.0   # ADX(14) 阈值（低于 = 趋势弱）
+    no_trend_ma_gap:  float = 0.2    # MA20/MA60 间距阈值（%，低于 = 走平）
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
     # 出场参数（回测验证档，面板可配置）
@@ -473,8 +479,10 @@ class PatternTrader:
                 last = self._last_order_at.get(key, 0)
                 if time.time() - last < self.cfg.cooldown_sec:
                     continue
-            # 3) 唯一的过滤器：4h 形态方向
+            # 3) 过滤器：4h 形态方向 + 当前下单周期无趋势
             if self.cfg.block_4h and not await self._allow_by_4h(sym, sig):
+                continue
+            if self.cfg.no_trend_block and not await self._allow_by_no_trend(sym, sig):
                 continue
             self._last_order_at[key] = time.time()
             await ex.on_signal(sig, {"trade": True, "profile": "normal"})
@@ -545,6 +553,44 @@ class PatternTrader:
             return True
         pdir = pmap[pts[idx]].get("dir")
         return pdir != -sig_dir(sig)
+
+    async def _allow_by_no_trend(self, sym: str, sig: dict) -> bool:
+        """True=放行。当前下单周期「无趋势」则拦截（只拦开新仓，不影响反向平仓）。
+
+        无趋势判定 —— 两条【同时满足】才算无趋势（不是满足任一）：
+          - ADX(14) < self.cfg.no_trend_adx                  趋势强度不足
+          - |MA20 - MA60| / MA60 * 100 < self.cfg.no_trend_ma_gap   均线走平贴合
+        周期取「当前选择下单的 K 线周期」= sig["tf"]（如 1h），不是固定 4h。
+        数据不足（ADX / MA60 未预热）一律放行，不拦。
+        """
+        tf = sig.get("tf") or "1h"
+        try:
+            cs = await self._kline(sym, tf, 500)
+        except Exception as e:
+            logger.warning(f"[形态下单] {sym} {tf} 无趋势判定取数失败: {e}")
+            return True
+        # ADX(14) 需约 2*14 根预热，MA60 需 60 根，留足余量
+        if len(cs) < 80:
+            return True
+        highs = [c["h"] for c in cs]
+        lows = [c["l"] for c in cs]
+        closes = [c["c"] for c in cs]
+        adx = ta_adx(highs, lows, closes, 14)
+        m20 = ma(closes, 20, "EMA")
+        m60 = ma(closes, 60, "EMA")
+        a, f, s = adx[-1], m20[-1], m60[-1]
+        if a is None or f is None or s is None or not s:
+            return True
+        gap_pct = abs(f - s) / s * 100.0
+        no_trend = (a < self.cfg.no_trend_adx) and (gap_pct < self.cfg.no_trend_ma_gap)
+        if no_trend:
+            logger.info(
+                "[形态下单] %s %s 无趋势拦截: ADX=%.1f(<%.1f) 且 "
+                "MA20/60间距=%.3f%%(<%.2f%%)",
+                sym, tf, a, self.cfg.no_trend_adx,
+                gap_pct, self.cfg.no_trend_ma_gap,
+            )
+        return not no_trend
 
 
 def sig_dir(sig: dict) -> int:
