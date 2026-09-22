@@ -1,6 +1,7 @@
 """HTTP / WebSocket 路由"""
 
 import asyncio
+import bisect
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 import backtest as bt
+import candle_store
 import instruments
 import notify
 import regime
@@ -20,7 +22,8 @@ import strategy
 import trade
 import trade_log
 from history import fetch_candles, load_history
-from indicators import compute
+from indicators import compute, super_trend
+from pattern_recog import recognize as recognize_pattern
 from state import BIAS_TFS, MAX_SYMBOLS, TF_CONFIG, TFS, state
 
 router = APIRouter()
@@ -82,6 +85,92 @@ async def get_signals(tf: Optional[str] = None, limit: int = 100):
     if tf:
         sigs = [s for s in sigs if s["tf"] == tf]
     return sigs[-limit:]
+
+
+@router.get("/api/pattern")
+async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600):
+    """形态识别页：基础周期 SuperTrend 信号 + 4h 趋势形态识别过滤。
+
+    - base : 主图 K 线 + 原始 SuperTrend 信号（对应 supertrend原始代码.md：
+             ATR 周期=10, factor=3.0，经典 trend 翻转）+ 信号；
+             每个 SuperTrend 翻转点附 4h 形态过滤结论（allow / block）。
+             注意：此处使用「原始信号」参数，与首页默认（periods=15, multiplier=9.1）无关。
+    - h4   : 4h K 线 + 极值点 + 每根 K 的形态方向（dir / label）。
+    """
+    base = candle_store.load_candles(symbol, base_tf, limit)
+    # 4h 取数上限调大（原 500≈83天），覆盖更长回看窗口，避免长周期下 4h 形态"数据不足"
+    h4 = candle_store.load_candles(symbol, "4h", 2000)
+    if not base:
+        return {"symbol": symbol, "base_tf": base_tf, "error": "no_base_candles",
+                "base": None, "h4": None}
+
+    bcandles = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol}
+                for c in base]
+    opens = [c["o"] for c in bcandles]
+    highs = [c["h"] for c in bcandles]
+    lows = [c["l"] for c in bcandles]
+    closes = [c["c"] for c in bcandles]
+    # 形态识别页专用「原始 SuperTrend 信号」：ATR 周期=10, factor=3.0（对应 supertrend原始代码.md）。
+    # 与首页默认参数（periods=15, multiplier=9.1）无关，仅本页使用。
+    st = super_trend(opens, highs, lows, closes, periods=10, multiplier=3.0, change_atr=True)
+
+    signals = []
+    h4dict = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c} for c in h4] if h4 else []
+    hpat = recognize_pattern(h4dict) if h4 else {"pattern": [], "pivots": []}
+    if h4:
+        pat = hpat["pattern"]
+        pmap = {p["ts"]: p for p in pat}
+        pts = [p["ts"] for p in pat]
+
+        def dir_at(ts: int) -> Optional[int]:
+            idx = bisect.bisect_right(pts, ts) - 1
+            return pmap[pts[idx]]["dir"] if idx >= 0 else None
+
+        for f in st["flips"]:
+            i = f["i"]
+            if i >= len(bcandles):
+                continue
+            c = bcandles[i]
+            sig_dir = 1 if f["type"] == "buy" else -1
+            pdir = dir_at(c["ts"])
+            # 形态识别不再拦截「4h 无趋势」：pdir==0 也正常下单，仅拦 pdir 反向 / 数据不足。
+            # 依据 BTC/ETH × 2025全年/2026H1 四窗口回测：
+            #   放行 dir==0 → 收益提升；ETH 2026H1 最大回撤 9.76% → 4.40%、最长连亏 3→2。
+            if pdir is None:
+                decision = "block"
+                reason = "4h 数据不足"
+            elif pdir == 0 or pdir == sig_dir:
+                decision = "allow"
+                reason = "4h 无趋势(正常下单)" if pdir == 0 else "4h 同向"
+            else:
+                decision = "block"
+                reason = "4h 反向"
+            signals.append({
+                "ts": c["ts"], "type": f["type"], "dir": sig_dir,
+                "price": round(c["c"], 6), "decision": decision, "reason": reason,
+                "pdir": pdir,
+            })
+
+    return {
+        "symbol": symbol,
+        "base_tf": base_tf,
+        "base": {
+            "tf": base_tf,
+            "candles": bcandles,
+            "st": {
+                "up_plot": st["up_plot"],
+                "dn_plot": st["dn_plot"],
+                "trend": st["trend"],
+            },
+            "signals": signals,
+        },
+        "h4": {
+            "candles": [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c}
+                       for c in h4],
+            "pivots": hpat["pivots"],
+            "pattern": hpat["pattern"],
+        },
+    }
 
 
 # ─── 参数（对应 Pine 的 input 面板） ─────────────────────────────

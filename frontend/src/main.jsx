@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import HomePage from './pages/HomePage';
 import ResearchPage from './pages/ResearchPage';
+import PatternPage from './pages/PatternPage';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -12,6 +13,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/" element={<Layout />}>
           <Route index element={<HomePage />} />
           <Route path="research" element={<ResearchPage />} />
+          <Route path="pattern" element={<PatternPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
