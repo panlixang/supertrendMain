@@ -58,14 +58,24 @@ echo "[后端] 当前 venv Python $VPY"
 echo "[后端] 安装依赖…"
 .venv/bin/pip install -r requirements.txt -q
 
-# 重复执行 start.sh 时旧 uvicorn 还占着 8000，会在 _serve 里直接崩。
-# 注意：占位的可能是别的项目 / 旧版入口（如 api.main:app），按命令行 pkill 匹配不到，
-# 必须按端口清理；否则后端起不来，前端所有接口都是 404（形态页会一直空白）。
-PIDS_8000=$(lsof -ti tcp:8000 2>/dev/null)
+# 重复执行 start.sh 时旧 uvicorn 还占着 8000，会导致新后端 bind 失败。
+# 注意两点：
+# 1) 占位的可能是别的项目 / 旧版入口（如 api.main:app），按命令行 pkill 匹配不到，
+#    必须按端口清理；
+# 2) lsof 必须加 -sTCP:LISTEN —— 不加的话"连到 8000 的客户端连接"也会被算进来，
+#    而 vite 的代理进程常年挂着到 127.0.0.1:8000 的出站连接，
+#    曾导致每次重启都把 vite 一并误杀（前端整段不可用，浏览器报 ECONNREFUSED）。
+PIDS_8000=$(lsof -ti tcp:8000 -sTCP:LISTEN 2>/dev/null)
 if [ -n "$PIDS_8000" ]; then
-  echo "→ 端口 8000 已被占用（PID: $PIDS_8000），先停掉再启动本项目后端"
+  echo "→ 端口 8000 已被占用（PID: $(echo $PIDS_8000 | tr '\n' ' ')），先停掉再启动本项目后端"
   kill $PIDS_8000 2>/dev/null || true
-  sleep 1
+  # uvicorn 收到 SIGTERM 后会等存量连接（浏览器 WebSocket）断开才释放端口，
+  # 最多等 3 秒；还占着就 SIGKILL，避免新后端 bind 失败。
+  for _ in 1 2 3; do
+    lsof -ti tcp:8000 -sTCP:LISTEN >/dev/null 2>&1 || break
+    sleep 1
+  done
+  lsof -ti tcp:8000 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
 fi
 if command -v fuser >/dev/null 2>&1; then
   fuser -k 8000/tcp >/dev/null 2>&1 || true
@@ -101,8 +111,15 @@ echo "[后端] 启动 FastAPI :8000"
 LOG="$ROOT/backend/uvicorn.log"
 .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 >"$LOG" 2>&1 &
 BACKEND_PID=$!
-sleep 2
-if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+# 不能只看进程活着就继续 —— uvicorn 若在 bind 阶段（旧进程还没释放端口）失败会静默退出，
+# 之后前端起来全是 ECONNREFUSED。这里轮询端口真正进入 LISTEN，最多等 10 秒。
+BACKEND_OK=0
+for _ in $(seq 1 10); do
+  sleep 1
+  if lsof -ti tcp:8000 -sTCP:LISTEN >/dev/null 2>&1; then BACKEND_OK=1; break; fi
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then break; fi
+done
+if [ "$BACKEND_OK" != 1 ]; then
   echo "✗ 后端启动失败。完整报错在 $LOG ，末尾如下："
   tail -n 40 "$LOG"
   exit 1
