@@ -91,3 +91,5 @@ INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 INFO:     127.0.0.1:52623 - "GET /api/candles?tf=1h HTTP/1.1" 200 OK
 INFO:     127.0.0.1:52624 - "GET /api/pattern?symbol=BTC-USDT&base_tf=1h HTTP/1.1" 200 OK
 INFO:     127.0.0.1:52692 - "GET /api/tfs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56517 - "GET /api/tfs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56518 - "GET /api/pattern?symbol=BTC-USDT&base_tf=1h HTTP/1.1" 200 OK

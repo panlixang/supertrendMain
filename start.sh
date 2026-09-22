@@ -83,9 +83,18 @@ if command -v security >/dev/null 2>&1; then
   security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain >>"$CA_BUNDLE" 2>/dev/null
   security find-certificate -a -p "$HOME/Library/Keychains/login.keychain-db" >>"$CA_BUNDLE" 2>/dev/null
   security find-certificate -c "Quantumult X" -a -p "$HOME/Library/Keychains/login.keychain-db" >>"$CA_BUNDLE" 2>/dev/null
-  export SSL_CERT_FILE="$CA_BUNDLE"
-  export REQUESTS_CA_BUNDLE="$CA_BUNDLE"
-  echo "[后端] 已注入 CA 信任包（$(grep -c 'BEGIN CERTIFICATE' "$CA_BUNDLE" 2>/dev/null) 张）"
+  N=$(grep -c 'BEGIN CERTIFICATE' "$CA_BUNDLE" 2>/dev/null || echo 0)
+  # 关键：只有真的导出到证书才设 SSL_CERT_FILE。
+  # 空文件会让 OpenSSL 信任库为空 —— 反而使所有 HTTPS 都报 CERTIFICATE_VERIFY_FAILED，
+  # 比不设置还要糟（页面会彻底拉不到行情）。拿不到就删掉、回退到 Python 默认信任库。
+  if [ "${N:-0}" -gt 0 ]; then
+    export SSL_CERT_FILE="$CA_BUNDLE"
+    export REQUESTS_CA_BUNDLE="$CA_BUNDLE"
+    echo "[后端] 已注入 CA 信任包（$N 张）"
+  else
+    rm -f "$CA_BUNDLE"
+    echo "[后端] CA 信任包生成失败（0 张），回退 Python 默认信任库"
+  fi
 fi
 
 echo "[后端] 启动 FastAPI :8000"
@@ -103,11 +112,25 @@ echo ""
 echo "[前端] 安装依赖…"
 cd "$ROOT/frontend" || exit 1
 # 前端 Vite 5 需要 Node 18+；fnm 默认可能是 16，会导致 vite 启动即崩、端口 5174 一直没监听。
-# 这里显式把 node 20 提到 PATH 最前（仅本项目 shell 内生效，不动你的全局 fnm 默认）。
-NODE20="$HOME/Library/Application Support/fnm/node-versions/v20.11.0/installation/bin"
-if [ -x "$NODE20/node" ]; then
-  export PATH="$NODE20:$PATH"
-  echo "[前端] 使用 Node $("$NODE20/node" -v)（Vite 5 需 18+）"
+# 从 fnm 已安装的版本里挑一个 >=18 的（取最高的）。不硬编码版本号 ——
+# 否则 fnm 升级/换版本后路径失效，会静默退回 node 16，前端又起不来。
+# 仅在本脚本的 shell 内改 PATH，不动你的全局 fnm 默认。
+FNM_BASE="${FNM_DIR:-$HOME/Library/Application Support/fnm}"
+if [ -d "$FNM_BASE/node-versions" ]; then
+  BEST=""
+  for v in $(ls -1 "$FNM_BASE/node-versions" 2>/dev/null | sort -Vr); do
+    major=$(printf '%s' "$v" | sed 's/^v//' | cut -d. -f1)
+    if [ -n "$major" ] && [ "$major" -ge 18 ] 2>/dev/null; then
+      BEST="$FNM_BASE/node-versions/$v/installation/bin"
+      break
+    fi
+  done
+  if [ -n "$BEST" ] && [ -x "$BEST/node" ]; then
+    export PATH="$BEST:$PATH"
+    echo "[前端] 使用 Node $("$BEST/node" -v)（Vite 5 需 18+）"
+  else
+    echo "[前端] 未找到 Node 18+，使用当前 $("node" -v 2>/dev/null || echo 未知)（可能启动失败）"
+  fi
 fi
 npm install --silent
 
