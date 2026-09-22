@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import hashlib
 import hmac
 import json
@@ -26,6 +27,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+import creds  # 与 trade.py 共用同一份逐 Task 隔离凭据
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +96,31 @@ def _fmt(v: float, step: float) -> str:
     return f"{v:.{_dec(step)}f}"
 
 
+def _auth() -> tuple[str, str, str]:
+    """当前上下文生效的密钥三元组：显式凭据优先，没设就用模块全局。"""
+    return creds.key_secret_pass((API_KEY, API_SECRET, PASSPHRASE))
+
+
+def _configured() -> bool:
+    """替代模块内零散的 `if not _configured():` —— 有显式凭据时以它为准。"""
+    return creds.configured_now(configured)
+
+
+def _paper(sim: bool | None) -> bool:
+    """模拟盘判定：显式 sim 参数 > 凭据的 paper > 模块全局 SIMULATED。"""
+    return creds.resolve_sim(sim, SIMULATED)
+
+
+async def _run(fn, *args):
+    """把同步 HTTP 丢到线程池，并带上当前上下文（含凭据），避免并发串号。"""
+    ctx = contextvars.copy_context()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: ctx.run(fn, *args))
+
+
 def _sign(ts: str, method: str, path: str, body: str) -> str:
     prehash = f"{ts}{method.upper()}{path}{body}"
-    digest = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
+    digest = hmac.new(_auth()[1].encode(), prehash.encode(), hashlib.sha256).digest()
     return base64.b64encode(digest).decode()
 
 
@@ -117,13 +142,14 @@ def _request(method: str, path: str, payload: dict | None = None,
     }
     if auth:
         ts = str(int(time.time() * 1000))
+        key, _secret, passphrase = _auth()
         headers.update({
-            "ACCESS-KEY": API_KEY,
+            "ACCESS-KEY": key,
             "ACCESS-SIGN": _sign(ts, method, url_path, body),
             "ACCESS-TIMESTAMP": ts,
-            "ACCESS-PASSPHRASE": PASSPHRASE,
+            "ACCESS-PASSPHRASE": passphrase,
         })
-    if SIMULATED if sim is None else sim:
+    if _paper(sim):
         headers["paptrading"] = "1"
 
     req = urllib.request.Request(
@@ -204,14 +230,14 @@ async def get_spec(inst_id: str, inst_type: str = "SWAP") -> dict:
 async def get_market_price(inst_id: str, category: str = "SWAP",
                            sim: bool | None = None) -> float | None:
     """拉取 Bitget 指定品种的最新成交价。"""
-    if not configured:
+    if not _configured():
         return None
     if category != "SWAP":
         return None
     sym = to_symbol(inst_id)
     params = {"productType": PRODUCT, "symbol": sym}
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET",
+    r = await _run(_request, "GET",
                                    "/api/v2/mix/market/symbol-price", params,
                                    False, False)
     if not _ok(r):
@@ -227,7 +253,7 @@ async def get_market_price(inst_id: str, category: str = "SWAP",
 
 async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
                        sim: bool | None = None) -> dict:
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 Bitget API 密钥"}
     payload = {
         "symbol": to_symbol(inst_id),
@@ -239,7 +265,7 @@ async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
     mm = "crossed" if mgn_mode == "cross" else "isolated"
     payload["marginMode"] = mm
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "POST",
+    r = await _run(_request, "POST",
                                    "/api/v2/mix/account/set-leverage", payload, sim)
     ok = _ok(r)
     if not ok:
@@ -249,7 +275,7 @@ async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
 
 async def query_order(inst_id: str, order_id: str, category: str = "SWAP",
                       sim: bool | None = None) -> dict:
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 Bitget API 密钥"}
     params = {
         "symbol": to_symbol(inst_id),
@@ -257,7 +283,7 @@ async def query_order(inst_id: str, order_id: str, category: str = "SWAP",
         "orderId": order_id,
     }
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET",
+    r = await _run(_request, "GET",
                                    "/api/v2/mix/order/detail", params, sim)
     data = r.get("data") or {}
     if isinstance(data, list):
@@ -341,7 +367,7 @@ async def place_order(
     wait_fill: bool = False,
     wait_sec: float = 8.0,
 ) -> dict:
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 Bitget API 密钥"}
     if category != "SWAP":
         return {"ok": False, "error": "Bitget 通道当前仅支持永续合约（SWAP）"}
@@ -401,10 +427,10 @@ async def place_order(
         payload["clientOid"] = "".join(ch for ch in client_oid if ch.isalnum())[:32]
 
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "POST",
+    r = await _run(_request, "POST",
                                    "/api/v2/mix/order/place-order", payload, sim)
 
-    use_sim = SIMULATED if sim is None else sim
+    use_sim = _paper(sim)
     env = "模拟" if use_sim else "实盘"
     data = r.get("data") or {}
     if isinstance(data, list):
@@ -464,13 +490,13 @@ async def place_order(
 
 async def get_positions(inst_id: str | None = None, category: str = "SWAP",
                         sim: bool | None = None) -> dict:
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 Bitget API 密钥"}
     params = {"productType": PRODUCT, "marginCoin": "USDT"}
     if inst_id:
         params["symbol"] = to_symbol(inst_id)
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET",
+    r = await _run(_request, "GET",
                                    "/api/v2/mix/position/all-position", params, sim)
     if not _ok(r):
         return {"ok": False, "data": [], "error": _err(r)}
@@ -490,7 +516,7 @@ async def get_positions(inst_id: str | None = None, category: str = "SWAP",
 
 async def cancel(inst_id: str, order_id: str, category: str = "SWAP",
                  sim: bool | None = None) -> dict:
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 Bitget API 密钥"}
     payload = {
         "symbol": to_symbol(inst_id),
@@ -498,21 +524,21 @@ async def cancel(inst_id: str, order_id: str, category: str = "SWAP",
         "orderId": order_id,
     }
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "POST",
+    r = await _run(_request, "POST",
                                    "/api/v2/mix/order/cancel-order", payload, sim)
     return {"ok": _ok(r), "error": None if _ok(r) else _err(r)}
 
 
 async def list_pending(inst_id: str, category: str = "SWAP",
                        sim: bool | None = None) -> dict:
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 Bitget API 密钥", "data": []}
     params = {
         "symbol": to_symbol(inst_id),
         "productType": PRODUCT,
     }
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET",
+    r = await _run(_request, "GET",
                                    "/api/v2/mix/order/orders-pending", params, sim)
     rows = r.get("data") or []
     if isinstance(rows, dict):
@@ -545,13 +571,13 @@ async def cancel_pending(inst_id: str, category: str = "SWAP",
 
 
 async def ping(sim: bool | None = None) -> dict:
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 Bitget API 密钥"}
     params = {"productType": PRODUCT}
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET",
+    r = await _run(_request, "GET",
                                    "/api/v2/mix/account/accounts", params, sim)
-    use_sim = SIMULATED if sim is None else sim
+    use_sim = _paper(sim)
     if not _ok(r):
         return {"ok": False, "paper": use_sim, "error": _err(r), "exchange": "bitget"}
     rows = r.get("data") or []

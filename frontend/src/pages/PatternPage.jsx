@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createChart, CrosshairMode } from "lightweight-charts";
+import PatternTradePanel from '../components/PatternTradePanel';
 
 const C = {
   bg: "transparent",
@@ -257,7 +258,8 @@ export default function PatternPage() {
   const lastPat = (data?.h4?.pattern || []).filter((p) => p.dir != null).slice(-1)[0];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minWidth: 0, color: "#e8eaed" }}>
+    <div style={{ display: "flex", height: "100%", minWidth: 0, color: "#e8eaed" }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       {/* 工具栏 */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid #1e1e1e", flexWrap: "wrap" }}>
         <span style={{ fontSize: 14, fontWeight: 700 }}>形态识别</span>
@@ -315,6 +317,9 @@ export default function PatternPage() {
           <Empty err={error} />
         )}
       </div>
+      </div>
+      {/* 右侧：形态识别页自己的下单面板（与首页不复用同一套配置）*/}
+      <PatternTradePanel currentSymbol={symbol} />
     </div>
   );
 }

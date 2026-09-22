@@ -18,6 +18,8 @@ from state import state
 from integration import create_enhanced_executor
 from adopt import adopt_exchange_position
 import trade
+import pattern_trade
+from pattern_router import router as pattern_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -86,8 +88,12 @@ async def lifespan(app: FastAPI):
     feed.rescan_signals()      # 用历史K线先把信号表填好，前端一连上就有内容
     logger.info(f"历史加载完成（{len(order)} 个品种），启动实时行情")
     task = asyncio.create_task(feed.run())
+    # 形态识别页的自动下单：独立 Task、独立凭据（与首页行情/交易互不干扰）
+    ptask = asyncio.create_task(pattern_trade.trader.run())
     yield
     task.cancel()
+    pattern_trade.trader.stop()
+    ptask.cancel()
     logger.info("行情采集已停止")
 
 
@@ -101,6 +107,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(pattern_router)
 
 # 集成机器学习 API
 if ML_AVAILABLE:

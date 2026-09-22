@@ -1,0 +1,16 @@
+{
+  "cfg": {
+    "enabled": false,
+    "paper": true,
+    "category": "SWAP",
+    "margin_mode": "cross",
+    "price_offset": 0.05,
+    "exchange": "okx",
+    "block_4h": true,
+    "cooldown_sec": 300,
+    "poll_sec": 20,
+    "tp1_pct": 1.5,
+    "tp1_ratio": 70.0
+  },
+  "symbols": []
+}

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import hashlib
 import hmac
 import json
@@ -42,6 +43,8 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+
+import creds  # 逐 Task 隔离的显式凭据（形态识别页等第二套交易用）
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +220,8 @@ else:
 
 
 def _use_bitget() -> bool:
-    return exchange == "bitget"
+    # 优先看当前 Task 的显式凭据：形态识别页可以跑 Bitget，首页同时跑 OKX，互不影响
+    return creds.use_bitget(exchange)
 
 
 def _ts() -> str:
@@ -226,9 +230,35 @@ def _ts() -> str:
         f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
 
 
+def _auth() -> tuple[str, str, str]:
+    """当前上下文生效的密钥三元组：显式凭据优先，没设就用模块全局。"""
+    return creds.key_secret_pass((API_KEY, API_SECRET, PASSPHRASE))
+
+
+def _configured() -> bool:
+    """替代模块内零散的 `if not _configured():` —— 有显式凭据时以它为准。"""
+    return creds.configured_now(configured)
+
+
+def _paper(sim: bool | None) -> bool:
+    """模拟盘判定：显式 sim 参数 > 凭据的 paper > 模块全局 SIMULATED。"""
+    return creds.resolve_sim(sim, SIMULATED)
+
+
+async def _run(fn, *args):
+    """把同步 HTTP 丢到线程池，并带上当前上下文（含凭据）。
+
+    run_in_executor 不保证传递 contextvars，这里显式 copy_context + ctx.run，
+    确保签名/头部用的是发起方 Task 那套 key，不会并发串号。
+    """
+    ctx = contextvars.copy_context()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: ctx.run(fn, *args))
+
+
 def _sign(ts: str, method: str, path: str, body: str) -> str:
     prehash = f"{ts}{method.upper()}{path}{body}"
-    digest = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
+    digest = hmac.new(_auth()[1].encode(), prehash.encode(), hashlib.sha256).digest()
     return base64.b64encode(digest).decode()
 
 
@@ -237,15 +267,16 @@ def _request(method: str, path: str, payload: dict | None = None,
     """同步 HTTP（在 executor 线程里跑，不要直接在事件循环调用）。"""
     body = json.dumps(payload, separators=(",", ":")) if payload else ""
     ts = _ts()
+    key, _secret, passphrase = _auth()
     headers = {
-        "OK-ACCESS-KEY":        API_KEY,
+        "OK-ACCESS-KEY":        key,
         "OK-ACCESS-SIGN":       _sign(ts, method, path, body),
         "OK-ACCESS-TIMESTAMP":  ts,
-        "OK-ACCESS-PASSPHRASE": PASSPHRASE,
+        "OK-ACCESS-PASSPHRASE": passphrase,
         "Content-Type":         "application/json",
         "User-Agent":           "supertrend-monitor/1.0",
     }
-    if SIMULATED if sim is None else sim:
+    if _paper(sim):
         headers["x-simulated-trading"] = "1"
 
     req = urllib.request.Request(
@@ -379,11 +410,11 @@ async def set_leverage(inst_id: str, leverage: int, mgn_mode: str = "cross",
     if _use_bitget():
         import bitget_trade
         return await bitget_trade.set_leverage(inst_id, leverage, mgn_mode, sim=sim)
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     payload = {"instId": to_swap(inst_id), "lever": str(leverage), "mgnMode": mgn_mode}
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "POST", SET_LEVERAGE, payload, sim)
+    r = await _run(_request, "POST", SET_LEVERAGE, payload, sim)
     ok = r.get("code") == "0"
     if not ok:
         logger.warning(f"[设置杠杆失败] {payload} → {_err(r)}")
@@ -472,7 +503,7 @@ async def place_order(
             pos_side=pos_side, mgn_mode=mgn_mode, client_oid=client_oid, sim=sim,
             ref_price=ref_price, wait_fill=wait_fill, wait_sec=wait_sec,
         )
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 OKX API 密钥"}
 
     is_swap = category == "SWAP"
@@ -532,9 +563,9 @@ async def place_order(
         payload["clOrdId"] = "".join(ch for ch in client_oid if ch.isalnum())[:32]
 
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "POST", PLACE_ORDER, payload, sim)
+    r = await _run(_request, "POST", PLACE_ORDER, payload, sim)
 
-    use_sim = SIMULATED if sim is None else sim
+    use_sim = _paper(sim)
     env = "模拟" if use_sim else "实盘"
     row = _first(r)
     if r.get("code") == "0" and row.get("sCode") == "0":
@@ -607,13 +638,13 @@ async def get_positions(inst_id: str | None = None, category: str = "SWAP",
     if _use_bitget():
         import bitget_trade
         return await bitget_trade.get_positions(inst_id, category, sim=sim)
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     path = f"{POSITIONS}?instType={category}"
     if inst_id:
         path += f"&instId={to_swap(inst_id) if category == 'SWAP' else to_spot(inst_id)}"
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET", path, None, sim)
+    r = await _run(_request, "GET", path, None, sim)
     return {"ok": r.get("code") == "0", "data": r.get("data"), "error": None if r.get("code") == "0" else _err(r)}
 
 
@@ -622,12 +653,12 @@ async def cancel(inst_id: str, order_id: str, category: str = "SWAP",
     if _use_bitget():
         import bitget_trade
         return await bitget_trade.cancel(inst_id, order_id, category, sim=sim)
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     iid = to_swap(inst_id) if category == "SWAP" else to_spot(inst_id)
     payload = {"instId": iid, "ordId": order_id}
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "POST", CANCEL_ORDER, payload, sim)
+    r = await _run(_request, "POST", CANCEL_ORDER, payload, sim)
     ok = r.get("code") == "0" and _first(r).get("sCode") == "0"
     return {"ok": ok, "error": None if ok else _err(r)}
 
@@ -638,12 +669,12 @@ async def list_pending(inst_id: str, category: str = "SWAP",
     if _use_bitget():
         import bitget_trade
         return await bitget_trade.list_pending(inst_id, category, sim=sim)
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 OKX API 密钥", "data": []}
     iid = to_swap(inst_id) if category == "SWAP" else to_spot(inst_id)
     path = f"{PENDING_ORDERS}?instType={category}&instId={iid}"
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET", path, None, sim)
+    r = await _run(_request, "GET", path, None, sim)
     ok = r.get("code") == "0"
     return {"ok": ok, "data": r.get("data") or [],
             "error": None if ok else _err(r)}
@@ -679,13 +710,13 @@ async def query_order(inst_id: str, order_id: str, category: str = "SWAP",
     if _use_bitget():
         import bitget_trade
         return await bitget_trade.query_order(inst_id, order_id, category, sim=sim)
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 OKX API 密钥"}
     iid = to_swap(inst_id) if category == "SWAP" else to_spot(inst_id)
     # GET 的 query 要算进签名的 requestPath，_request 传的 path 已含 query
     path = f"{ORDER_INFO}?instId={iid}&ordId={order_id}"
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET", path, None, sim)
+    r = await _run(_request, "GET", path, None, sim)
     return {"ok": r.get("code") == "0", "data": _first(r), "error": None if r.get("code") == "0" else _err(r)}
 
 
@@ -703,10 +734,10 @@ async def ping(sim: bool | None = None) -> dict:
     if _use_bitget():
         import bitget_trade
         return await bitget_trade.ping(sim=sim)
-    if not configured:
+    if not _configured():
         return {"ok": False, "error": "未配置 OKX API 密钥（OKX_API_KEY / SECRET / PASSPHRASE）"}
     loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(None, _request, "GET", BALANCE, None, sim)
+    r = await _run(_request, "GET", BALANCE, None, sim)
     if r.get("code") == "0":
         row = _first(r)
         usdt = next((d for d in row.get("details", []) if d.get("ccy") == "USDT"), {})
