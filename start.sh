@@ -111,18 +111,20 @@ echo "[后端] 启动 FastAPI :8000"
 LOG="$ROOT/backend/uvicorn.log"
 .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 >"$LOG" 2>&1 &
 BACKEND_PID=$!
-# 不能只看进程活着就继续 —— uvicorn 若在 bind 阶段（旧进程还没释放端口）失败会静默退出，
-# 之后前端起来全是 ECONNREFUSED。这里轮询端口真正进入 LISTEN，最多等 10 秒。
-BACKEND_OK=0
-for _ in $(seq 1 10); do
-  sleep 1
-  if lsof -ti tcp:8000 -sTCP:LISTEN >/dev/null 2>&1; then BACKEND_OK=1; break; fi
-  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then break; fi
-done
-if [ "$BACKEND_OK" != 1 ]; then
+sleep 2
+if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
   echo "✗ 后端启动失败。完整报错在 $LOG ，末尾如下："
   tail -n 40 "$LOG"
   exit 1
+fi
+# 注意：uvicorn 的 socket 要等应用 startup 事件跑完才开始 LISTEN，而本项目的 startup
+# 会预取全部交易对×全部周期的历史K线 —— 服务器上首次启动（本地缓存为空）可能要几分钟。
+# 所以这里只确认"进程活着"即可，端口未就绪属正常，不能因等不到 LISTEN 就判失败。
+if lsof -ti tcp:8000 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "[后端] 端口 8000 已就绪"
+else
+  echo "[后端] 进程已启动，正在预热历史K线缓存（首次可达 1~3 分钟，进度见 backend/uvicorn.log）"
+  echo "       预热期间页面会提示接口不可用，完成后刷新页面即可，无需重启"
 fi
 
 echo ""
