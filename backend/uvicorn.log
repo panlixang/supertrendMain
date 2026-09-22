@@ -39,3 +39,19 @@ INFO:     Waiting for application startup.
 2026-09-22 20:16:56,601 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
 2026-09-22 20:16:56,602 [INFO] 历史K线[BTC-USDT 1M] 拉取 0 根（0 页）
 2026-09-22 20:16:56,602 [INFO] 历史就绪[BTC-USDT 1M] 内存 0/200（本地 0 + REST 0）
+2026-09-22 20:16:56,754 [INFO] 历史加载完成（1 个品种），启动实时行情
+2026-09-22 20:16:56,754 [INFO] [形态下单] 后台循环已启动（paper=True，品种 0 个）
+INFO:     Application startup complete.
+2026-09-22 20:16:56,755 [INFO] [public] 连接 wss://ws.okx.com:8443/ws/v5/public
+2026-09-22 20:16:56,772 [INFO] [business] 连接 wss://ws.okx.com:8443/ws/v5/business
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-09-22 20:16:56,873 [WARNING] [business] 断开(1): ConnectionResetError
+2026-09-22 20:16:56,912 [WARNING] [public] 断开(1): ConnectionResetError
+2026-09-22 20:16:59,873 [INFO] [business] 连接 wss://ws.okx.com:8443/ws/v5/business
+2026-09-22 20:16:59,914 [INFO] [public] 连接 wss://ws.okx.com:8443/ws/v5/public
+2026-09-22 20:16:59,971 [WARNING] [public] 断开(2): ConnectionResetError
+2026-09-22 20:16:59,984 [WARNING] [business] 断开(2): ConnectionResetError
+2026-09-22 20:17:05,971 [INFO] [public] 连接 wss://ws.okx.com:8443/ws/v5/public
+2026-09-22 20:17:05,984 [INFO] [business] 连接 wss://ws.okx.com:8443/ws/v5/business
+2026-09-22 20:17:06,070 [WARNING] [public] 断开(3): ConnectionResetError
+2026-09-22 20:17:06,097 [WARNING] [business] 断开(3): ConnectionResetError
