@@ -87,6 +87,13 @@ fi
 echo ""
 echo "[前端] 安装依赖…"
 cd "$ROOT/frontend" || exit 1
+# 前端 Vite 5 需要 Node 18+；fnm 默认可能是 16，会导致 vite 启动即崩、端口 5174 一直没监听。
+# 这里显式把 node 20 提到 PATH 最前（仅本项目 shell 内生效，不动你的全局 fnm 默认）。
+NODE20="$HOME/Library/Application Support/fnm/node-versions/v20.11.0/installation/bin"
+if [ -x "$NODE20/node" ]; then
+  export PATH="$NODE20:$PATH"
+  echo "[前端] 使用 Node $("$NODE20/node" -v)（Vite 5 需 18+）"
+fi
 npm install --silent
 
 echo "[前端] 启动 Vite :5174"

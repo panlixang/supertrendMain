@@ -1,0 +1,41 @@
+2026-09-22 20:16:55,119 [WARNING] 机器学习模块未安装，相关功能将不可用: No module named 'joblib'
+2026-09-22 20:16:55,128 [WARNING] 机器学习 API 未启用（缺少依赖）
+INFO:     Started server process [49779]
+INFO:     Waiting for application startup.
+2026-09-22 20:16:55,128 [INFO] 拉取历史K线 [BTC-USDT] …
+2026-09-22 20:16:55,148 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
+2026-09-22 20:16:55,159 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
+2026-09-22 20:16:55,160 [INFO] 历史K线[BTC-USDT 1m] 拉取 0 根（0 页）
+2026-09-22 20:16:55,160 [INFO] 历史就绪[BTC-USDT 1m] 内存 0/600（本地 0 + REST 0）
+2026-09-22 20:16:55,322 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,332 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,333 [INFO] 历史K线[BTC-USDT 5m] 拉取 0 根（0 页）
+2026-09-22 20:16:55,333 [INFO] 历史就绪[BTC-USDT 5m] 内存 0/600（本地 0 + REST 0）
+2026-09-22 20:16:55,495 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,505 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,506 [INFO] 历史K线[BTC-USDT 15m] 拉取 0 根（0 页）
+2026-09-22 20:16:55,506 [INFO] 历史就绪[BTC-USDT 15m] 内存 0/9000（本地 0 + REST 0）
+2026-09-22 20:16:55,667 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,678 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,679 [INFO] 历史K线[BTC-USDT 30m] 拉取 0 根（0 页）
+2026-09-22 20:16:55,679 [INFO] 历史就绪[BTC-USDT 30m] 内存 0/800（本地 0 + REST 0）
+2026-09-22 20:16:55,840 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,852 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:55,853 [INFO] 历史K线[BTC-USDT 1h] 拉取 0 根（0 页）
+2026-09-22 20:16:55,853 [INFO] 历史就绪[BTC-USDT 1h] 内存 0/4500（本地 0 + REST 0）
+2026-09-22 20:16:56,036 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
+2026-09-22 20:16:56,053 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
+2026-09-22 20:16:56,054 [INFO] 历史K线[BTC-USDT 4h] 拉取 0 根（0 页）
+2026-09-22 20:16:56,054 [INFO] 历史就绪[BTC-USDT 4h] 内存 0/1200（本地 0 + REST 0）
+2026-09-22 20:16:56,225 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
+2026-09-22 20:16:56,237 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:56,238 [INFO] 历史K线[BTC-USDT 1d] 拉取 0 根（0 页）
+2026-09-22 20:16:56,238 [INFO] 历史就绪[BTC-USDT 1d] 内存 0/220（本地 0 + REST 0）
+2026-09-22 20:16:56,402 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
+2026-09-22 20:16:56,411 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:56,412 [INFO] 历史K线[BTC-USDT 1w] 拉取 0 根（0 页）
+2026-09-22 20:16:56,412 [INFO] 历史就绪[BTC-USDT 1w] 内存 0/300（本地 0 + REST 0）
+2026-09-22 20:16:56,585 [WARNING] REST 失败 https://www.okx.com/api/v5/market/candles: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)>
+2026-09-22 20:16:56,601 [WARNING] REST 失败 https://aws.okx.com/api/v5/market/candles: <urlopen error [Errno 61] Connection refused>
+2026-09-22 20:16:56,602 [INFO] 历史K线[BTC-USDT 1M] 拉取 0 根（0 页）
+2026-09-22 20:16:56,602 [INFO] 历史就绪[BTC-USDT 1M] 内存 0/200（本地 0 + REST 0）
