@@ -26,6 +26,11 @@ class CfgIn(BaseModel):
     block_4h:      Optional[bool]  = None
     cooldown_sec:  Optional[int]   = None
     poll_sec:      Optional[int]   = None
+    tp1_pct:         Optional[float] = None
+    tp1_ratio:       Optional[float] = None
+    sl_pct:          Optional[float] = None
+    move_sl_to_entry: Optional[bool]  = None
+    trail_with_st:    Optional[bool]  = None
 
 
 class KeysIn(BaseModel):
@@ -42,6 +47,11 @@ class SymbolIn(BaseModel):
     margin_usdt: Optional[float] = None
     leverage:    Optional[int]   = None
     allow_tfs:   Optional[list]  = None
+    tp1_pct:         Optional[float] = None
+    tp1_ratio:       Optional[float] = None
+    sl_pct:          Optional[float] = None
+    move_sl_to_entry: Optional[bool]  = None
+    trail_with_st:    Optional[bool]  = None
 
 
 def _symbols_view() -> list[dict]:
@@ -53,6 +63,10 @@ def _symbols_view() -> list[dict]:
             "symbol": sym, "enabled": sc.enabled,
             "margin_usdt": sc.margin_usdt, "leverage": sc.leverage,
             "allow_tfs": list(sc.allow_tfs),
+            "tp1_pct": sc.tp1_pct, "tp1_ratio": sc.tp1_ratio,
+            "sl_pct": sc.sl_pct,
+            "move_sl_to_entry": sc.move_sl_to_entry,
+            "trail_with_st": sc.trail_with_st,
             "position": None,
         }
         if st and st.position:
@@ -129,3 +143,19 @@ async def get_state():
 @router.post("/api/pattern/trade/close")
 async def close_position(body: SymbolIn):
     return await pattern_trade.trader.close_symbol(body.symbol)
+
+
+@router.get("/api/pattern/trade/ping")
+async def pattern_ping():
+    """用形态页独立凭据查账户，验证连通性 / 模拟盘 / 实盘。"""
+    return await pattern_trade.trader.ping()
+
+
+class PatternTestOrderIn(BaseModel):
+    symbol: str = ""
+
+
+@router.post("/api/pattern/trade/test-order")
+async def pattern_test_order(body: PatternTestOrderIn):
+    """手动挂一笔测试单，验证本页密钥 / 杠杆 / 下单链路是否通（不进入持仓）。"""
+    return await pattern_trade.trader.test_order(body.symbol)

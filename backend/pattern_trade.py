@@ -68,9 +68,12 @@ class PatternConfig:
     block_4h:     bool  = True     # True = 4h 形态反向则不下单
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
-    # 出场参数（回测验证档，面板不暴露）
-    tp1_pct:      float = 1.5
-    tp1_ratio:    float = 70.0
+    # 出场参数（回测验证档，面板可配置）
+    tp1_pct:         float = 1.5
+    tp1_ratio:       float = 70.0
+    sl_pct:          float = 2.0    # 初始止损兜底（SuperTrend 轨道无效时用）
+    move_sl_to_entry: bool  = True   # 止盈后止损移到开仓价保本
+    trail_with_st:    bool  = True   # 剩余仓位跟随 SuperTrend 跟踪
 
 
 class PatternStateProxy:
@@ -103,7 +106,7 @@ class PatternStateProxy:
         )
 
     def rules_for(self, profile: str, symbol: str):
-        return self.trader.rules
+        return self.trader.rules_for_symbol(symbol) if symbol else self.trader.rules
 
     def add_order(self, o: dict):
         self.trader.orders.append(o)
@@ -161,6 +164,11 @@ class PatternTrader:
                         margin_usdt=float(row.get("margin_usdt") or 10.0),
                         leverage=int(row.get("leverage") or 3),
                         allow_tfs=list(row.get("allow_tfs") or ["1h"]),
+                        tp1_pct=row.get("tp1_pct"),
+                        tp1_ratio=row.get("tp1_ratio"),
+                        sl_pct=row.get("sl_pct"),
+                        move_sl_to_entry=row.get("move_sl_to_entry"),
+                        trail_with_st=row.get("trail_with_st"),
                     )
             except Exception as e:
                 logger.warning(f"[形态下单] 读取配置失败: {e}")
@@ -187,17 +195,20 @@ class PatternTrader:
 
     # ── 品种管理 ──────────────────────────────────────────────
     def _sync(self):
-        """按 symbols 建好 store / executor（SymbolStore 只是数据容器，配置全走 proxy）。"""
+        """按 symbols 建好 store / executor，并刷新每个品种的出场规则。"""
         for sym in list(self.stores):
             if sym not in self.symbols:
                 self.stores.pop(sym, None)
                 self.executors.pop(sym, None)
         for sym, sc in self.symbols.items():
-            if sym not in self.stores:
+            st = self.stores.get(sym)
+            if st is None:
                 st = SymbolStore(sym, cfg=sc)
-                st.exit_rules = self.rules
                 self.stores[sym] = st
                 self.executors[sym] = Executor(self.proxy, st)
+            st.cfg = sc
+            # 品种独立出场：本品种设了就用本品种，没设回落全局默认
+            st.exit_rules = self.rules_for_symbol(sym)
 
     def add_symbol(self, symbol: str, **kw) -> dict:
         sym = _okx_symbol(symbol)
@@ -209,6 +220,11 @@ class PatternTrader:
             margin_usdt=float(kw.get("margin_usdt") or 10.0),
             leverage=int(kw.get("leverage") or 3),
             allow_tfs=list(kw.get("allow_tfs") or ["1h"]),
+            tp1_pct=kw.get("tp1_pct"),
+            tp1_ratio=kw.get("tp1_ratio"),
+            sl_pct=kw.get("sl_pct"),
+            move_sl_to_entry=kw.get("move_sl_to_entry"),
+            trail_with_st=kw.get("trail_with_st"),
         )
         self._sync()
         self.save()
@@ -228,10 +244,14 @@ class PatternTrader:
         sc = self.symbols.get(sym)
         if not sc:
             return {"ok": False, "error": "品种不存在"}
-        for k in ("enabled", "margin_usdt", "leverage", "allow_tfs"):
+        xr_keys = ("enabled", "margin_usdt", "leverage", "allow_tfs",
+                   "tp1_pct", "tp1_ratio", "sl_pct",
+                   "move_sl_to_entry", "trail_with_st")
+        for k in xr_keys:
             if k in kw and kw[k] is not None:
                 setattr(sc, k, kw[k])
         self.save()
+        self._sync()
         return {"ok": True}
 
     def update_cfg(self, **kw) -> dict:
@@ -281,6 +301,59 @@ class PatternTrader:
             "paper": self.cfg.paper,
         }
 
+    async def ping(self) -> dict:
+        """连通性 + 密钥有效性自检（用本页独立凭据，与首页账户隔离）。"""
+        c = self.current_creds()
+        if not c.configured:
+            return {"ok": False, "error": "未配置形态页 API 密钥"}
+        try:
+            with creds.use(c):
+                r = await trade.ping(sim=self.cfg.paper)
+            return r
+        except Exception as e:
+            return {"ok": False, "error": f"连通性检查失败: {e}"}
+
+    async def test_order(self, symbol: str) -> dict:
+        """手动挂一笔测试单，验证本页密钥 / 杠杆 / 下单链路是否通。
+
+        挂在盘口 -3%（LimitPriceRatio 上限 5%），正常不成交，可撤单。
+        不进入持仓状态机 —— 只验证链路，不参与止盈止损。
+        """
+        c = self.current_creds()
+        if not c.configured:
+            return {"ok": False, "error": "未配置形态页 API 密钥"}
+        sym = _okx_symbol(symbol) or (symbol or "")
+        if not sym:
+            return {"ok": False, "error": "未指定测试品种"}
+        price = await self._price(sym)
+        if not price:
+            return {"ok": False, "error": f"{sym} 暂无最新价"}
+        paper = self.cfg.paper
+        try:
+            with creds.use(c):
+                if self.cfg.category != "SPOT":
+                    await trade.set_leverage(sym, self.cfg.leverage,
+                                             self.cfg.margin_mode, sim=paper)
+                px = price * 0.97
+                r = await trade.place_order(
+                    sym, "buy", px,
+                    margin_usdt=10.0,
+                    leverage=self.cfg.leverage,
+                    category=self.cfg.category,
+                    mgn_mode=self.cfg.margin_mode,
+                    client_oid=f"ptest{int(time.time())}",
+                    sim=paper,
+                    ref_price=price,
+                )
+            r["note"] = "形态页测试单挂在盘口 -3%，正常不成交，可撤单；不进入持仓管理"
+            if r.get("ok"):
+                self.orders.append({**r, "kind": "test", "tf": "test",
+                                    "sig_type": "buy", "sym": sym})
+                self.orders = self.orders[-300:]
+            return r
+        except Exception as e:
+            return {"ok": False, "error": f"测试单失败: {e}"}
+
     def current_creds(self) -> creds.Creds:
         ex = (self.cfg.exchange or "okx").lower()
         b = dict(self._keys.get(ex) or {})
@@ -295,8 +368,32 @@ class PatternTrader:
 
     @property
     def rules(self) -> ExitRules:
-        """回测验证的那套出场参数（TP1 1.5% 平 70% + 保本 + 跟随 ST）。"""
-        return ExitRules(tp1_pct=self.cfg.tp1_pct, tp1_ratio=self.cfg.tp1_ratio)
+        """回测验证的那套出场参数（TP1 平部分 + 保本 + 跟随 ST + 轨道无效硬止损）。"""
+        return ExitRules(
+            tp1_pct=self.cfg.tp1_pct,
+            tp1_ratio=self.cfg.tp1_ratio,
+            sl_mode="st",
+            sl_pct=self.cfg.sl_pct,
+            move_sl_to_entry=self.cfg.move_sl_to_entry,
+            trail_with_st=self.cfg.trail_with_st,
+        )
+
+    def rules_for_symbol(self, symbol: str) -> ExitRules:
+        """该品种出场规则：品种独立覆盖优先，未设置则回落全局默认档。"""
+        sc = self.symbols.get(symbol)
+        c = self.cfg
+
+        def _v(sym_v, def_v):
+            return sym_v if sym_v is not None else def_v
+
+        return ExitRules(
+            tp1_pct=_v(sc.tp1_pct if sc else None, c.tp1_pct),
+            tp1_ratio=_v(sc.tp1_ratio if sc else None, c.tp1_ratio),
+            sl_mode="st",
+            sl_pct=_v(sc.sl_pct if sc else None, c.sl_pct),
+            move_sl_to_entry=_v(sc.move_sl_to_entry if sc else None, c.move_sl_to_entry),
+            trail_with_st=_v(sc.trail_with_st if sc else None, c.trail_with_st),
+        )
 
     async def close_symbol(self, symbol: str, reason: str = "手动平仓") -> dict:
         """页面手动平仓。请求来自别的 Task，必须显式包成本页凭据再下单。"""

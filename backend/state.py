@@ -146,6 +146,12 @@ class SymbolTradeConfig:
     ma30_dir_enabled: bool  = False   # 是否启用 4h MA30 方向门
     ma30_tf:          str   = "4h"    # 方向参考周期
     ma30_period:      int   = 30      # MA 周期
+    # ── 形态识别页出场（品种独立；None=用 PatternConfig 全局默认）──
+    tp1_pct:           Optional[float] = None
+    tp1_ratio:         Optional[float] = None
+    sl_pct:            Optional[float] = None
+    move_sl_to_entry:  Optional[bool]  = None
+    trail_with_st:     Optional[bool]  = None
 
 
 # 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；

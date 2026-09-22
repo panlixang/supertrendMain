@@ -70,6 +70,12 @@ export default function PatternTradePanel({ currentSymbol }) {
   const [symbols, setSymbols] = useState([]);
   const [state, setState] = useState(null);
   const [err, setErr] = useState("");
+  const [ping, setPing] = useState(null);
+  const [testRes, setTestRes] = useState(null);
+  const [xr, setXr] = useState({
+    tp1_pct: 1.5, tp1_ratio: 70, sl_pct: 2.0,
+    move_sl_to_entry: true, trail_with_st: true,
+  });
 
   const [keyForm, setKeyForm] = useState({ api_key: "", api_secret: "", passphrase: "" });
   const [addForm, setAddForm] = useState({ symbol: "", margin: 10, leverage: 3, allow: ["1h"] });
@@ -179,6 +185,47 @@ export default function PatternTradePanel({ currentSymbol }) {
       allow: f.allow.includes(tf) ? f.allow.filter((x) => x !== tf) : [...f.allow, tf],
     }));
 
+  // 止盈止损配置（从后端 cfg 同步，改动即时下发）
+  useEffect(() => {
+    if (!cfg) return;
+    setXr({
+      tp1_pct: cfg.tp1_pct ?? 1.5,
+      tp1_ratio: cfg.tp1_ratio ?? 70,
+      sl_pct: cfg.sl_pct ?? 2.0,
+      move_sl_to_entry: cfg.move_sl_to_entry ?? true,
+      trail_with_st: cfg.trail_with_st ?? true,
+    });
+  }, [cfg]);
+
+  const patchXr = (k, v) => {
+    setXr((x) => ({ ...x, [k]: v }));
+    patch({ [k]: v });
+  };
+
+  const doPing = async () => {
+    setPing({ loading: true });
+    try {
+      const d = await getJSON("/api/pattern/trade/ping");
+      setPing(d);
+    } catch (e) {
+      setPing({ ok: false, error: String(e.message || e) });
+    }
+  };
+
+  const testOrder = async () => {
+    if (!currentSymbol) {
+      setErr("请先在左侧图表选择品种，再点测试单");
+      return;
+    }
+    try {
+      const d = await postJSON("/api/pattern/trade/test-order", { symbol: currentSymbol });
+      setTestRes(d);
+      setErr("");
+    } catch (e) {
+      setTestRes({ ok: false, error: String(e.message || e) });
+    }
+  };
+
   if (!cfg) return <div style={SZ.panel}><div style={SZ.sec}>加载中…</div></div>;
 
   const fmtPnl = (p) => {
@@ -229,6 +276,24 @@ export default function PatternTradePanel({ currentSymbol }) {
         <div style={{ fontSize: 10.5, color: C.dim, marginTop: 4 }}>
           凭据存 pattern_credentials.json，与首页独立，可用不同子账户
         </div>
+        <div style={SZ.row}>
+          <button style={SZ.btn} onClick={doPing}>查账户</button>
+          <button style={SZ.btnGhost} onClick={testOrder}>测试单</button>
+        </div>
+        {ping && (
+          <div style={{ fontSize: 10.5, color: ping.ok ? C.up : C.down, marginTop: 4 }}>
+            {ping.loading ? "查询中…" : ping.ok
+              ? `✅ ${(ping.paper ? "模拟盘" : "⚠️ 实盘")} · 权益 ${ping.equity ?? "—"}U`
+              : `❌ ${ping.error}`}
+          </div>
+        )}
+        {testRes && (
+          <div style={{ fontSize: 10.5, color: testRes.ok ? C.up : C.down, marginTop: 4 }}>
+            {testRes.ok
+              ? "✅ 测试单已挂（盘口 -3%，正常不成交，可撤单）"
+              : `❌ ${testRes.error}`}
+          </div>
+        )}
       </div>
 
       {/* 开关 */}
@@ -246,8 +311,46 @@ export default function PatternTradePanel({ currentSymbol }) {
           <input type="checkbox" checked={cfg.block_4h} onChange={(e) => patch({ block_4h: e.target.checked })} />
           <span>开启 4h 方向拦截（仅拦 4h 明确反向）</span>
         </div>
-        <div style={{ fontSize: 10.5, color: C.dim }}>
-          出场固定用回测档：TP1 +1.5% 平 70% + 止损移到开仓价保本 + 剩余跟随 SuperTrend 跟踪
+        </div>
+
+      {/* 默认出场 · 止盈止损 */}
+      <div style={SZ.sec}>
+        <div style={SZ.h}>默认止盈止损（新品种沿用）</div>
+        <div style={{ fontSize: 10.5, color: C.dim, marginBottom: 6 }}>
+          全局默认值，新加品种未单独配置时沿用；每个品种可在下方「下单品种」里单独改
+        </div>
+        <div style={SZ.row}>
+          <span style={{ color: C.neutral, width: 64 }}>TP1 幅度</span>
+          <input style={{ ...SZ.inp, width: 64 }} type="number" step={0.1}
+                 value={xr.tp1_pct}
+                 onChange={(e) => patchXr("tp1_pct", Number(e.target.value))} />
+          <span style={{ color: C.neutral }}>%</span>
+          <span style={{ color: C.neutral, width: 40, textAlign: "right" }}>比例</span>
+          <input style={{ ...SZ.inp, width: 56 }} type="number" step={1}
+                 value={xr.tp1_ratio}
+                 onChange={(e) => patchXr("tp1_ratio", Number(e.target.value))} />
+          <span style={{ color: C.neutral }}>%</span>
+        </div>
+        <div style={SZ.row}>
+          <span style={{ color: C.neutral, width: 64 }}>硬止损</span>
+          <input style={{ ...SZ.inp, width: 64 }} type="number" step={0.1}
+                 value={xr.sl_pct}
+                 onChange={(e) => patchXr("sl_pct", Number(e.target.value))} />
+          <span style={{ color: C.neutral }}>%（轨道无效兜底）</span>
+        </div>
+        <div style={SZ.row}>
+          <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
+            <input type="checkbox" checked={xr.move_sl_to_entry}
+                   onChange={(e) => patchXr("move_sl_to_entry", e.target.checked)} />
+            保本（止盈后止损移到开仓价）
+          </label>
+        </div>
+        <div style={SZ.row}>
+          <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
+            <input type="checkbox" checked={xr.trail_with_st}
+                   onChange={(e) => patchXr("trail_with_st", e.target.checked)} />
+            跟踪（剩余仓位跟随 SuperTrend）
+          </label>
         </div>
       </div>
 
@@ -330,6 +433,43 @@ export default function PatternTradePanel({ currentSymbol }) {
               {s.position && (
                 <button style={{ ...SZ.btnGhost, marginLeft: "auto" }} onClick={() => closePos(s.symbol)}>平仓</button>
               )}
+            </div>
+            {/* 该品种独立止盈止损 */}
+            <div style={{ borderTop: `1px dashed ${C.border}`, marginTop: 6, paddingTop: 6 }}>
+              <div style={{ fontSize: 11, color: C.neutral, marginBottom: 4 }}>
+                止盈止损（{s.symbol} 独立，留空=用默认）
+              </div>
+              <div style={SZ.row}>
+                <span style={{ color: C.neutral, width: 56 }}>TP1 幅度</span>
+                <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
+                       defaultValue={s.tp1_pct ?? cfg.tp1_pct ?? 1.5}
+                       onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { tp1_pct: Number(v) }); }} />
+                <span style={{ color: C.neutral }}>%</span>
+                <span style={{ color: C.neutral, width: 36, textAlign: "right" }}>比例</span>
+                <input style={{ ...SZ.inp, width: 52 }} type="number" step={1}
+                       defaultValue={s.tp1_ratio ?? cfg.tp1_ratio ?? 70}
+                       onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { tp1_ratio: Number(v) }); }} />
+                <span style={{ color: C.neutral }}>%</span>
+              </div>
+              <div style={SZ.row}>
+                <span style={{ color: C.neutral, width: 56 }}>硬止损</span>
+                <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
+                       defaultValue={s.sl_pct ?? cfg.sl_pct ?? 2.0}
+                       onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { sl_pct: Number(v) }); }} />
+                <span style={{ color: C.neutral }}>%（轨道无效兜底）</span>
+              </div>
+              <div style={SZ.row}>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
+                  <input type="checkbox" defaultChecked={s.move_sl_to_entry ?? cfg.move_sl_to_entry ?? true}
+                         onChange={(e) => updateSymbol(s.symbol, { move_sl_to_entry: e.target.checked })} />
+                  保本
+                </label>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
+                  <input type="checkbox" defaultChecked={s.trail_with_st ?? cfg.trail_with_st ?? true}
+                         onChange={(e) => updateSymbol(s.symbol, { trail_with_st: e.target.checked })} />
+                  跟踪
+                </label>
+              </div>
             </div>
             {s.position && <div style={{ fontSize: 11 }}>{fmtPnl(s.position)}</div>}
           </div>
