@@ -696,7 +696,13 @@ SCORE_MODEL = [
      "get": lambda f, sd: f["candle_range_ATR"]},
     {"name": "dist_break",           "thr": 4.670, "s": 0.841, "w": 0.099,
      "get": lambda f, sd: f["distance_to_range_high_ATR"] if sd > 0 else f["distance_to_range_low_ATR"]},
-    {"name": "range_signed",         "thr": 0.418, "s": 0.057, "w": 0.095,
+    # range_signed = sd*(range_position-0.5) ∈[-0.18,+0.50]（翻转信号天然偏向极值端）。
+    # 十分位表显示自然断点在 0.39： [0.35,0.39) 胜率42.9%净+137.8U 是好组，
+    # [0.39,0.44) 胜率25.0%净-196.6U、[0.44,0.50) 胜率27.0%净-361.6U 是坏组。
+    # 原 thr=0.418 落在坏组【内部】，只覆盖 12.5% 样本；改 0.390 覆盖 ~20% 且边界落在自然断点上更稳。
+    # s 由 0.057→0.120（≈0.72×std=0.167）：0.39 附近有平滑渐变而非硬跳变。
+    # 注意：s 只影响渐变软硬，不改变 b>0.5 的判定（那等价 x>thr，与 s 无关）。
+    {"name": "range_signed",         "thr": 0.390, "s": 0.120, "w": 0.095,
      "get": lambda f, sd: sd * (f["range_position"] - 0.5)},
     {"name": "mom_signed",           "thr": 0.130, "s": 0.584, "w": 0.161,
      "get": lambda f, sd: sd * f["mom12_ATR"]},
