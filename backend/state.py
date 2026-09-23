@@ -152,6 +152,7 @@ class SymbolTradeConfig:
     sl_pct:            Optional[float] = None
     move_sl_to_entry:  Optional[bool]  = None
     trail_with_st:     Optional[bool]  = None
+    reverse_close:     Optional[bool]  = None   # 反向平仓（None=用 PatternConfig 全局）；True=只按反向信号平仓，TP1/止损全失效
     # ── 形态识别页 5 条规则 + ⑥ 加权打分（品种独立；对应 趋势形态识别.md + 近高价；默认全关=不过滤）──
     filter_flip:       bool = False   # ① 连续翻转过滤：bars_since_last_flip < 20 拦截（震荡）
     filter_vol:        bool = False   # ② 波动异常过滤：ATR_percent > 0.8 拦截（追涨杀跌）

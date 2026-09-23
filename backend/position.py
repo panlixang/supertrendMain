@@ -43,6 +43,9 @@ class ExitRules:
     sl_pct:     float = 2.0    # sl_mode='pct' 时用
     # 剩余仓位是否跟随超趋线移动止损（超趋线会随趋势推进）
     trail_with_st: bool = True
+    # 反向平仓开关：True = 只按「同周期反向信号」平仓，
+    # TP1 分批止盈 / 保本 / ST 跟踪 / 固定百分比硬止损 全部失效（on_price、on_st_line 直接跳过）。
+    reverse_close: bool = False
 
 
 @dataclass

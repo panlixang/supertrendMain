@@ -86,6 +86,7 @@ class PatternConfig:
     sl_pct:          float = 2.0    # 初始止损兜底（SuperTrend 轨道无效时用）
     move_sl_to_entry: bool  = True   # 止盈后止损移到开仓价保本
     trail_with_st:    bool  = True   # 剩余仓位跟随 SuperTrend 跟踪
+    reverse_close:    bool  = False  # 反向平仓：True=只按同周期反向信号平仓，TP1/保本/跟踪/硬止损全失效
 
 
 class PatternStateProxy:
@@ -181,6 +182,7 @@ class PatternTrader:
                         sl_pct=row.get("sl_pct"),
                         move_sl_to_entry=row.get("move_sl_to_entry"),
                         trail_with_st=row.get("trail_with_st"),
+                        reverse_close=row.get("reverse_close"),
                         filter_flip=row.get("filter_flip"),
                         filter_vol=row.get("filter_vol"),
                         filter_position=row.get("filter_position"),
@@ -244,6 +246,7 @@ class PatternTrader:
             sl_pct=kw.get("sl_pct"),
             move_sl_to_entry=kw.get("move_sl_to_entry"),
             trail_with_st=kw.get("trail_with_st"),
+            reverse_close=kw.get("reverse_close"),
             filter_flip=kw.get("filter_flip"),
             filter_vol=kw.get("filter_vol"),
             filter_position=kw.get("filter_position"),
@@ -272,7 +275,7 @@ class PatternTrader:
             return {"ok": False, "error": "品种不存在"}
         xr_keys = ("enabled", "margin_usdt", "leverage", "allow_tfs",
                    "tp1_pct", "tp1_ratio", "sl_pct",
-                   "move_sl_to_entry", "trail_with_st",
+                   "move_sl_to_entry", "trail_with_st", "reverse_close",
                    "filter_flip", "filter_vol", "filter_position", "filter_candle",
                    "filter_near_high", "filter_score", "filter_score_cut")
         for k in xr_keys:
@@ -407,9 +410,10 @@ class PatternTrader:
             tp1_ratio=self.cfg.tp1_ratio,
             sl_mode="st",
             sl_pct=self.cfg.sl_pct,
-            move_sl_to_entry=self.cfg.move_sl_to_entry,
-            trail_with_st=self.cfg.trail_with_st,
-        )
+        move_sl_to_entry=self.cfg.move_sl_to_entry,
+        trail_with_st=self.cfg.trail_with_st,
+        reverse_close=self.cfg.reverse_close,
+    )
 
     def rules_for_symbol(self, symbol: str) -> ExitRules:
         """该品种出场规则：品种独立覆盖优先，未设置则回落全局默认档。"""
@@ -426,6 +430,7 @@ class PatternTrader:
             sl_pct=_v(sc.sl_pct if sc else None, c.sl_pct),
             move_sl_to_entry=_v(sc.move_sl_to_entry if sc else None, c.move_sl_to_entry),
             trail_with_st=_v(sc.trail_with_st if sc else None, c.trail_with_st),
+            reverse_close=_v(sc.reverse_close if sc else None, c.reverse_close),
         )
 
     async def close_symbol(self, symbol: str, reason: str = "手动平仓") -> dict:

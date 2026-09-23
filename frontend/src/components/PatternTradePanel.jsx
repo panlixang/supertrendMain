@@ -489,6 +489,13 @@ export default function PatternTradePanel({ currentSymbol }) {
                 <span style={{ color: C.neutral }}>%</span>
               </div>
               <div style={SZ.row}>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
+                  <input type="checkbox" defaultChecked={s.reverse_close ?? cfg.reverse_close ?? false}
+                         onChange={(e) => updateSymbol(s.symbol, { reverse_close: e.target.checked })} />
+                  反向平仓（信号反向才平；开启后 TP1 / 硬止损 / 保本 / 跟踪 全部失效）
+                </label>
+              </div>
+              <div style={SZ.row}>
                 <span style={{ color: C.neutral, width: 56 }}>硬止损</span>
                 <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
                        defaultValue={s.sl_pct ?? cfg.sl_pct ?? 2.0}

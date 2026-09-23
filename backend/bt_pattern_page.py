@@ -170,8 +170,13 @@ def print_funnel(sigs):
 
 
 # ── 回测 ────────────────────────────────────────────────────────
-def backtest(sigs, highs, lows, closes, up_plot, dn_plot, flip_idx):
-    """出场对齐 position.ExitRules 默认档：TP1 1.5% 平 70% + 保本 + 跟随 ST 轨道。"""
+def backtest(sigs, highs, lows, closes, up_plot, dn_plot, flip_idx,
+             reverse_close: bool = False):
+    """出场对齐 position.ExitRules 默认档：TP1 1.5% 平 70% + 保本 + 跟随 ST 轨道。
+
+    reverse_close=True（对应 ExitRules.reverse_close）：TP1 / 保本 / ST 跟踪 /
+    2% 硬止损全部失效，只在下一个反向翻转收盘平掉全部仓位。
+    """
     trades = []
     for s in sigs:
         i, long = s["i"], s["dir"] > 0
@@ -189,7 +194,7 @@ def backtest(sigs, highs, lows, closes, up_plot, dn_plot, flip_idx):
         closed = False
 
         for j in range(i + 1, len(closes)):
-            if long:
+            if long and not reverse_close:
                 nl = up_plot[j]
                 if nl is not None and nl > stop:
                     stop = nl
@@ -204,7 +209,7 @@ def backtest(sigs, highs, lows, closes, up_plot, dn_plot, flip_idx):
                     pnl += (tp1p - entry) * coins * TP1_RATIO - tp1p * coins * TP1_RATIO * FEE
                     fee += tp1p * coins * TP1_RATIO * FEE
                     tp1, stop = True, entry              # 保本
-            else:
+            elif not long and not reverse_close:
                 nl = dn_plot[j]
                 if nl is not None and nl < stop:
                     stop = nl
@@ -222,14 +227,17 @@ def backtest(sigs, highs, lows, closes, up_plot, dn_plot, flip_idx):
             if j in flip_idx:                            # 下一个翻转必为反向 → 平剩余
                 px = closes[j]
                 rest = 1 - (TP1_RATIO if tp1 else 0)
-                pnl += (px - entry) * coins * rest - px * coins * rest * FEE
+                # 空头盈亏方向相反（此处原本无条件 (px-entry)，空头反向平仓会算反号）
+                pnl += ((px - entry) if long else (entry - px)) * coins * rest \
+                    - px * coins * rest * FEE
                 fee += px * coins * rest * FEE
                 reason, ex, ex_i, closed = "反向信号", px, j, True
                 break
         if not closed:
             px = closes[-1]
             rest = 1 - (TP1_RATIO if tp1 else 0)
-            pnl += (px - entry) * coins * rest - px * coins * rest * FEE
+            pnl += ((px - entry) if long else (entry - px)) * coins * rest \
+                - px * coins * rest * FEE
             fee += px * coins * rest * FEE
         trades.append({"ts": s["ts"], "dir": s["dir"], "entry": entry, "exit": ex,
                        "i": s["i"], "j": ex_i, "pnl": pnl, "fee": fee,

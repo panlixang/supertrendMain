@@ -32,6 +32,7 @@ class CfgIn(BaseModel):
     sl_pct:          Optional[float] = None
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
+    reverse_close:    Optional[bool]  = None
 
 
 class KeysIn(BaseModel):
@@ -53,6 +54,7 @@ class SymbolIn(BaseModel):
     sl_pct:          Optional[float] = None
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
+    reverse_close:    Optional[bool]  = None
     filter_flip:      Optional[bool]  = None
     filter_vol:       Optional[bool]  = None
     filter_position:  Optional[bool]  = None
@@ -74,7 +76,7 @@ def _symbols_view() -> list[dict]:
             "tp1_pct": sc.tp1_pct, "tp1_ratio": sc.tp1_ratio,
             "sl_pct": sc.sl_pct,
             "move_sl_to_entry": sc.move_sl_to_entry,
-            "trail_with_st": sc.trail_with_st,
+            "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
             "filter_flip": sc.filter_flip, "filter_vol": sc.filter_vol,
             "filter_position": sc.filter_position, "filter_candle": sc.filter_candle,
             "filter_near_high": sc.filter_near_high,

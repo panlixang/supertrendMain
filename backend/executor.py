@@ -385,6 +385,10 @@ class Executor:
             return
 
         rules = self.rules_of(pos)
+        # 反向平仓模式：TP1 / 保本 / 跟踪止损 / 硬止损 一律不作数，
+        # 只等同周期反向信号平仓（见 _handle_signal → should_close_on_reverse）。
+        if getattr(rules, "reverse_close", False):
+            return
         act = self._exit_action(pos, price, rules)
 
         if not rules.enabled and act and act.get("action") in ("stop", "max_stop"):
@@ -583,6 +587,9 @@ class Executor:
         # 已保本的仓位不再下调止损（trail 内部只朝有利方向移，这里是双保险）。
         # 弱档 trail_with_st=False，trail() 会直接返回 False，不用额外分支。
         rules = self.rules_of(pos)
+        # 反向平仓模式：不跟随超趋线移动止损（根本没有止损在生效）
+        if getattr(rules, "reverse_close", False):
+            return
         if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
             changed = trail_enhanced(pos, line, rules, self.store.ticker.last)
         else:
