@@ -24,15 +24,7 @@ class CfgIn(BaseModel):
     price_offset:  Optional[float] = None
     exchange:      Optional[str]   = None
     block_4h:      Optional[bool]  = None
-    trend_filter:       Optional[bool]  = None
-    squeeze_bb_n:       Optional[int]   = None
-    squeeze_bb_mult:    Optional[float] = None
-    squeeze_width_pct:  Optional[float] = None
-    squeeze_vol_n:      Optional[int]   = None
-    squeeze_vol_mult:   Optional[float] = None
-    donchian_n:         Optional[int]   = None
-    score_filter:       Optional[bool]  = None
-    score_min:          Optional[float] = None
+
     cooldown_sec:  Optional[int]   = None
     poll_sec:      Optional[int]   = None
     tp1_pct:         Optional[float] = None
@@ -61,6 +53,13 @@ class SymbolIn(BaseModel):
     sl_pct:          Optional[float] = None
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
+    filter_flip:      Optional[bool]  = None
+    filter_vol:       Optional[bool]  = None
+    filter_position:  Optional[bool]  = None
+    filter_candle:    Optional[bool]  = None
+    filter_near_high: Optional[bool]  = None
+    filter_score:     Optional[bool]  = None
+    filter_score_cut: Optional[float] = None
 
 
 def _symbols_view() -> list[dict]:
@@ -76,6 +75,10 @@ def _symbols_view() -> list[dict]:
             "sl_pct": sc.sl_pct,
             "move_sl_to_entry": sc.move_sl_to_entry,
             "trail_with_st": sc.trail_with_st,
+            "filter_flip": sc.filter_flip, "filter_vol": sc.filter_vol,
+            "filter_position": sc.filter_position, "filter_candle": sc.filter_candle,
+            "filter_near_high": sc.filter_near_high,
+            "filter_score": sc.filter_score, "filter_score_cut": sc.filter_score_cut,
             "position": None,
         }
         if st and st.position:

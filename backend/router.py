@@ -197,20 +197,25 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
                 h4_ok, h4_reason = True, ("4h 无趋势(正常下单)" if pdir == 0 else "4h 同向")
             else:
                 h4_ok, h4_reason = False, "4h 反向"
-            # ② 综合趋势过滤闸门（Squeeze/Donchian/mom）—— 与 pattern_trade.trend_gate 同逻辑
-            cfg = pattern_trade.trader.cfg
-            trend_ok, trend_reason = True, ""
-            if cfg.trend_filter:
-                allow, trend_reason, _ = pattern_trade.trend_gate(
-                    closes[:i + 1], highs[:i + 1], lows[:i + 1], vols[:i + 1], i, sd, cfg)
-                trend_ok = allow
+            # ② 5 条规则 + ⑥ 加权打分过滤（品种独立开关）—— 与 pattern_trade.filter_decide 一致
+            sc = pattern_trade.trader.symbols.get(symbol)
+            feat = pattern_trade.signal_features(closes, highs, lows, opens, vols,
+                                                 st["atr"], st["flips"], i)
+            cut = (sc.filter_score_cut if (sc and sc.filter_score_cut is not None)
+                   else pattern_trade.SCORE_CUT_DEFAULT)
+            flags = pattern_trade.FilterFlags() if sc is None else pattern_trade.FilterFlags(
+                flip=sc.filter_flip, vol=sc.filter_vol,
+                position=sc.filter_position, candle=sc.filter_candle,
+                near_high=sc.filter_near_high, score=sc.filter_score)
+            filter_allow, filter_reasons = pattern_trade.filter_decide(feat, sd, flags,
+                                                                       score_cut=cut)
             if not h4_ok:
                 decision, reason = "block", h4_reason
-            elif not trend_ok:
-                decision, reason = "block", "趋势过滤拦截:" + trend_reason
+            elif not filter_allow:
+                decision, reason = "block", "过滤拦截:" + "; ".join(filter_reasons)
             else:
                 decision = "allow"
-                reason = h4_reason + (" / " + trend_reason if cfg.trend_filter else "")
+                reason = h4_reason + (" / " + "; ".join(filter_reasons) if filter_reasons else "")
             signals.append({
                 "ts": c["ts"], "type": f["type"], "dir": sd,
                 "price": round(c["c"], 6), "decision": decision, "reason": reason,

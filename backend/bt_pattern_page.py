@@ -5,7 +5,11 @@
 
 过滤（pattern_trade.PatternConfig 默认值）：
     block_4h=True     4h 形态方向明确反向才拦（无趋势 dir=0 / 数据不足 一律放行）
-    trend_filter=True Allow = NOT Squeeze AND Donchian20 突破
+    4 条过滤规则（趋势形态识别.md，品种独立开关，默认全关=不过滤）：
+        ① 连续翻转过滤  bars_since_last_flip<20 拦截
+        ② 波动异常过滤  ATR_percent>0.8 拦截
+        ③ 箱体错误位置  多 Pos<0.3 / 空 Pos>0.7 拦截
+        ④ 极端K过滤     candle_range_ATR>3 拦截
 
 出场（position.ExitRules 默认档，页面面板可配）：
     TP1 触及 +1.5% 平 70% 并把止损移到开仓价（保本）；
@@ -34,7 +38,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import history
 from indicators import super_trend
 from pattern_recog import recognize as recognize_pattern
-from pattern_trade import PatternConfig, trend_gate
+from pattern_trade import (signal_features, filter_decide, FilterFlags,
+                           SCORE_CUT_DEFAULT)
 
 SYM_DEFAULT = "BTC-USDT"
 BASE_TF, H4_TF = "1h", "4h"
@@ -46,7 +51,7 @@ SL_PCT_FALLBACK = 2.0
 FEE = 0.05 / 100                 # 单边 taker
 NOTIONAL = 10_000.0
 
-CFG = PatternConfig()   # 与 pattern_trade.PatternConfig 默认值一致（页面/实盘同源）
+# 4 条过滤规则（趋势形态识别.md）：品种独立开关；此处逐条独立评估，看各规则拦截量。
 
 def _cache_path(sym: str) -> str:
     """缓存放系统临时目录，避免几 MB 的行情缓存落进仓库。"""
@@ -111,15 +116,28 @@ def build_signals(base, h4):
             continue
         sd = 1 if f["type"] == "buy" else -1
         pdir = dir_at(tss[i])
-        allow, reason, stage = trend_gate(closes[:i + 1], highs[:i + 1],
-                                          lows[:i + 1], vols[:i + 1], i, sd, CFG)
+        feat = signal_features(closes, highs, lows, opens, vols,
+                               st["atr"], st["flips"], i)
+        pass_flip, _ = filter_decide(feat, sd, FilterFlags(flip=True))
+        pass_vol, _ = filter_decide(feat, sd, FilterFlags(vol=True))
+        pass_position, _ = filter_decide(feat, sd, FilterFlags(position=True))
+        pass_candle, _ = filter_decide(feat, sd, FilterFlags(candle=True))
+        pass_near_high, _ = filter_decide(feat, sd, FilterFlags(near_high=True))
+        pass_score, _ = filter_decide(feat, sd, FilterFlags(score=True),
+                                      score_cut=SCORE_CUT_DEFAULT)
         sigs.append({
             "i": i, "ts": tss[i], "type": f["type"], "dir": sd,
             "price": closes[i], "pdir": pdir,
             "pass_4h": (pdir != -sd),          # pattern_trade._allow_by_4h
-            "pass_trend": allow,               # pattern_trade.trend_gate
-            "trend_reason": reason,
-            "trend_stage": stage,
+            "feat": feat,                       # 5 条规则信号画像
+            "pass_flip": pass_flip,             # ① 连续翻转过滤
+            "pass_vol": pass_vol,               # ② 波动异常过滤
+            "pass_position": pass_position,     # ③ 箱体错误位置过滤
+            "pass_candle": pass_candle,         # ④ 极端K过滤
+            "pass_near_high": pass_near_high,   # ⑤ 近高价过滤
+            "pass_score": pass_score,           # ⑥ 加权打分过滤（>0.48 拦）
+            "pass_filter": (pass_flip and pass_vol and pass_position
+                            and pass_candle and pass_near_high),
         })
     return sigs, opens, highs, lows, closes, st["up_plot"], st["dn_plot"], \
         {f["i"] for f in st["flips"] if f["i"] < len(base)}
@@ -127,22 +145,27 @@ def build_signals(base, h4):
 
 def print_funnel(sigs):
     """过滤漏斗：把页面/实盘那套过滤链按闸门逐层拆开，验证回测与页面一致。"""
-    from collections import Counter
     total = len(sigs)
     a4h = [s for s in sigs if s["pass_4h"]]
-    stages = Counter(s["trend_stage"] for s in a4h)
-    final = [s for s in sigs if s["pass_4h"] and s["pass_trend"]]
-    sq, don, data, none = (stages.get("squeeze", 0), stages.get("donchian", 0),
-                            stages.get("data", 0), stages.get("none", 0))
-    print("  ── 过滤漏斗（与形态页 /api/pattern → pattern_trade.trend_gate 一致）──")
+    f_flip = sum(1 for s in a4h if not s["pass_flip"])
+    f_vol = sum(1 for s in a4h if not s["pass_vol"])
+    f_pos = sum(1 for s in a4h if not s["pass_position"])
+    f_candle = sum(1 for s in a4h if not s["pass_candle"])
+    f_near = sum(1 for s in a4h if not s["pass_near_high"])
+    f_score = sum(1 for s in a4h if not s["pass_score"])
+    final = [s for s in sigs if s["pass_4h"] and s["pass_filter"]]
+    print("  ── 过滤漏斗（与形态页 /api/pattern → pattern_trade.filter_decide 一致）──")
     print(f"     ① SuperTrend 翻转信号总数        : {total}")
     print(f"     ② 过 4h 趋势对齐闸门            : {len(a4h)}  "
           f"(拦截 {total - len(a4h)} = 4h 反向/数据不足)")
-    print(f"     ③ 非 Squeeze 死水区             : {len(a4h) - sq}  "
-          f"(死水区拦截 {sq})")
-    print(f"     ④ 满足 Donchian 突破放行        : {don}")
-    print(f"     ⑤ 数据不足放行 / 无突破拦截     : {data} / {none}")
-    print(f"     ⑥ 最终放行开仓                  : {len(final)}  "
+    print(f"     ③ ①连续翻转过滤(bars<20) 拦截   : {f_flip}  (放行 {len(a4h) - f_flip})")
+    print(f"     ④ ②波动异常过滤(ATR%>0.8) 拦截  : {f_vol}  (放行 {len(a4h) - f_vol})")
+    print(f"     ⑤ ③箱体错误位置过滤 拦截        : {f_pos}  (放行 {len(a4h) - f_pos})")
+    print(f"     ⑥ ④极端K过滤(candle>3ATR) 拦截  : {f_candle}  (放行 {len(a4h) - f_candle})")
+    print(f"     ⑦ ⑤近高价过滤(距高点>3.47ATR) 拦截: {f_near}  (放行 {len(a4h) - f_near})")
+    print(f"     ⑧ ⑥加权打分过滤(score>{SCORE_CUT_DEFAULT}) 拦截: {f_score}  "
+          f"(放行 {len(a4h) - f_score})")
+    print(f"     ⑨ 最终放行开仓                  : {len(final)}  "
           f"(总拦截 {total - len(final)})")
 
 

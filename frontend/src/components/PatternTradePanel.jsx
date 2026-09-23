@@ -6,8 +6,8 @@
  *
  * 面板只暴露用户要的参数：
  *   交易所配置（OKX / Bitget + 各自 Key + 模拟盘）
- *   是否开启 4h 方向拦截 / 无趋势拦截（含 ADX、MA20/MA60 间距阈值）
- *   下单品种的下单仓位保证金 / 杠杆 / 允许周期
+ *   是否开启 4h 方向拦截
+ *   每个品种的 4 条过滤规则（连续翻转 / 波动异常 / 箱体错误位置 / 极端K）+ 止盈止损
  * 出场规则固定用回测验证档（TP1 1.5% 平 70% + 保本 + 跟随 SuperTrend 跟踪）。
  */
 import { useCallback, useEffect, useState } from "react";
@@ -52,6 +52,16 @@ const SZ = {
   },
 };
 
+// 5 条规则 + ⑥ 加权打分（对应 趋势形态识别.md + 近高价 + 打分），挂在每个品种上（止盈止损上方）
+const FILTER_DEFS = [
+  { key: "filter_flip",     label: "① 连续翻转过滤（bars&lt;20 拦截）" },
+  { key: "filter_vol",      label: "② 波动异常过滤（ATR%&gt;0.8 拦截）" },
+  { key: "filter_position", label: "③ 箱体错误位置（多&lt;0.3 / 空&gt;0.7 拦截）" },
+  { key: "filter_candle",   label: "④ 极端K过滤（candle&gt;3ATR 拦截）" },
+  { key: "filter_near_high", label: "⑤ 近高价过滤（距48根高点&gt;3.47ATR 拦截）" },
+  { key: "filter_score",    label: "⑥ 加权打分过滤（多指标打分&gt;阈值 拦截，只拦大部分垃圾单）" },
+];
+
 const getJSON = async (url, opts) => {
   const r = await fetch(url, opts);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
@@ -75,9 +85,6 @@ export default function PatternTradePanel({ currentSymbol }) {
   const [xr, setXr] = useState({
     tp1_pct: 1.5, tp1_ratio: 70, sl_pct: 2.0,
     move_sl_to_entry: true, trail_with_st: true,
-  });
-  const [nt, setNt] = useState({
-    squeeze_width_pct: 1.5, donchian_n: 20, score_min: 60,
   });
 
   const [keyForm, setKeyForm] = useState({ api_key: "", api_secret: "", passphrase: "" });
@@ -200,21 +207,6 @@ export default function PatternTradePanel({ currentSymbol }) {
     });
   }, [cfg]);
 
-  // 无趋势拦截阈值（从后端 cfg 同步，改动即时下发）
-  useEffect(() => {
-    if (!cfg) return;
-    setNt({
-      squeeze_width_pct: cfg.squeeze_width_pct ?? 1.5,
-      donchian_n: cfg.donchian_n ?? 20,
-      score_min: cfg.score_min ?? 60,
-    });
-  }, [cfg]);
-
-  const patchNt = (k, v) => {
-    setNt((x) => ({ ...x, [k]: v }));
-    patch({ [k]: v });
-  };
-
   const patchXr = (k, v) => {
     setXr((x) => ({ ...x, [k]: v }));
     patch({ [k]: v });
@@ -329,45 +321,6 @@ export default function PatternTradePanel({ currentSymbol }) {
           <input type="checkbox" checked={cfg.block_4h} onChange={(e) => patch({ block_4h: e.target.checked })} />
           <span>开启 4h 方向拦截（仅拦 4h 明确反向）</span>
         </div>
-        <div style={SZ.row}>
-          <input
-            type="checkbox" checked={!!cfg.score_filter}
-            onChange={(e) => patch({ score_filter: e.target.checked })}
-          />
-          <span>综合评分过滤（趋势形态识别.md 评分 ≥</span>
-          <input
-            style={{ ...SZ.inp, width: 52 }} type="number" step={1} min={0}
-            value={nt.score_min}
-            onChange={(e) => patchNt("score_min", Number(e.target.value))}
-          />
-          <span>分放行）</span>
-        </div>
-        <div style={SZ.row}>
-          <input
-            type="checkbox" checked={!!cfg.trend_filter}
-            onChange={(e) => patch({ trend_filter: e.target.checked })}
-          />
-          <span>
-            综合趋势过滤（死水区拦截 + Donchian 突破放行）
-          </span>
-        </div>
-        {!!cfg.trend_filter && (
-          <div style={{ ...SZ.row, marginLeft: 20, flexWrap: "wrap" }}>
-            <span style={{ color: C.neutral }}>Squeeze 带宽&lt;</span>
-            <input
-              style={{ ...SZ.inp, width: 56 }} type="number" step={0.1} min={0}
-              value={nt.squeeze_width_pct}
-              onChange={(e) => patchNt("squeeze_width_pct", Number(e.target.value))}
-            />
-            <span style={{ color: C.neutral }}>% 且缩量=死水拦截；Donchian 突破周期</span>
-            <input
-              style={{ ...SZ.inp, width: 52 }} type="number" step={1} min={2}
-              value={nt.donchian_n}
-              onChange={(e) => patchNt("donchian_n", Number(e.target.value))}
-            />
-            <span style={{ color: C.neutral }}>根</span>
-          </div>
-        )}
         </div>
 
       {/* 默认出场 · 止盈止损 */}
@@ -490,6 +443,33 @@ export default function PatternTradePanel({ currentSymbol }) {
               {s.position && (
                 <button style={{ ...SZ.btnGhost, marginLeft: "auto" }} onClick={() => closePos(s.symbol)}>平仓</button>
               )}
+            </div>
+            {/* 该品种过滤规则 */}
+            <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 6 }}>
+              <div style={{ fontSize: 11, color: C.neutral, marginBottom: 4 }}>
+                过滤规则（趋势形态识别.md，勾选即启用）
+              </div>
+              {FILTER_DEFS.map((fd) => (
+                <div style={SZ.row} key={fd.key}>
+                  <input
+                    type="checkbox"
+                    checked={!!s[fd.key]}
+                    onChange={(e) => updateSymbol(s.symbol, { [fd.key]: e.target.checked })}
+                  />
+                  <span style={{ fontSize: 11 }}>{fd.label}</span>
+                  {fd.key === "filter_score" && (
+                    <>
+                      <span style={{ color: C.neutral, fontSize: 11 }}>阈值</span>
+                      <input style={{ ...SZ.inp, width: 58 }} type="number" step={0.01}
+                             defaultValue={s.filter_score_cut ?? 0.48}
+                             onBlur={(e) => {
+                               const v = e.target.value.trim();
+                               if (v !== "") updateSymbol(s.symbol, { filter_score_cut: Number(v) });
+                             }} />
+                    </>
+                  )}
+                </div>
+              ))}
             </div>
             {/* 该品种独立止盈止损 */}
             <div style={{ borderTop: `1px dashed ${C.border}`, marginTop: 6, paddingTop: 6 }}>

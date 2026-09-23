@@ -152,6 +152,14 @@ class SymbolTradeConfig:
     sl_pct:            Optional[float] = None
     move_sl_to_entry:  Optional[bool]  = None
     trail_with_st:     Optional[bool]  = None
+    # ── 形态识别页 5 条规则 + ⑥ 加权打分（品种独立；对应 趋势形态识别.md + 近高价；默认全关=不过滤）──
+    filter_flip:       bool = False   # ① 连续翻转过滤：bars_since_last_flip < 20 拦截（震荡）
+    filter_vol:        bool = False   # ② 波动异常过滤：ATR_percent > 0.8 拦截（追涨杀跌）
+    filter_position:   bool = False   # ③ 箱体错误位置过滤：多 Pos<0.3 / 空 Pos>0.7 拦截（非突破是反抽）
+    filter_candle:     bool = False   # ④ 极端K过滤：candle_range_ATR > 3 拦截（情绪K）
+    filter_near_high:  bool = False   # ⑤ 近高价过滤：距48根高点 (Hi48-C)/ATR > 3.47 拦截（非突破弱势）
+    filter_score:      bool = False   # ⑥ 加权打分过滤：多指标尾部惩罚求和 > filter_score_cut 拦截（拦大部分垃圾单）
+    filter_score_cut:  float = 0.48   # ⑥ 打分拦截阈值（由 _raw_full.csv 拟合，越大越宽松=拦得越少）
 
 
 # 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；

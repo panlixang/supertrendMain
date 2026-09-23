@@ -35,7 +35,7 @@ TP1_PCT, TP1_RATIO, SL_PCT = 1.5, 70.0, 2.0
 START = int(datetime(2026, 3, 23, tzinfo=timezone.utc).timestamp() * 1000)
 BARS_1H, BARS_4H = 5300, 1500
 MIN_TRADES = 10
-SCORE_MINS = [0, 20, 30, 40, 50, 60, 70, 80, 90]
+SCORE_MINS = [0, 20, 30, 40, 50, 60, 70, 80]  # 新评分上限=85，90 档无效（无信号可达）
 
 
 def _summarize(r: dict, notional: float, margin: float) -> dict:
