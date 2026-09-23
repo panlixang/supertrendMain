@@ -4,7 +4,7 @@
 - 配置文件 pattern_trade.json、凭据文件 pattern_credentials.json，都不进 settings.json
 - 下单通过 creds 的 ContextVar 覆盖 —— Task 级隔离，两页可跑不同交易所 / 不同子账户
 - 信号用基础周期的「原始 SuperTrend」（ATR 10 / factor 3.0），与首页 15/9.1 无关
-- 过滤两个开关：block_4h（4h 形态反向拦截）+ trend_filter（综合趋势过滤：Squeeze 死水区拦截 + Donchian/mom 二选一突破放行）
+- 过滤两个开关：block_4h（4h 形态反向拦截）+ trend_filter（综合趋势过滤：Squeeze 死水区拦截 + Donchian 突破放行）
 - 出场用 position.ExitRules 默认档 = 回测验证过的 TP1 1.5% 平 70% + 保本 + 跟随 ST 跟踪
 
 同一品种两页都可能下单时不校验冲突（用户用不同子账户各自管理）。
@@ -25,7 +25,7 @@ import creds
 import history
 import trade
 from executor import Executor
-from indicators import ma, super_trend, ta_adx, ta_sma
+from indicators import ma, super_trend, ta_adx, ta_atr, ta_sma
 from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
 from regime import TradeConfig
@@ -66,9 +66,13 @@ class PatternConfig:
     price_offset: float = 0.05
     exchange:     str   = "okx"
     block_4h:     bool  = True     # True = 4h 形态反向则不下单
+    # 综合评分过滤（趋势形态识别.md 2026-09 评分规则）：有效ST分 = 结构40+动量25+突破质量25−反转风险(最多−20)
+    # 两阶段机制：score>=score_min(默认50) 直接放行；<50 不立即交易，需下一根K突破确认才执行（见 _allow_by_score）
+    score_filter:       bool  = True    # True = 开启综合评分过滤
+    score_min:          float = 60.0    # 综合评分硬门槛（自定义，0-100；<50 须突破确认；寻优最优=60）
     # 综合趋势过滤器（替代原「无趋势拦截」），公式：
-    #   Allow = Align4H AND NOT Squeeze AND (Donchian OR Mom12)
-    #   Align4H 由 block_4h 负责；本过滤器负责 Squeeze 死水区拦截 + 二选一突破放行
+    #   Allow = Align4H AND NOT Squeeze AND Donchian
+    #   Align4H 由 block_4h 负责；本过滤器负责 Squeeze 死水区拦截 + Donchian 突破放行
     trend_filter:       bool  = True    # True = 开启综合趋势过滤
     # 条件 1：Squeeze 极度窄幅死水区（极窄幅布林收口 AND 缩量，须同时满足才判死水）
     squeeze_bb_n:       int   = 20      # 布林带周期
@@ -78,9 +82,6 @@ class PatternConfig:
     squeeze_vol_mult:   float = 0.8     # 当前量 < MA(Vol,n)*该倍数 = 缩量
     # 条件 2：Donchian 通道突破放行（价格收在前 N 根高低点之外）
     donchian_n:         int   = 20      # 通道周期
-    # 条件 3：纯动量启动豁免（单根下单周期动量爆破）
-    waive_mom_n:        int   = 12      # 动量观察根数（下单周期）
-    waive_mom_pct:      float = 1.2     # 朝信号方向累计涨跌% 阈值
 
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
@@ -489,8 +490,10 @@ class PatternTrader:
                 last = self._last_order_at.get(key, 0)
                 if time.time() - last < self.cfg.cooldown_sec:
                     continue
-            # 3) 过滤器：4h 形态方向 + 综合趋势过滤（Squeeze/Donchian/mom）
+            # 3) 过滤器：4h 方向 + 综合评分 + 综合趋势过滤
             if self.cfg.block_4h and not await self._allow_by_4h(sym, sig):
+                continue
+            if self.cfg.score_filter and not await self._allow_by_score(sym, sig):
                 continue
             if self.cfg.trend_filter and not await self._allow_by_trend(sym, sig):
                 continue
@@ -567,11 +570,10 @@ class PatternTrader:
     async def _allow_by_trend(self, sym: str, sig: dict) -> bool:
         """True=放行。综合趋势过滤（替代原「无趋势拦截」）。
 
-        公式：Allow = Align4H AND NOT Squeeze AND (Donchian OR Mom12)
+        公式：Allow = Align4H AND NOT Squeeze AND Donchian
           - Align4H 由 block_4h + _allow_by_4h 在调用处负责（顺大势硬门槛）
           - 条件 1 Squeeze：极窄幅(布林收口) AND 缩量 → 死水区，一律拦截
           - 条件 2 Donchian：价格收在前 N 根高低点之外 → 有效突破，放行
-          - 条件 3 Mom12：朝信号方向近 N 根累计涨跌% >= 阈值 → 动量爆破，豁免放行
         数据不足一律放行，不拦。
         核心判定委托给模块级纯函数 trend_gate，与 /api/pattern 页面展示、回测三处共用。
         """
@@ -583,7 +585,7 @@ class PatternTrader:
             return True
         cfg = self.cfg
         need = max(cfg.squeeze_bb_n, cfg.squeeze_vol_n,
-                   cfg.donchian_n + 1, cfg.waive_mom_n + 1)
+                   cfg.donchian_n + 1)
         if len(cs) < need + 5:
             return True
         closes = [c["c"] for c in cs]
@@ -597,6 +599,33 @@ class PatternTrader:
                     "放行" if allow else "拦截", reason)
         return allow
 
+    async def _allow_by_score(self, sym: str, sig: dict) -> bool:
+        """True=放行。综合评分过滤（趋势形态识别.md 评分规则）。
+        score >= cfg.score_min 才放行；数据不足一律放行。
+        """
+        tf = sig.get("tf") or "1h"
+        try:
+            cs = await self._kline(sym, tf, 600)
+            cs4h = await self._kline(sym, "4h", 600)
+        except Exception as e:
+            logger.warning(f"[形态下单] {sym} {tf} 综合评分取数失败: {e}")
+            return True
+        if len(cs) < 60 or len(cs4h) < 60:
+            return True
+        score = pattern_score(
+            [c["c"] for c in cs], [c["h"] for c in cs], [c["l"] for c in cs],
+            [c["o"] for c in cs], [c["vol"] for c in cs],
+            [c["c"] for c in cs4h], [c["h"] for c in cs4h], [c["l"] for c in cs4h],
+            sig_dir(sig), sig.get("price"),
+        )
+        if score >= self.cfg.score_min:
+            logger.info("[形态下单] %s %s 综合评分放行: %.1f >= %.1f",
+                        sym, tf, score, self.cfg.score_min)
+            return True
+        logger.info("[形态下单] %s %s 综合评分拦截: %.1f < %.1f",
+                    sym, tf, score, self.cfg.score_min)
+        return False
+
 
 def trend_gate(closes: list[float], highs: list[float], lows: list[float],
                vols: list[float], idx: int, sd: int, cfg) -> tuple[bool, str, str]:
@@ -609,13 +638,12 @@ def trend_gate(closes: list[float], highs: list[float], lows: list[float],
       ① 数据不足                          → 放行
       ② Squeeze 死水区(极窄幅 AND 缩量)    → 拦截
       ③ Donchian 突破(收在前 N 根高低点外) → 放行
-      ④ momN >= 阈值%(朝信号方向累计涨跌)  → 豁免放行
-      ⑤ 否则                              → 拦截
+      ④ 否则                              → 拦截
     返回 (是否放行, 原因, 决定闸门)。
     """
     n = len(closes)
     need = max(cfg.squeeze_bb_n, cfg.squeeze_vol_n,
-               cfg.donchian_n + 1, cfg.waive_mom_n + 1)
+               cfg.donchian_n + 1)
     if n < need + 5:
         return True, "数据不足(放行)", "data"
     # —— 条件 1：Squeeze 极度窄幅死水区（极窄幅 AND 缩量，须同时满足）——
@@ -642,14 +670,111 @@ def trend_gate(closes: list[float], highs: list[float], lows: list[float],
     if len(win_h) >= N:
         hh, ll = max(win_h), min(win_l)
         don = (closes[-1] > hh) if sd > 0 else (closes[-1] < ll)
-    # —— 条件 3：纯动量启动豁免 ——
-    m = cfg.waive_mom_n
-    mom = (closes[-1] / closes[-1 - m] - 1) * sd * 100.0 if len(closes) > m else 0.0
     if don:
         return True, f"Donchian突破(+{N})", "donchian"
-    if mom >= cfg.waive_mom_pct:
-        return True, f"动量豁免(mom{m}={mom:.2f}%>={cfg.waive_mom_pct}%)", "mom"
-    return False, f"无突破(mom{m}={mom:.2f}%<{cfg.waive_mom_pct}%)", "none"
+    return False, "无Donchian突破", "none"
+
+
+def pattern_score(closes, highs, lows, opens, vols, h4_closes=None, h4_highs=None,
+                 h4_lows=None, sd=1, break_price=None) -> float:
+    """形态识别页综合评分（0-100），规则见 趋势形态识别.md（2026-09 修订）。
+
+    有效ST分 = 结构突破(40) + 动量持续(25) + 突破质量(25) − 反转风险(最多−20)
+      模块1 结构突破(40)：价格是否脱离原震荡箱体（Position = (Close-RangeLow)/(RangeHigh-RangeLow)，
+                          Range 取信号根前 N=20 根 1h 的 High/Low）
+                          多头：箱体外突破(Close>RangeHigh)+40 / 箱体边缘(Position>0.8)+25 / 中间 0
+                          空头对称
+      模块2 动量持续(25)：Momentum=(Close-Close12)/ATR（方向化）；>2→25, 1~2→15, 0.5~1→8, <0.5→0
+                          单根K修正：当前K涨幅/12周期涨幅>70% → −10
+      模块3 突破质量(25)：Volume Ratio=Vol/MA20Vol；>1.5→25, 1.2~1.5→15, 0.8~1.2→8, <0.8→0
+      模块4 反转风险扣分(最多−20)：
+                          A 长影线(上影/实体>1.5)→−10
+                          B 远离结构(突破后离箱体>3ATR)→−15
+                          C ADX未跟随(价格突破但ADX下降)→−10
+    注：2026-09 修订后评分完全基于 1h 维度，不再含 4H 方向 / 市场环境正分模块（h4_* 保留仅为兼容旧调用）。
+    sd: 信号方向 +1(buy)/-1(sell)。break_price: 信号触发价（用于远离结构判定）。
+    """
+    if len(closes) < 30:
+        return 0.0
+    atr = ta_atr(highs, lows, closes, 14)
+    atr_v = atr[-1] or 0.0
+    if atr_v <= 0:
+        return 0.0
+    N = 20
+    win_h = highs[-N - 1:-1]
+    win_l = lows[-N - 1:-1]
+    if not win_h or not win_l:
+        return 0.0
+    rng_h, rng_l = max(win_h), min(win_l)
+    rng = rng_h - rng_l
+    c = closes[-1]
+    pos = (c - rng_l) / rng if rng > 0 else 0.5
+
+    # ── 模块1：结构突破（40）──
+    if sd > 0:
+        if c > rng_h:
+            m1 = 40.0            # 箱体外突破（最强）
+        elif pos > 0.8:
+            m1 = 25.0            # 箱体边缘
+        else:
+            m1 = 0.0             # 箱体中间：ST翻转大概率是垃圾
+    else:
+        if c < rng_l:
+            m1 = 40.0
+        elif pos < 0.2:
+            m1 = 25.0
+        else:
+            m1 = 0.0
+
+    # ── 模块2：动量持续（25）+ 单根K修正 ──
+    mom12 = (closes[-1] - closes[-13]) / atr_v * sd          # 方向化 12 周期动量
+    if mom12 > 2:
+        m2 = 25.0
+    elif mom12 >= 1:
+        m2 = 15.0
+    elif mom12 >= 0.5:
+        m2 = 8.0
+    else:
+        m2 = 0.0
+    move12 = (closes[-1] - closes[-13]) * sd                 # 12 周期方向化总位移
+    cur_k = (closes[-1] - opens[-1]) * sd                    # 当前K方向化位移
+    if move12 > 0 and cur_k / move12 > 0.7:                  # 全靠一根K推动 → 扣10
+        m2 = max(0.0, m2 - 10.0)
+
+    # ── 模块3：突破质量（25）─ 成交量比 ──
+    vol_ma = ta_sma(vols, 20)[-1]
+    vr = (vols[-1] / vol_ma) if vol_ma else 1.0
+    if vr > 1.5:
+        m3 = 25.0
+    elif vr >= 1.2:
+        m3 = 15.0
+    elif vr >= 0.8:
+        m3 = 8.0
+    else:
+        m3 = 0.0
+
+    # ── 模块4：反转风险扣分（最多−20）──
+    pen = 0.0
+    o, h, l = opens[-1], highs[-1], lows[-1]
+    if sd > 0:
+        body = max(c - o, 1e-9); shadow = h - max(o, c)       # A 长影线（上影）
+    else:
+        body = max(o - c, 1e-9); shadow = max(o, c) - l       #   空头看下影
+    if shadow / body > 1.5:
+        pen -= 10
+    if sd > 0:
+        gap = (c - rng_h) / atr_v                            # B 远离结构（突破后离箱体）
+    else:
+        gap = (rng_l - c) / atr_v
+    if gap > 3:
+        pen -= 15
+    adx_s = ta_adx(highs, lows, closes, 14)                  # C ADX 未跟随（价格突破但下降）
+    if len(adx_s) >= 6 and (adx_s[-1] or 0) < (adx_s[-6] or 0):
+        pen -= 10
+    pen = max(-20.0, pen)
+
+    total = m1 + m2 + m3 + pen
+    return max(0.0, min(100.0, total))
 
 
 def sig_dir(sig: dict) -> int:

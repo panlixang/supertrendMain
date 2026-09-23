@@ -77,7 +77,7 @@ export default function PatternTradePanel({ currentSymbol }) {
     move_sl_to_entry: true, trail_with_st: true,
   });
   const [nt, setNt] = useState({
-    squeeze_width_pct: 1.5, donchian_n: 20, waive_mom_pct: 1.2,
+    squeeze_width_pct: 1.5, donchian_n: 20, score_min: 60,
   });
 
   const [keyForm, setKeyForm] = useState({ api_key: "", api_secret: "", passphrase: "" });
@@ -206,7 +206,7 @@ export default function PatternTradePanel({ currentSymbol }) {
     setNt({
       squeeze_width_pct: cfg.squeeze_width_pct ?? 1.5,
       donchian_n: cfg.donchian_n ?? 20,
-      waive_mom_pct: cfg.waive_mom_pct ?? 1.2,
+      score_min: cfg.score_min ?? 60,
     });
   }, [cfg]);
 
@@ -331,11 +331,24 @@ export default function PatternTradePanel({ currentSymbol }) {
         </div>
         <div style={SZ.row}>
           <input
+            type="checkbox" checked={!!cfg.score_filter}
+            onChange={(e) => patch({ score_filter: e.target.checked })}
+          />
+          <span>综合评分过滤（趋势形态识别.md 评分 ≥</span>
+          <input
+            style={{ ...SZ.inp, width: 52 }} type="number" step={1} min={0}
+            value={nt.score_min}
+            onChange={(e) => patchNt("score_min", Number(e.target.value))}
+          />
+          <span>分放行）</span>
+        </div>
+        <div style={SZ.row}>
+          <input
             type="checkbox" checked={!!cfg.trend_filter}
             onChange={(e) => patch({ trend_filter: e.target.checked })}
           />
           <span>
-            综合趋势过滤（死水区拦截 + 二选一突破放行）
+            综合趋势过滤（死水区拦截 + Donchian 突破放行）
           </span>
         </div>
         {!!cfg.trend_filter && (
@@ -346,19 +359,13 @@ export default function PatternTradePanel({ currentSymbol }) {
               value={nt.squeeze_width_pct}
               onChange={(e) => patchNt("squeeze_width_pct", Number(e.target.value))}
             />
-            <span style={{ color: C.neutral }}>% 且缩量=死水拦截；Donchian 周期</span>
+            <span style={{ color: C.neutral }}>% 且缩量=死水拦截；Donchian 突破周期</span>
             <input
               style={{ ...SZ.inp, width: 52 }} type="number" step={1} min={2}
               value={nt.donchian_n}
               onChange={(e) => patchNt("donchian_n", Number(e.target.value))}
             />
-            <span style={{ color: C.neutral }}>根；动量豁免 mom</span>
-            <input
-              style={{ ...SZ.inp, width: 52 }} type="number" step={0.1} min={0}
-              value={nt.waive_mom_pct}
-              onChange={(e) => patchNt("waive_mom_pct", Number(e.target.value))}
-            />
-            <span style={{ color: C.neutral }}>% 突破放行</span>
+            <span style={{ color: C.neutral }}>根</span>
           </div>
         )}
         </div>

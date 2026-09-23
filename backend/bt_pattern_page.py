@@ -5,7 +5,7 @@
 
 过滤（pattern_trade.PatternConfig 默认值）：
     block_4h=True     4h 形态方向明确反向才拦（无趋势 dir=0 / 数据不足 一律放行）
-    trend_filter=True Allow = NOT Squeeze AND (Donchian20 突破 OR Mom12 动量爆破)
+    trend_filter=True Allow = NOT Squeeze AND Donchian20 突破
 
 出场（position.ExitRules 默认档，页面面板可配）：
     TP1 触及 +1.5% 平 70% 并把止损移到开仓价（保本）；
@@ -132,9 +132,8 @@ def print_funnel(sigs):
     a4h = [s for s in sigs if s["pass_4h"]]
     stages = Counter(s["trend_stage"] for s in a4h)
     final = [s for s in sigs if s["pass_4h"] and s["pass_trend"]]
-    sq, don, mom, data, none = (stages.get("squeeze", 0), stages.get("donchian", 0),
-                                stages.get("mom", 0), stages.get("data", 0),
-                                stages.get("none", 0))
+    sq, don, data, none = (stages.get("squeeze", 0), stages.get("donchian", 0),
+                            stages.get("data", 0), stages.get("none", 0))
     print("  ── 过滤漏斗（与形态页 /api/pattern → pattern_trade.trend_gate 一致）──")
     print(f"     ① SuperTrend 翻转信号总数        : {total}")
     print(f"     ② 过 4h 趋势对齐闸门            : {len(a4h)}  "
@@ -142,9 +141,8 @@ def print_funnel(sigs):
     print(f"     ③ 非 Squeeze 死水区             : {len(a4h) - sq}  "
           f"(死水区拦截 {sq})")
     print(f"     ④ 满足 Donchian 突破放行        : {don}")
-    print(f"     ⑤ 满足 动量豁免(mom12>=1.2%)    : {mom}")
-    print(f"     ⑥ 数据不足放行 / 无突破拦截     : {data} / {none}")
-    print(f"     ⑦ 最终放行开仓                  : {len(final)}  "
+    print(f"     ⑤ 数据不足放行 / 无突破拦截     : {data} / {none}")
+    print(f"     ⑥ 最终放行开仓                  : {len(final)}  "
           f"(总拦截 {total - len(final)})")
 
 

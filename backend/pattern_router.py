@@ -31,8 +31,8 @@ class CfgIn(BaseModel):
     squeeze_vol_n:      Optional[int]   = None
     squeeze_vol_mult:   Optional[float] = None
     donchian_n:         Optional[int]   = None
-    waive_mom_n:        Optional[int]   = None
-    waive_mom_pct:      Optional[float] = None
+    score_filter:       Optional[bool]  = None
+    score_min:          Optional[float] = None
     cooldown_sec:  Optional[int]   = None
     poll_sec:      Optional[int]   = None
     tp1_pct:         Optional[float] = None
