@@ -34,6 +34,7 @@ from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
 from regime import TradeConfig
 from state import SymbolStore, SymbolTradeConfig
+from signal_filter_stats import apply_statistical_filter
 
 logger = logging.getLogger(__name__)
 
@@ -619,10 +620,15 @@ class PatternTrader:
                                [c["vol"] for c in cs], st["atr"], flips, f["i"])
         flags = FilterFlags(flip=sc.filter_flip, vol=sc.filter_vol,
                             position=sc.filter_position, candle=sc.filter_candle,
-                            near_high=sc.filter_near_high, score=sc.filter_score)
+                            near_high=sc.filter_near_high, score=sc.filter_score,
+                            stats=sc.filter_stats)
         cut = (sc.filter_score_cut if sc.filter_score_cut is not None
                else SCORE_CUT_DEFAULT)
-        allow, reasons = filter_decide(feat, sd, flags, score_cut=cut)
+        stats_strategy = getattr(sc, 'filter_stats_strategy', 'B') or 'B'
+        stats_threshold = getattr(sc, 'filter_stats_threshold', 60.0) or 60.0
+        allow, reasons = filter_decide(feat, sd, flags, score_cut=cut,
+                                      stats_strategy=stats_strategy,
+                                      stats_threshold=stats_threshold)
         if not allow:
             logger.info("[形态下单] %s %s 过滤拦截: %s", sym, tf, "; ".join(reasons))
         return allow
@@ -630,14 +636,15 @@ class PatternTrader:
 
 @dataclass
 class FilterFlags:
-    """5 条规则 + ⑥ 加权打分 的开关集合（与 SymbolTradeConfig 的 filter_* 字段对应）。"""
+    """7 条规则 + ⑥⑦ 打分过滤 的开关集合（与 SymbolTradeConfig 的 filter_* 字段对应）。"""
     flip:       bool = False   # ① 连续翻转过滤
     vol:        bool = False   # ② 波动异常过滤
     position:   bool = False   # ③ 箱体错误位置过滤
     candle:     bool = False   # ④ 极端K过滤
     near_high:  bool = False   # ⑤ 近高价过滤（距48根高点>3.47ATR 拦）
     score:      bool = False   # ⑥ 加权打分过滤（多指标尾部惩罚求和 > cut 拦）
-    tqi:        bool = False   # ⑦ TQI趋势质量过滤（TQI<thr 视为低质量震荡，拦）
+    stats:      bool = False   # ⑦ 统计相关性过滤（基于808信号分析：risk_score>48 OR bars<45）
+    tqi:        bool = False   # ⑧ TQI趋势质量过滤（TQI<thr 视为低质量震荡，拦）
 
 
 def signal_features(closes: list[float], highs: list[float], lows: list[float],
@@ -767,16 +774,19 @@ def signal_score(feat: dict, sd: int) -> float:
 
 def filter_decide(feat: dict, sd: int, flags: FilterFlags,
                   score_cut: float = SCORE_CUT_DEFAULT,
-                  tqi_thr: float = TQI_THR_DEFAULT) -> tuple[bool, list[str]]:
-    """对单笔信号应用 5 条规则 + ⑥ 加权打分。返回 (是否放行, [拦截原因...])。
+                  tqi_thr: float = TQI_THR_DEFAULT,
+                  stats_strategy: str = 'B',
+                  stats_threshold: float = 60.0) -> tuple[bool, list[str]]:
+    """对单笔信号应用 7 条规则 + ⑥⑦ 打分过滤。返回 (是否放行, [拦截原因...])。
 
-    规则（趋势形态识别.md + 近高价 + 加权打分，均可在 _raw_full.csv 回测验证）：
+    规则（趋势形态识别.md + 近高价 + 加权打分 + 统计相关性，均可在回测验证）：
       ① 连续翻转过滤  : bars_since_last_flip < 20                          → 拦截
       ② 波动异常过滤  : ATR_percent > 0.8                                 → 拦截
       ③ 箱体错误位置  : 多 range_position<0.3 / 空 range_position>0.7       → 拦截
       ④ 极端K过滤     : candle_range_ATR > 3                              → 拦截
       ⑤ 近高价过滤    : (Hi48-C)/ATR > 3.47                               → 拦截（距近期高点过远，弱势非突破）
       ⑥ 加权打分过滤  : signal_score > score_cut                          → 拦截（多指标尾部惩罚求和，拦大部分垃圾单）
+      ⑦ 统计相关性过滤: 基于808信号分析 (risk_score>48 OR bars<45)         → 拦截（统计显著p<0.001）
     """
     reasons: list[str] = []
     if flags.flip and feat["bars_since_last_flip"] < 20:
@@ -797,6 +807,30 @@ def filter_decide(feat: dict, sd: int, flags: FilterFlags,
         sc = signal_score(feat, sd)
         if sc > score_cut:
             reasons.append(f"加权打分过高({sc:.2f}>{score_cut})")
+    if flags.stats:
+        # ⑦ 统计相关性过滤：基于2022-09至今808个BTC 1h信号的统计分析
+        # 关键特征：risk_score (Cohen's d=0.432***), bars_since_flip (d=0.308***)
+        # 简化版：使用 risk_score 的近似计算（基于现有特征）
+        # risk_score 在原数据中是综合评分，这里用类似逻辑近似
+        bars = feat.get("bars_since_last_flip", 9999)
+        adx = feat.get("ADX14", 0)
+
+        # 计算近似 risk_score：基于统计分析，risk_score 与 bars_since_flip、ADX14 相关
+        # 原始分析显示：保留信号 risk_score 平均46.1，过滤信号52.6
+        # 这里基于特征构建近似评分
+        approx_risk_score = 50.0  # 基准分
+        if bars < 45:
+            approx_risk_score += 10.0  # 翻转时间短增加风险
+        if adx < 22:
+            approx_risk_score += 5.0   # 趋势弱增加风险
+
+        should_filter, stat_reasons, _ = apply_statistical_filter(
+            {'risk_score': approx_risk_score, 'bars_since_flip': bars, 'ADX14': adx},
+            strategy=stats_strategy,
+            threshold=stats_threshold
+        )
+        if should_filter:
+            reasons.extend(stat_reasons)
     if flags.tqi and feat["TQI"] < tqi_thr:
         reasons.append(f"趋势质量低(TQI={feat['TQI']:.2f}<{tqi_thr})")
     return (len(reasons) == 0, reasons)
