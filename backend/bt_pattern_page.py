@@ -39,7 +39,7 @@ import history
 from indicators import super_trend
 from pattern_recog import recognize as recognize_pattern
 from pattern_trade import (signal_features, filter_decide, FilterFlags,
-                           SCORE_CUT_DEFAULT)
+                           SCORE_CUT_DEFAULT, TQI_THR_DEFAULT)
 
 SYM_DEFAULT = "BTC-USDT"
 BASE_TF, H4_TF = "1h", "4h"
@@ -125,6 +125,8 @@ def build_signals(base, h4):
         pass_near_high, _ = filter_decide(feat, sd, FilterFlags(near_high=True))
         pass_score, _ = filter_decide(feat, sd, FilterFlags(score=True),
                                       score_cut=SCORE_CUT_DEFAULT)
+        pass_tqi, _ = filter_decide(feat, sd, FilterFlags(tqi=True),
+                                    tqi_thr=TQI_THR_DEFAULT)
         sigs.append({
             "i": i, "ts": tss[i], "type": f["type"], "dir": sd,
             "price": closes[i], "pdir": pdir,
@@ -136,6 +138,7 @@ def build_signals(base, h4):
             "pass_candle": pass_candle,         # ④ 极端K过滤
             "pass_near_high": pass_near_high,   # ⑤ 近高价过滤
             "pass_score": pass_score,           # ⑥ 加权打分过滤（>0.48 拦）
+            "pass_tqi": pass_tqi,               # ⑦ TQI趋势质量过滤（TQI<thr 拦）
             "pass_filter": (pass_flip and pass_vol and pass_position
                             and pass_candle and pass_near_high),
         })
@@ -153,6 +156,7 @@ def print_funnel(sigs):
     f_candle = sum(1 for s in a4h if not s["pass_candle"])
     f_near = sum(1 for s in a4h if not s["pass_near_high"])
     f_score = sum(1 for s in a4h if not s["pass_score"])
+    f_tqi = sum(1 for s in a4h if not s["pass_tqi"])
     final = [s for s in sigs if s["pass_4h"] and s["pass_filter"]]
     print("  ── 过滤漏斗（与形态页 /api/pattern → pattern_trade.filter_decide 一致）──")
     print(f"     ① SuperTrend 翻转信号总数        : {total}")
@@ -165,6 +169,8 @@ def print_funnel(sigs):
     print(f"     ⑦ ⑤近高价过滤(距高点>3.47ATR) 拦截: {f_near}  (放行 {len(a4h) - f_near})")
     print(f"     ⑧ ⑥加权打分过滤(score>{SCORE_CUT_DEFAULT}) 拦截: {f_score}  "
           f"(放行 {len(a4h) - f_score})")
+    print(f"     ⑨ ⑦TQI趋势质量过滤(TQI<{TQI_THR_DEFAULT}) 拦截: {f_tqi}  "
+          f"(放行 {len(a4h) - f_tqi})")
     print(f"     ⑨ 最终放行开仓                  : {len(final)}  "
           f"(总拦截 {total - len(final)})")
 

@@ -19,6 +19,8 @@ import logging
 import math
 import os
 import time
+
+import numpy as np
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -635,6 +637,7 @@ class FilterFlags:
     candle:     bool = False   # ④ 极端K过滤
     near_high:  bool = False   # ⑤ 近高价过滤（距48根高点>3.47ATR 拦）
     score:      bool = False   # ⑥ 加权打分过滤（多指标尾部惩罚求和 > cut 拦）
+    tqi:        bool = False   # ⑦ TQI趋势质量过滤（TQI<thr 视为低质量震荡，拦）
 
 
 def signal_features(closes: list[float], highs: list[float], lows: list[float],
@@ -669,11 +672,56 @@ def signal_features(closes: list[float], highs: list[float], lows: list[float],
              else 0.0)
     adx_a = ta_adx(highs, lows, closes, 14)
     adx_i = adx_a[i] if (i < len(adx_a) and adx_a[i] is not None) else 0.0
+    # 效率比 ER（Kaufman）：净位移 / 总路径，∈[0,1]。高=趋势流畅，低=震荡无意义。
+    # 参考 self-version.md(LunqFX) / SATS 的 Regime Filter；高 ER=好，故评分时取 low=bad。
+    er_len = 14
+    if i >= er_len:
+        net = abs(closes[i] - closes[i - er_len])
+        path = sum(abs(closes[k] - closes[k - 1]) for k in range(i - er_len + 1, i + 1))
+        er = net / path if path > 0 else 0.0
+    else:
+        er = 0.0
+    # ATR_rel：当前波动相对近 48 根中位数的倍数（≈1 为常态）。
+    # 用相对量而非绝对 ATR%，可消除波动率随市场环境的漂移（拟合显示绝对阈值
+    # 2025=0.43 / 2026=0.78 跨年漂移，相对量收敛到 ≈1.0）。
+    atr_pct_win = [atr[k] / closes[k] * 100.0 for k in range(lo_w, i + 1)
+                   if atr[k] and closes[k] > 0]
+    atr_rel = atr_pct / float(np.median(atr_pct_win)) if atr_pct_win else 0.0
+    # ── ⑦ TQI 趋势质量指数（取自 SATSS / WillyAlgoTrader，权重用脚本默认）──
+    # 4 因子合成 0..1：高=干净趋势，低=震荡无意义。用作第7过滤：TQI<thr 视为低质量震荡，拦截。
+    #   er     = Kaufman 效率比(len20)；vol = ATR/ATR基线(100) 映射 0.6~1.8→0~1；
+    #   struct = 价格在 20 根区间的位置偏离中线程度；mom = 10 根同向K占比。
+    lo100 = max(0, i - 99)
+    atr_base_win = [atr[k] for k in range(lo100, i + 1) if atr[k] and atr[k] > 0]
+    atr_base_v = sum(atr_base_win) / len(atr_base_win) if atr_base_win else 0.0
+    vol_ratio = ai / atr_base_v if atr_base_v > 0 else 1.0
+    tqi_vol = max(0.0, min(1.0, (vol_ratio - 0.6) / 1.2))
+    erl = 20
+    if i >= erl:
+        net20 = abs(closes[i] - closes[i - erl])
+        path20 = sum(abs(closes[k] - closes[k - 1]) for k in range(i - erl + 1, i + 1))
+        er20 = net20 / path20 if path20 > 0 else 0.0
+    else:
+        er20 = 0.0
+    tqi_er = max(0.0, min(1.0, er20))
+    lo20 = max(0, i - 19)
+    sh = max(highs[lo20:i + 1]); slv = min(lows[lo20:i + 1]); sr = sh - slv
+    pos20 = (ci - slv) / sr if sr > 0 else 0.5
+    tqi_struct = max(0.0, min(1.0, abs(pos20 - 0.5) * 2.0))
+    if i >= 10:
+        wc = closes[i] - closes[i - 10]
+        um = sum(1 for k in range(i - 9, i + 1) if closes[k] > closes[k - 1])
+        dm = sum(1 for k in range(i - 9, i + 1) if closes[k] < closes[k - 1])
+        tqi_mom = um / 10.0 if wc > 0 else (dm / 10.0 if wc < 0 else 0.0)
+    else:
+        tqi_mom = 0.0
+    tqi = 0.35 * tqi_er + 0.20 * tqi_vol + 0.25 * tqi_struct + 0.20 * tqi_mom
     return {
         "bars_since_last_flip": bslf,
         "range_position": range_pos,
         "candle_range_ATR": candle_rng,
         "ATR_percent": atr_pct,
+        "ATR_rel": atr_rel,
         "distance_to_range_high_ATR": dist_hi_atr,
         "distance_to_range_low_ATR": dist_lo_atr,
         "upper_wick_ratio": up_r,
@@ -681,41 +729,30 @@ def signal_features(closes: list[float], highs: list[float], lows: list[float],
         "mom12_ATR": mom12,
         "volume_ratio": vol_r,
         "ADX14": adx_i,
+        "efficiency_ratio": er,
+        "TQI": tqi,
+        "TQI_er": tqi_er, "TQI_vol": tqi_vol,
+        "TQI_struct": tqi_struct, "TQI_mom": tqi_mom,
     }
 
 
-# ── ⑥ 加权打分过滤模型（基于 _raw_full.csv 拟合，2026-09 训练）────────────
-# 思路：每个信号已知指标转成方向感知原始值 x；惩罚 b = sigmoid((x-thr)/s)（高=坏）；
-#       score = Σ w*b。多个指标同时进入亏损区 → score 高 → 超 cut 即拦截。
-#       目标：拦掉「大部分」垃圾单，不必全拦（与 ①~⑤ 单指标硬阈值不同，这里是多指标加权分数）。
-# 权重 w 已归一（Σw=1），故 score∈[0,1]；thr/s 由数据最佳单变量切分 + 跨度决定。
+# ── ⑥ 加权打分过滤模型（实盘出场口径重拟合，2026-09）──────────────────────
+# 方法：标签用 bt_pattern_page.backtest 实盘出场（TP1 1.5%+保本+ST跟踪），与线上同源；
+#       best_split 扫切分点 + 置换检验(500次)筛掉多重检验噪声 + 双向交叉验证(2025↔2026)。
+# 关键结论：
+#   1) 9 个指标在实盘标签下几乎全部落入随机噪声（置换分位<80%），只有波动率有效。
+#   2) ATR_percent 绝对阈值跨年漂移（2025训=0.43 / 2026训=0.78）→ 不可靠；
+#      改用 ATR_rel = ATR% / 近48根中位数 后，阈值收敛到 ≈1.0（2025=1.024/2026=1.000），
+#      且高波动侧在两年交叉验证中胜率一致更低（+5.9~+7.6pp）。故 ⑥ 退化为 regime-adjusted 波动率拦截。
+#   3) 单指标时 score = b∈[0,1]，cut 直接控制拦截比例（≈ 拦「当前波动>近期中位」的信号）。
+# 其余 8 个指标权重置 0（live 标签下无稳健信号）；如未来样本增多可重拟合恢复多指标。
 SCORE_MODEL = [
-    {"name": "ATR_percent",          "thr": 1.260, "s": 0.166, "w": 0.053,
-     "get": lambda f, sd: f["ATR_percent"]},
-    {"name": "candle_range_ATR",     "thr": 2.620, "s": 0.339, "w": 0.068,
-     "get": lambda f, sd: f["candle_range_ATR"]},
-    {"name": "dist_break",           "thr": 4.670, "s": 0.841, "w": 0.099,
-     "get": lambda f, sd: f["distance_to_range_high_ATR"] if sd > 0 else f["distance_to_range_low_ATR"]},
-    # range_signed = sd*(range_position-0.5) ∈[-0.18,+0.50]（翻转信号天然偏向极值端）。
-    # 十分位表显示自然断点在 0.39： [0.35,0.39) 胜率42.9%净+137.8U 是好组，
-    # [0.39,0.44) 胜率25.0%净-196.6U、[0.44,0.50) 胜率27.0%净-361.6U 是坏组。
-    # 原 thr=0.418 落在坏组【内部】，只覆盖 12.5% 样本；改 0.390 覆盖 ~20% 且边界落在自然断点上更稳。
-    # s 由 0.057→0.120（≈0.72×std=0.167）：0.39 附近有平滑渐变而非硬跳变。
-    # 注意：s 只影响渐变软硬，不改变 b>0.5 的判定（那等价 x>thr，与 s 无关）。
-    {"name": "range_signed",         "thr": 0.390, "s": 0.120, "w": 0.095,
-     "get": lambda f, sd: sd * (f["range_position"] - 0.5)},
-    {"name": "mom_signed",           "thr": 0.130, "s": 0.584, "w": 0.161,
-     "get": lambda f, sd: sd * f["mom12_ATR"]},
-    {"name": "wick_against",         "thr": 1.690, "s": 0.673, "w": 0.154,
-     "get": lambda f, sd: f["upper_wick_ratio"] if sd > 0 else f["lower_wick_ratio"]},
-    {"name": "bars_since_last_flip", "thr": 88.000, "s": 14.250, "w": 0.125,
-     "get": lambda f, sd: f["bars_since_last_flip"]},
-    {"name": "ADX14",                "thr": 13.900, "s": 3.367, "w": 0.117,
-     "get": lambda f, sd: f["ADX14"]},
-    {"name": "volume_ratio",         "thr": 0.580, "s": 0.676, "w": 0.128,
-     "get": lambda f, sd: f["volume_ratio"]},
+    {"name": "ATR_rel",              "thr": 1.02, "s": 0.18, "w": 1.0,
+     "get": lambda f, sd: f["ATR_rel"]},
 ]
-SCORE_CUT_DEFAULT = 0.48
+SCORE_CUT_DEFAULT = 0.40
+TQI_THR_DEFAULT = 0.40   # ⑦ 阈值：回测(2026-09)显示 0.40 为 ⑦+⑥ 合计最优(+0.22U)、
+                          # 2026 +4.01U、回撤最低(3.78%)；TQI<thr 拦（低质量震荡）
 
 
 def signal_score(feat: dict, sd: int) -> float:
@@ -729,7 +766,8 @@ def signal_score(feat: dict, sd: int) -> float:
 
 
 def filter_decide(feat: dict, sd: int, flags: FilterFlags,
-                  score_cut: float = SCORE_CUT_DEFAULT) -> tuple[bool, list[str]]:
+                  score_cut: float = SCORE_CUT_DEFAULT,
+                  tqi_thr: float = TQI_THR_DEFAULT) -> tuple[bool, list[str]]:
     """对单笔信号应用 5 条规则 + ⑥ 加权打分。返回 (是否放行, [拦截原因...])。
 
     规则（趋势形态识别.md + 近高价 + 加权打分，均可在 _raw_full.csv 回测验证）：
@@ -759,6 +797,8 @@ def filter_decide(feat: dict, sd: int, flags: FilterFlags,
         sc = signal_score(feat, sd)
         if sc > score_cut:
             reasons.append(f"加权打分过高({sc:.2f}>{score_cut})")
+    if flags.tqi and feat["TQI"] < tqi_thr:
+        reasons.append(f"趋势质量低(TQI={feat['TQI']:.2f}<{tqi_thr})")
     return (len(reasons) == 0, reasons)
 
 
