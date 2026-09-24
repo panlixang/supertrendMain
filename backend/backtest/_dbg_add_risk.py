@@ -78,7 +78,9 @@ out_cols = list(rows[0].keys()) + ["risk_score", "pause_ST"]
 new = []
 for r in rows:
     risk = risk_of(r, recent)
-    row = dict(r); row.update({"risk_score": round(risk, 1), "pause_ST": 1 if risk > 60 else 0})
+    sig_norm = "1" if r["signal"] in ("1", "buy") else ("-1" if r["signal"] in ("-1", "sell") else r["signal"])
+    row = dict(r); row["signal"] = sig_norm
+    row.update({"risk_score": round(risk, 1), "pause_ST": 1 if risk > 60 else 0})
     new.append(row)
     recent.append(f(r["pnl_pct"]))
 
