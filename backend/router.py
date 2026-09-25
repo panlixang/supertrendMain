@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-import backtest as bt
+import backtest_engine as bt
 import candle_store
 import instruments
 import notify
