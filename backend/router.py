@@ -134,16 +134,17 @@ async def _pattern_candles(symbol: str, tf: str, limit: int) -> list:
 
 @router.get("/api/pattern")
 async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
-                     filter_d: bool = False):
-    """形态识别页（已改为当前回测策略）：基础周期 SuperTrend 翻转 + v4-exit 出场。
+                     filter_by_regime: bool = False):
+    """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转 + v4-exit 出场 + 六大市场状态判定。
 
-    当前策略（与回测完全一致）：
+    策略：
       - 信号：基础周期原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
       - 出场 v4-exit：SL = 1.5×ATR；TP = 2×ATR 时平半仓，剩余仓位尾随至下一 ST 翻转；
         若 H=300 根内未出现翻转，则在 H 处强制平仓。
-    不做任何 4h 形态 / 规则 / 打分过滤（回测已验证这些过滤不增收益、反而漏单）。
-    返回的每笔信号含：entry 价、SL/TP 价、exit 价、exit 类型(sl/tp/st)、pnl(%)，
-    以及该窗口的策略统计（胜率 / 均盈 / 盈亏比 / PF / t）。
+      - 行情分类：趋势启动期、趋势运行期、趋势衰减期、震荡吸收期、假突破期、恐慌释放期。
+
+    filter_by_regime=True 时只保留可交易状态（趋势启动期/运行期/恐慌释放期）的信号。
+    返回每笔信号的完整行情诊断（regime, confidence, tradeable, metrics）。
     """
     symbol = (symbol or "BTCUSDT").strip().upper()
     base = await _pattern_candles(symbol, base_tf, limit)
@@ -197,12 +198,13 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
             return ("st", closes[last], (closes[last] - entry) / entry * 100, last)
         return ("st", closes[last], (entry - closes[last]) / entry * 100, last)
 
-    # D 过滤所需前置指标（仅 filter_d 时真正使用，开销极小）
-    ma30 = ta_sma(closes, 30)
-    adx14 = ta_adx(highs, lows, closes, 14)
+    # 计算行情分类所需指标
+    from market_regime import classify_market_regime
+    adx14_values = ta_adx(highs, lows, closes, 14)
 
     signals, pnls = [], []
-    recent = []  # 近 3 笔「收盘价→下一翻转」盈亏，用于 D 的亏损反馈项
+    regime_stats = {}  # 统计各状态的信号数量
+
     for f in flips:
         i = f["i"]
         if i >= len(bcandles):
@@ -212,43 +214,27 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
         if a is None or (isinstance(a, float) and math.isnan(a)):
             continue
         entry = closes[i]
-        # 近 3 笔亏损反馈用「收盘价→下一翻转」盈亏（与 _dbg_add_risk.py 口径一致）
-        pi = bisect.bisect_right(flip_idx, i)
-        nfi = flip_idx[pi] if pi < len(flip_idx) else i + H
-        c2c = (closes[min(nfi, len(closes) - 1)] - entry) / entry * 100 if sd == 1 else \
-              (entry - closes[min(nfi, len(closes) - 1)]) / entry * 100
-        keep = True
-        if filter_d:
-            # ── 真实 risk_score（复刻 _dbg_add_risk.py）：趋势衰减 + ER + 区间/波动 + 近3笔亏损 ──
-            ma_i = ma30[i] if (i < len(ma30) and ma30[i] is not None) else entry
-            ma_i1 = ma30[i - 1] if (i > 0 and ma30[i - 1] is not None) else ma_i
-            ma30_slope = (ma_i - ma_i1) / a if a else 0.0
-            if i >= 20:
-                num = abs(closes[i] - closes[i - 20])
-                den = sum(abs(closes[j] - closes[j - 1]) for j in range(i - 19, i + 1))
-                er20 = num / den if den else 0.0
-            else:
-                er20 = 0.0
-            range_atr = (highs[i] - lows[i]) / a if a else 0.0
-            atr_pct = a / entry * 100 if entry else 0.0
-            losses = sum(1 for x in recent[-3:] if x < 0)
-            cnt = min(3, len(recent))
-            b_fb = (losses / cnt * 40) if cnt else 0.0
-            a_ma30 = 20 if ma30_slope < 0 else (10 if ma30_slope < 0.2 else 0)
-            a_er = 20 if er20 < 0.1 else (10 if er20 < 0.2 else 0)
-            c_range = 10 if range_atr > 2.0 else (5 if range_atr > 1.5 else 0)
-            c_vol = 10 if atr_pct > 2.5 else (5 if atr_pct > 1.8 else 0)
-            risk_score = a_ma30 + a_er + b_fb + c_range + c_vol
-            pos = bisect.bisect_left(flip_idx, i)
-            bslf = (i - flip_idx[pos - 1]) if pos > 0 else 9999
-            adx_i = adx14[i] if (i < len(adx14) and adx14[i] is not None) else 0.0
-            # D 加权评分：risk_score*0.4 + bars*0.3 + ADX*0.3；>60 视为低质量跳过
-            d_score = SignalFilter(strategy="D").calculate_filter_score(
-                {"risk_score": risk_score, "bars_since_flip": bslf, "ADX14": adx_i})
-            keep = d_score <= 60
-        recent.append(c2c)
-        if not keep:
+
+        # ========== 行情趋势分类 ==========
+        regime_info = classify_market_regime(
+            closes=closes[:i+1],
+            highs=highs[:i+1],
+            lows=lows[:i+1],
+            atr_values=atr[:i+1],
+            adx_values=adx14_values[:i+1],
+            flip_indices=flip_idx,
+            current_idx=i,
+            signal_direction=sd,
+        )
+
+        # 统计各状态数量
+        regime_key = regime_info["regime"]
+        regime_stats[regime_key] = regime_stats.get(regime_key, 0) + 1
+
+        # 按行情状态过滤
+        if filter_by_regime and not regime_info["tradeable"]:
             continue
+
         sl = entry - 1.5 * a if sd == 1 else entry + 1.5 * a
         tp = entry + 2.0 * a if sd == 1 else entry - 2.0 * a
         etype, eprice, pnl, ei = v4_exit(i, sd, sl, tp)
@@ -259,6 +245,12 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
             "sl": round(sl, 6), "tp": round(tp, 6),
             "exit_ts": bcandles[ei]["ts"], "exit_price": round(eprice, 6),
             "exit_type": etype, "pnl": round(pnl, 3),
+            # 行情状态诊断
+            "regime": regime_info["regime"],
+            "regime_cn": regime_info["regime_cn"],
+            "confidence": round(regime_info["confidence"], 1),
+            "tradeable": regime_info["tradeable"],
+            "metrics": regime_info["metrics"],
         })
 
     # ── 窗口策略统计（与回测同口径）──
@@ -296,6 +288,7 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
             "signals": signals,
             "stats": stats,
         },
+        "regime_stats": regime_stats,  # 各状态信号数量统计
     }
 
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """为 st_signals_1h.csv 的 808 笔信号，逐笔统计：
   时间 / 信号 / 出入场 / 入场后最高值 / 最低值 / 止盈止损 / 盈亏 / 4h方向
+  趋势区间（market_regime 六态分类：趋势启动/运行/延续/衰减期、假突破期、震荡吸收期、恐慌释放期）
   A. 前20根  涨跌幅 / ATR变化 / ER变化 / ADX变化 / ST距离变化
   B. 前50根  ST翻转次数 / 高低点次数 / 趋势持续时间
   C. 前100根 趋势生命周期 / 横盘周期 / 波动周期
@@ -18,8 +19,9 @@ import sys, os, json, csv, math, calendar, datetime, bisect
 
 BASE = r"d:\个人项目代码\supertrendMain\backend"
 sys.path.insert(0, BASE)
-from indicators import super_trend, ta_adx
+from indicators import super_trend, ta_adx, ta_sma
 import history
+import market_regime
 
 OUT_JSON = os.path.join(BASE, "backtest", "btc_1h_full.json")
 MASTER = os.path.join(BASE, "backtest", "st_signals_1h.csv")
@@ -39,6 +41,18 @@ def load_base():
     json.dump({"base": base}, open(OUT_JSON, "w", encoding="utf-8"))
     print("已保存", len(base), "根 ->", OUT_JSON)
     return base
+
+def load_h4():
+    OUT = os.path.join(BASE, "backtest", "btc_4h_full.json")
+    if os.path.exists(OUT):
+        print("加载缓存全量 4h:", OUT)
+        return json.load(open(OUT, encoding="utf-8"))["h4"]
+    print("拉取 BTC-USDT 4h 全量历史（约 9200 根，覆盖 2022-08 起）…")
+    cs = history.fetch_candles("4h", limit=9200, symbol="BTC-USDT")
+    h4 = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol} for c in cs]
+    json.dump({"h4": h4}, open(OUT, "w", encoding="utf-8"))
+    print("已保存", len(h4), "根 ->", OUT)
+    return h4
 
 # ── 2. 逐bar指标序列 ─────────────────────────────────────────────
 def build_series(base):
@@ -91,6 +105,12 @@ def main():
     c, h, l = S["c"], S["h"], S["l"]
     ts = S["ts"]; n = S["n"]; flips = S["flips"]
     adx, atr_pct, er20, st_dist = S["adx"], S["atr_pct"], S["er20"], S["st_dist"]
+    ma30_1h = ta_sma(c, 30)
+
+    # 4h 全量历史 + MA30
+    h4 = load_h4()
+    c4 = [b["c"] for b in h4]; ts4 = [b["ts"] for b in h4]
+    ma30_4h = ta_sma(c4, 30)
 
     base_sec = {int(b["ts"] / 1000): i for i, b in enumerate(base)}
 
@@ -115,6 +135,35 @@ def main():
             "盈亏": r["pnl_pct"],
             "4h方向": r["htf_dir"],
         }
+
+        # ── 行情趋势区间（market_regime 六态分类，截断到信号bar）──
+        g = market_regime.classify_market_regime(
+            S["c"][:i + 1], S["h"][:i + 1], S["l"][:i + 1],
+            S["atr"][:i + 1], S["adx"][:i + 1], flips, i, int(r["signal"]))
+        rec["趋势区间"] = g["regime_cn"]
+        rec["区间置信度"] = g["confidence"]
+        rec["区间可交易"] = g["tradeable"]
+
+        # ── MA30 斜率 / 距离（1h 与 4h）──
+        price = c[i]
+        # 1h MA30：斜率 = 过去10根 MA30 累计变化%；距离 = 信号价相对 MA30 的偏离%
+        m1 = ma30_1h[i]
+        if m1:
+            rec["1h_MA30斜率"] = round((ma30_1h[i] - ma30_1h[i - 10]) / ma30_1h[i - 10] * 100, 4) if (i >= 10 and ma30_1h[i - 10]) else ""
+            rec["1h_MA30距离"] = round((price - m1) / m1 * 100, 4)
+        else:
+            rec["1h_MA30斜率"] = rec["1h_MA30距离"] = ""
+        # 4h：取信号时刻之前最近一根 4h K
+        j4 = bisect.bisect_right(ts4, ts[i]) - 1
+        if j4 >= 10:
+            m4 = ma30_4h[j4]
+            if m4:
+                rec["4h_MA30斜率"] = round((ma30_4h[j4] - ma30_4h[j4 - 10]) / ma30_4h[j4 - 10] * 100, 4) if ma30_4h[j4 - 10] else ""
+                rec["4h_MA30距离"] = round((price - m4) / m4 * 100, 4)
+            else:
+                rec["4h_MA30斜率"] = rec["4h_MA30距离"] = ""
+        else:
+            rec["4h_MA30斜率"] = rec["4h_MA30距离"] = ""
 
         # ── A. 前20根 [i-20, i-1] ──
         a0, a1 = max(0, i - 20), i - 1
@@ -158,6 +207,8 @@ def main():
         out.append(rec)
 
     header = ["时间", "信号", "出入场", "入场后最高值", "最低值", "止盈止损", "盈亏", "4h方向",
+              "趋势区间", "区间置信度", "区间可交易",
+              "1h_MA30斜率", "4h_MA30斜率", "1h_MA30距离", "4h_MA30距离",
               "前20根_涨跌幅", "前20根_ATR变化", "前20根_ER变化", "前20根_ADX变化", "前20根_ST距离变化",
               "前50根_ST翻转次数", "前50根_高低点次数", "前50根_趋势持续时间",
               "前100根_趋势生命周期", "前100根_横盘周期", "前100根_波动周期"]
