@@ -24,8 +24,9 @@ import strategy
 import trade
 import trade_log
 from history import fetch_candles, load_history
-from indicators import compute, super_trend
+from indicators import compute, super_trend, ta_sma, ta_adx
 from pattern_recog import recognize as recognize_pattern
+from backtest.signal_filter import SignalFilter
 from state import BIAS_TFS, MAX_SYMBOLS, TF_CONFIG, TFS, state
 
 router = APIRouter()
@@ -132,22 +133,23 @@ async def _pattern_candles(symbol: str, tf: str, limit: int) -> list:
 
 
 @router.get("/api/pattern")
-async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600):
-    """形态识别页：基础周期 SuperTrend 信号 + 4h 趋势形态识别过滤。
+async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
+                     filter_d: bool = False):
+    """形态识别页（已改为当前回测策略）：基础周期 SuperTrend 翻转 + v4-exit 出场。
 
-    - base : 主图 K 线 + 原始 SuperTrend 信号（对应 supertrend原始代码.md：
-             ATR 周期=10, factor=3.0，经典 trend 翻转）+ 信号；
-             每个 SuperTrend 翻转点附 4h 形态过滤结论（allow / block）。
-             注意：此处使用「原始信号」参数，与首页默认（periods=15, multiplier=9.1）无关。
-    - h4   : 4h K 线 + 极值点 + 每根 K 的形态方向（dir / label）。
+    当前策略（与回测完全一致）：
+      - 信号：基础周期原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
+      - 出场 v4-exit：SL = 1.5×ATR；TP = 2×ATR 时平半仓，剩余仓位尾随至下一 ST 翻转；
+        若 H=300 根内未出现翻转，则在 H 处强制平仓。
+    不做任何 4h 形态 / 规则 / 打分过滤（回测已验证这些过滤不增收益、反而漏单）。
+    返回的每笔信号含：entry 价、SL/TP 价、exit 价、exit 类型(sl/tp/st)、pnl(%)，
+    以及该窗口的策略统计（胜率 / 均盈 / 盈亏比 / PF / t）。
     """
     symbol = (symbol or "BTCUSDT").strip().upper()
     base = await _pattern_candles(symbol, base_tf, limit)
-    # 4h 取数上限调大（原 500≈83天），覆盖更长回看窗口，避免长周期下 4h 形态"数据不足"
-    h4 = await _pattern_candles(symbol, "4h", 2000)
     if not base:
         return {"symbol": symbol, "base_tf": base_tf, "error": "no_base_candles",
-                "base": None, "h4": None}
+                "base": None}
 
     bcandles = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol}
                 for c in base]
@@ -156,71 +158,128 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
     lows = [c["l"] for c in bcandles]
     closes = [c["c"] for c in bcandles]
     vols = [c["vol"] for c in bcandles]
-    # 形态识别页专用「原始 SuperTrend 信号」：ATR 周期=10, factor=3.0（对应 supertrend原始代码.md）。
-    # 与首页默认参数（periods=15, multiplier=9.1）无关，仅本页使用。
+    # 当前策略信号：原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
     st = super_trend(opens, highs, lows, closes, periods=10, multiplier=3.0, change_atr=True)
     st["up_plot"] = [_finite(v) for v in st["up_plot"]]
     st["dn_plot"] = [_finite(v) for v in st["dn_plot"]]
 
-    signals = []
-    h4dict = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c} for c in h4] if h4 else []
-    hpat = recognize_pattern(h4dict) if h4 else {"pattern": [], "pivots": []}
-    for p in hpat.get("pattern", []):
-        for k in ("adx", "ma20", "ma60", "dph", "dpl", "or_up", "or_down"):
-            if k in p:
-                p[k] = _finite(p[k])
-    for pv in hpat.get("pivots", []):
-        if "price" in pv:
-            pv["price"] = _finite(pv["price"])
-    if h4:
-        pat = hpat["pattern"]
-        pmap = {p["ts"]: p for p in pat}
-        pts = [p["ts"] for p in pat]
+    atr = st["atr"]
+    flips = st["flips"]
+    flip_idx = [f["i"] for f in flips]
 
-        def dir_at(ts: int) -> Optional[int]:
-            idx = bisect.bisect_right(pts, ts) - 1
-            return pmap[pts[idx]]["dir"] if idx >= 0 else None
+    def v4_exit(i, sd, sl, tp, H=300):
+        """v4-exit：返回 (exit_type, exit_price, pnl_pct, exit_i)。"""
+        entry = closes[i]
+        p = bisect.bisect_right(flip_idx, i)
+        nf = flips[p]["i"] if p < len(flips) else i + H
+        rest_close = lambda: closes[nf] if nf < len(closes) else closes[-1]
+        end = min(i + H + 1, len(closes))
+        for j in range(i + 1, end):
+            if sd == 1:
+                if lows[j] <= sl:
+                    return ("sl", sl, (sl - entry) / entry * 100, j)
+                if highs[j] >= tp:
+                    rc = rest_close()
+                    return ("tp", tp, 0.5 * (tp - entry) / entry * 100 + 0.5 * (rc - entry) / entry * 100, j)
+                if j == nf:
+                    return ("st", closes[min(nf, len(closes) - 1)], (closes[min(nf, len(closes) - 1)] - entry) / entry * 100, j)
+            else:
+                if highs[j] >= sl:
+                    return ("sl", sl, (sl - entry) / entry * 100, j)
+                if lows[j] <= tp:
+                    rc = rest_close()
+                    return ("tp", tp, 0.5 * (entry - tp) / entry * 100 + 0.5 * (entry - rc) / entry * 100, j)
+                if j == nf:
+                    return ("st", closes[min(nf, len(closes) - 1)], (entry - closes[min(nf, len(closes) - 1)]) / entry * 100, j)
+        last = min(i + H, len(closes) - 1)
+        if sd == 1:
+            return ("st", closes[last], (closes[last] - entry) / entry * 100, last)
+        return ("st", closes[last], (entry - closes[last]) / entry * 100, last)
 
-        for f in st["flips"]:
-            i = f["i"]
-            if i >= len(bcandles):
-                continue
-            c = bcandles[i]
-            sd = 1 if f["type"] == "buy" else -1
-            pdir = dir_at(c["ts"])
-            # ① 4h 形态对齐闸门（不再拦「无趋势」：pdir==0 也正常下单，仅拦反向/数据不足）。
-            # 依据 BTC/ETH × 2025全年/2026H1 四窗口回测：放行 dir==0 → 收益提升；
-            # ETH 2026H1 最大回撤 9.76% → 4.40%、最长连亏 3→2。
-            if pdir is None:
-                h4_ok, h4_reason = False, "4h 数据不足"
-            elif pdir == 0 or pdir == sd:
-                h4_ok, h4_reason = True, ("4h 无趋势(正常下单)" if pdir == 0 else "4h 同向")
+    # D 过滤所需前置指标（仅 filter_d 时真正使用，开销极小）
+    ma30 = ta_sma(closes, 30)
+    adx14 = ta_adx(highs, lows, closes, 14)
+
+    signals, pnls = [], []
+    recent = []  # 近 3 笔「收盘价→下一翻转」盈亏，用于 D 的亏损反馈项
+    for f in flips:
+        i = f["i"]
+        if i >= len(bcandles):
+            continue
+        sd = 1 if f["type"] == "buy" else -1
+        a = atr[i]
+        if a is None or (isinstance(a, float) and math.isnan(a)):
+            continue
+        entry = closes[i]
+        # 近 3 笔亏损反馈用「收盘价→下一翻转」盈亏（与 _dbg_add_risk.py 口径一致）
+        pi = bisect.bisect_right(flip_idx, i)
+        nfi = flip_idx[pi] if pi < len(flip_idx) else i + H
+        c2c = (closes[min(nfi, len(closes) - 1)] - entry) / entry * 100 if sd == 1 else \
+              (entry - closes[min(nfi, len(closes) - 1)]) / entry * 100
+        keep = True
+        if filter_d:
+            # ── 真实 risk_score（复刻 _dbg_add_risk.py）：趋势衰减 + ER + 区间/波动 + 近3笔亏损 ──
+            ma_i = ma30[i] if (i < len(ma30) and ma30[i] is not None) else entry
+            ma_i1 = ma30[i - 1] if (i > 0 and ma30[i - 1] is not None) else ma_i
+            ma30_slope = (ma_i - ma_i1) / a if a else 0.0
+            if i >= 20:
+                num = abs(closes[i] - closes[i - 20])
+                den = sum(abs(closes[j] - closes[j - 1]) for j in range(i - 19, i + 1))
+                er20 = num / den if den else 0.0
             else:
-                h4_ok, h4_reason = False, "4h 反向"
-            # ② 5 条规则 + ⑥ 加权打分过滤（品种独立开关）—— 与 pattern_trade.filter_decide 一致
-            sc = pattern_trade.trader.symbols.get(symbol)
-            feat = pattern_trade.signal_features(closes, highs, lows, opens, vols,
-                                                 st["atr"], st["flips"], i)
-            cut = (sc.filter_score_cut if (sc and sc.filter_score_cut is not None)
-                   else pattern_trade.SCORE_CUT_DEFAULT)
-            flags = pattern_trade.FilterFlags() if sc is None else pattern_trade.FilterFlags(
-                flip=sc.filter_flip, vol=sc.filter_vol,
-                position=sc.filter_position, candle=sc.filter_candle,
-                near_high=sc.filter_near_high, score=sc.filter_score)
-            filter_allow, filter_reasons = pattern_trade.filter_decide(feat, sd, flags,
-                                                                       score_cut=cut)
-            if not h4_ok:
-                decision, reason = "block", h4_reason
-            elif not filter_allow:
-                decision, reason = "block", "过滤拦截:" + "; ".join(filter_reasons)
-            else:
-                decision = "allow"
-                reason = h4_reason + (" / " + "; ".join(filter_reasons) if filter_reasons else "")
-            signals.append({
-                "ts": c["ts"], "type": f["type"], "dir": sd,
-                "price": round(c["c"], 6), "decision": decision, "reason": reason,
-                "pdir": pdir,
-            })
+                er20 = 0.0
+            range_atr = (highs[i] - lows[i]) / a if a else 0.0
+            atr_pct = a / entry * 100 if entry else 0.0
+            losses = sum(1 for x in recent[-3:] if x < 0)
+            cnt = min(3, len(recent))
+            b_fb = (losses / cnt * 40) if cnt else 0.0
+            a_ma30 = 20 if ma30_slope < 0 else (10 if ma30_slope < 0.2 else 0)
+            a_er = 20 if er20 < 0.1 else (10 if er20 < 0.2 else 0)
+            c_range = 10 if range_atr > 2.0 else (5 if range_atr > 1.5 else 0)
+            c_vol = 10 if atr_pct > 2.5 else (5 if atr_pct > 1.8 else 0)
+            risk_score = a_ma30 + a_er + b_fb + c_range + c_vol
+            pos = bisect.bisect_left(flip_idx, i)
+            bslf = (i - flip_idx[pos - 1]) if pos > 0 else 9999
+            adx_i = adx14[i] if (i < len(adx14) and adx14[i] is not None) else 0.0
+            # D 加权评分：risk_score*0.4 + bars*0.3 + ADX*0.3；>60 视为低质量跳过
+            d_score = SignalFilter(strategy="D").calculate_filter_score(
+                {"risk_score": risk_score, "bars_since_flip": bslf, "ADX14": adx_i})
+            keep = d_score <= 60
+        recent.append(c2c)
+        if not keep:
+            continue
+        sl = entry - 1.5 * a if sd == 1 else entry + 1.5 * a
+        tp = entry + 2.0 * a if sd == 1 else entry - 2.0 * a
+        etype, eprice, pnl, ei = v4_exit(i, sd, sl, tp)
+        pnls.append(pnl)
+        signals.append({
+            "ts": bcandles[i]["ts"], "type": f["type"], "dir": sd,
+            "price": round(entry, 6),
+            "sl": round(sl, 6), "tp": round(tp, 6),
+            "exit_ts": bcandles[ei]["ts"], "exit_price": round(eprice, 6),
+            "exit_type": etype, "pnl": round(pnl, 3),
+        })
+
+    # ── 窗口策略统计（与回测同口径）──
+    n = len(pnls)
+    stats = {"n": n}
+    if n:
+        mean = sum(pnls) / n
+        wins = [x for x in pnls if x > 0]
+        losses = [x for x in pnls if x <= 0]
+        aw = sum(wins) / len(wins) if wins else 0.0
+        al = sum(losses) / len(losses) if losses else 0.0
+        w = sum(wins)
+        l = -sum(losses)
+        var = sum((x - mean) ** 2 for x in pnls) / (n - 1) if n > 1 else 0.0
+        stats = {
+            "n": n,
+            "win_rate": round(len(wins) / n * 100, 1),
+            "avg_pnl": round(mean, 3),
+            "pl_ratio": round(aw / abs(al), 2) if al else None,
+            "pf": round(w / l, 2) if l > 0 else None,
+            "t": round(mean / math.sqrt(var / n), 2) if var > 0 else 0.0,
+        }
 
     return {
         "symbol": symbol,
@@ -234,12 +293,7 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
                 "trend": st["trend"],
             },
             "signals": signals,
-        },
-        "h4": {
-            "candles": [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c}
-                       for c in h4],
-            "pivots": hpat["pivots"],
-            "pattern": hpat["pattern"],
+            "stats": stats,
         },
     }
 

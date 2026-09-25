@@ -104,82 +104,28 @@ function drawMain(el, data) {
     )
   );
 
-  // SuperTrend 信号标记（按 4h 形态过滤结论上色）
-  const markers = [...base.signals]
-    .sort((a, b) => a.ts - b.ts)
-    .map((s) => {
-      const allow = s.decision === "allow";
-      const isBuy = s.type === "buy";
-      return {
-        time: toT(s.ts),
-        position: isBuy ? "belowBar" : "aboveBar",
-        color: allow ? (isBuy ? C.up : C.down) : C.neutral,
-        shape: isBuy ? "arrowUp" : "arrowDown",
-        text: allow ? (isBuy ? "买" : "卖") : isBuy ? "买✕" : "卖✕",
-      };
-    });
-  candle.setMarkers(markers);
-
-  chart.timeScale().fitContent();
-  return chart;
-}
-
-function drawH4(el, data) {
-  const chart = createChart(el, chartOptions(el));
-  const h4 = data.h4;
-  const candles = h4.candles;
-  const pattern = h4.pattern;
-
-  const candle = chart.addCandlestickSeries({
-    upColor: C.up, downColor: C.down,
-    borderUpColor: C.up, borderDownColor: C.down,
-    wickUpColor: C.up, wickDownColor: C.down,
-    priceLineColor: "#ffffff44",
+  // 当前策略标记：入场(ST翻转箭头) + 出场(v4-exit 圆点，按盈亏上色，标注 SL/TP/ST)
+  const mk = [...base.signals].flatMap((s) => {
+    const isBuy = s.type === "buy";
+    const entry = {
+      time: toT(s.ts),
+      position: isBuy ? "belowBar" : "aboveBar",
+      color: isBuy ? C.up : C.down,
+      shape: isBuy ? "arrowUp" : "arrowDown",
+      text: isBuy ? "买" : "卖",
+    };
+    const win = s.pnl > 0;
+    const exit = {
+      time: toT(s.exit_ts),
+      position: isBuy ? "aboveBar" : "belowBar",
+      color: win ? C.up : C.down,
+      shape: "circle",
+      text: (s.exit_type || "").toUpperCase(),
+    };
+    return [entry, exit];
   });
-  candle.setData(
-    candles.map((c) => ({
-      time: toT(c.ts), open: c.o, high: c.h, low: c.l, close: c.c,
-    }))
-  );
-
-  // MA20 / MA60
-  const ma20 = chart.addLineSeries({ color: C.ma20, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-  const ma60 = chart.addLineSeries({ color: C.ma60, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-  ma20.setData(
-    candles.map((c, i) =>
-      pattern[i]?.ma20 == null ? { time: toT(c.ts) } : { time: toT(c.ts), value: pattern[i].ma20 }
-    )
-  );
-  ma60.setData(
-    candles.map((c, i) =>
-      pattern[i]?.ma60 == null ? { time: toT(c.ts) } : { time: toT(c.ts), value: pattern[i].ma60 }
-    )
-  );
-
-  // 极值点标记（波峰=橙，波谷=蓝）
-  const pivots = (h4.pivots || []).map((p) => ({
-    time: toT(p.ts),
-    position: p.type === "H" ? "aboveBar" : "belowBar",
-    color: p.type === "H" ? C.ma20 : C.ma60,
-    shape: "circle",
-    text: p.type,
-  }));
-  candle.setMarkers(pivots);
-
-  // 形态方向色带（顶部细条）：绿=上行，红=下行，灰=无明显趋势
-  const pat = chart.addHistogramSeries({ priceScaleId: "pat" });
-  chart.priceScale("pat").applyOptions({ scaleMargins: { top: 0, bottom: 0.82 } });
-  pat.setData(
-    candles.map((c, i) => {
-      const d = pattern[i]?.dir;
-      if (d == null) return { time: toT(c.ts), value: 0, color: C.neutral };
-      return {
-        time: toT(c.ts),
-        value: d,
-        color: d === 1 ? "#00c9a766" : d === -1 ? "#e0526366" : "#6c748633",
-      };
-    })
-  );
+  mk.sort((a, b) => a.time - b.time);
+  candle.setMarkers(mk);
 
   chart.timeScale().fitContent();
   return chart;
@@ -191,10 +137,10 @@ export default function PatternPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [filterD, setFilterD] = useState(false);
 
   const mainRef = useRef(null);
-  const h4Ref = useRef(null);
-  const charts = useRef({ main: null, h4: null });
+  const charts = useRef({ main: null });
   const reqId = useRef(0);
 
   const load = async (sym, tf) => {
@@ -202,7 +148,7 @@ export default function PatternPage() {
     setError(null);
     const id = ++reqId.current;
     try {
-      const r = await fetch(`/api/pattern?symbol=${encodeURIComponent(sym)}&base_tf=${tf}`);
+      const r = await fetch(`/api/pattern?symbol=${encodeURIComponent(sym)}&base_tf=${tf}${filterD ? "&filter_d=1" : ""}`);
       const j = await r.json().catch(() => null);
       if (id !== reqId.current) return;
       if (!r.ok || !j) {
@@ -231,50 +177,37 @@ export default function PatternPage() {
   useEffect(() => {
     load(symbol, baseTf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, baseTf]);
+  }, [symbol, baseTf, filterD]);
 
   useEffect(() => {
     if (!data || !data.base) return;
     if (charts.current.main) { charts.current.main.remove(); charts.current.main = null; }
-    if (charts.current.h4) { charts.current.h4.remove(); charts.current.h4 = null; }
 
-    const instances = [];
     if (mainRef.current) {
       charts.current.main = drawMain(mainRef.current, data);
-      instances.push([mainRef.current, charts.current.main]);
-    }
-    if (h4Ref.current && data.h4) {
-      charts.current.h4 = drawH4(h4Ref.current, data);
-      instances.push([h4Ref.current, charts.current.h4]);
     }
 
     const ro = new ResizeObserver(() => {
       if (charts.current.main && mainRef.current)
         charts.current.main.applyOptions({ width: mainRef.current.clientWidth, height: mainRef.current.clientHeight });
-      if (charts.current.h4 && h4Ref.current)
-        charts.current.h4.applyOptions({ width: h4Ref.current.clientWidth, height: h4Ref.current.clientHeight });
     });
     if (mainRef.current) ro.observe(mainRef.current);
-    if (h4Ref.current) ro.observe(h4Ref.current);
 
     return () => {
       ro.disconnect();
       if (charts.current.main) { charts.current.main.remove(); charts.current.main = null; }
-      if (charts.current.h4) { charts.current.h4.remove(); charts.current.h4 = null; }
     };
   }, [data]);
 
   const sigs = data?.base?.signals || [];
-  const allowN = sigs.filter((s) => s.decision === "allow").length;
-  const blockN = sigs.length - allowN;
-  const lastPat = (data?.h4?.pattern || []).filter((p) => p.dir != null).slice(-1)[0];
+  const stats = data?.base?.stats || { n: 0 };
 
   return (
     <div style={{ display: "flex", height: "100%", minWidth: 0, color: "#e8eaed" }}>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       {/* 工具栏 */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid #1e1e1e", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 14, fontWeight: 700 }}>形态识别</span>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>当前策略 · ST翻转 + v4-exit</span>
         <label style={{ fontSize: 12, color: "#8b93a0" }}>
           品种
           <input
@@ -290,42 +223,35 @@ export default function PatternPage() {
             {BASE_TFS.map((t) => (<option key={t} value={t}>{t}</option>))}
           </select>
         </label>
-        <span style={{ fontSize: 12, color: "#5a6270" }}>形态识别周期：4h（固定）</span>
+        <span style={{ fontSize: 12, color: "#5a6270" }}>出场：SL 1.5×ATR / TP 2×ATR 半仓 / ST 尾随</span>
+        <label style={{ fontSize: 12, color: "#8b93a0", display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" checked={filterD} onChange={(e) => setFilterD(e.target.checked)} style={{ accentColor: "#00c9a7" }} />
+          D 评分过滤(评分≤60)
+        </label>
         <button onClick={() => load(symbol, baseTf)} style={btn}>刷新</button>
         {loading && <span style={{ fontSize: 12, color: "#8b93a0" }}>加载中…</span>}
         {error && <span style={{ fontSize: 12, color: C.down }}>{error}</span>}
       </div>
 
-      {/* 图例 / 统计 */}
+      {/* 图例 / 策略统计（与回测同口径） */}
       <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "6px 14px", fontSize: 12, color: "#8b93a0", borderBottom: "1px solid #1e1e1e", flexWrap: "wrap" }}>
-        <span><i style={dot(C.up)} /> 上行 / 允许买</span>
-        <span><i style={dot(C.down)} /> 下行 / 允许卖</span>
-        <span><i style={dot(C.neutral)} /> 4h 反向 / Squeeze死水区 / 无突破→不下单（无趋势照常下单）</span>
+        <span><i style={dot(C.up)} /> 买 / 盈利出场</span>
+        <span><i style={dot(C.down)} /> 卖 / 亏损出场</span>
+        <span><i style={dot(C.neutral)} /> 圆点=出场(SL/TP/ST)</span>
+        <span style={{ color: filterD ? C.up : "#5a6270" }}>入场过滤：{filterD ? "D(评分≤60)" : "不过滤(全ST)"}</span>
         <span style={{ marginLeft: "auto" }}>
-          信号 {sigs.length} 笔 · <b style={{ color: C.up }}>允许 {allowN}</b> · <b style={{ color: C.neutral }}>不下单 {blockN}</b>
+          信号 <b style={{ color: "#e8eaed" }}>{stats.n}</b> 笔 · 胜率 <b style={{ color: C.up }}>{stats.win_rate ?? "-"}%</b>
+          · 均盈 <b style={{ color: (stats.avg_pnl ?? 0) >= 0 ? C.up : C.down }}>{(stats.avg_pnl ?? 0) > 0 ? "+" : ""}{stats.avg_pnl ?? "-"}%</b>
         </span>
-        {lastPat && (
-          <span>
-            最新 4h 形态：
-            <b style={{ color: lastPat.dir === 1 ? C.up : lastPat.dir === -1 ? C.down : C.neutral }}>
-              {lastPat.label}
-            </b>
-          </span>
-        )}
+        <span>盈亏比 <b style={{ color: "#e8eaed" }}>{stats.pl_ratio ?? "-"}</b></span>
+        <span>PF <b style={{ color: "#e8eaed" }}>{stats.pf ?? "-"}</b></span>
+        <span>t <b style={{ color: (stats.t ?? 0) >= 2 ? C.up : C.down }}>{stats.t ?? "-"}</b></span>
       </div>
 
-      {/* 主图 */}
-      <div style={{ flex: 1.5, minHeight: 0, position: "relative" }}>
-        <div style={tag("主图 · 原始 SuperTrend 信号 10/3.0（" + baseTf + "）")} />
+      {/* 主图（基础周期） */}
+      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        <div style={tag("主图 · SuperTrend 翻转信号 10/3.0 + v4-exit（" + baseTf + "）")} />
         {data?.base?.candles?.length ? <div ref={mainRef} style={{ position: "absolute", inset: 0, padding: 6 }} /> : (
-          <Empty err={error} loading={loading} />
-        )}
-      </div>
-
-      {/* 4h 副图 */}
-      <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid #1e1e1e", position: "relative" }}>
-        <div style={tag("4h · 趋势形态识别（MA20/MA60 · 极值点 · 方向色带）")} />
-        {data?.h4?.candles?.length ? <div ref={h4Ref} style={{ position: "absolute", inset: 0, padding: 6 }} /> : (
           <Empty err={error} loading={loading} />
         )}
       </div>
