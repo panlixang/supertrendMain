@@ -185,7 +185,8 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
                     return ("st", closes[min(nf, len(closes) - 1)], (closes[min(nf, len(closes) - 1)] - entry) / entry * 100, j)
             else:
                 if highs[j] >= sl:
-                    return ("sl", sl, (sl - entry) / entry * 100, j)
+                    # 空单：SL 在入场价上方，撞止损为亏损 → (entry - sl)
+                    return ("sl", sl, (entry - sl) / entry * 100, j)
                 if lows[j] <= tp:
                     rc = rest_close()
                     return ("tp", tp, 0.5 * (entry - tp) / entry * 100 + 0.5 * (entry - rc) / entry * 100, j)
