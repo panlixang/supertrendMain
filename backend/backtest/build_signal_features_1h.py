@@ -22,6 +22,7 @@ sys.path.insert(0, BASE)
 from indicators import super_trend, ta_adx, ta_sma
 import history
 import market_regime
+import signal_v3
 
 OUT_JSON = os.path.join(BASE, "backtest", "btc_1h_full.json")
 MASTER = os.path.join(BASE, "backtest", "st_signals_1h.csv")
@@ -87,6 +88,15 @@ def build_series(base):
 # ── 3. 工具 ─────────────────────────────────────────────────────
 def msec(s):
     return calendar.timegm(datetime.datetime.strptime(s, "%Y/%m/%d %H:%M").timetuple())
+
+def _num(v):
+    """CSV 列可能是空串；统一转成 float，取不到返回 None（交给闸门按缺数据处理）。"""
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except Exception:
+        return None
 
 def swing_count(h, l, a, b):
     """[a,b] 内 摆动高点 + 低点 个数（±2 邻域）"""
@@ -204,6 +214,30 @@ def main():
         rec["前100根_横盘周期"] = side
         rec["前100根_波动周期"] = volat
 
+        # ── Signal Engine V3：趋势打分闸门（与实盘 pattern_trade 共用 signal_v3 口径）──
+        #   ST Signal → Trend Gate(成熟趋势) / Early Breakout V2(早期启动) → Trend Score
+        #   → Range Penalty(两级 Fuse) → Execute
+        sig_dir = int(r["signal"])
+        bf = signal_v3.base_features(c, S["atr"], atr_pct, er20, st_dist,
+                                     flips, ma30_1h, i, sig_dir)
+        if bf is None:
+            rec["V3_分数"] = rec["V3_路径"] = rec["V3_可执行"] = ""
+        else:
+            # 斜率/距离类直接沿用本表已算好的列，避免二次计算和四舍五入差异
+            feats = dict(bf)
+            feats.update({
+                "slope_htf":    _num(rec.get("4h_MA30斜率")),
+                "dist_base_ma": _num(rec.get("1h_MA30距离")),
+                "dist_htf_ma":  _num(rec.get("4h_MA30距离")),
+                "adx_chg20":    _num(rec.get("前20根_ADX变化")),
+                "er_chg20":     _num(rec.get("前20根_ER变化")),
+                "vol100":       _num(rec.get("前100根_波动周期")),
+            })
+            v = signal_v3.v3_decide(sig_dir, feats)
+            rec["V3_分数"] = v["score"]
+            rec["V3_路径"] = v["path"]
+            rec["V3_可执行"] = "TRUE" if v["execute"] else "FALSE"
+
         out.append(rec)
 
     header = ["时间", "信号", "出入场", "入场后最高值", "最低值", "止盈止损", "盈亏", "4h方向",
@@ -211,7 +245,8 @@ def main():
               "1h_MA30斜率", "4h_MA30斜率", "1h_MA30距离", "4h_MA30距离",
               "前20根_涨跌幅", "前20根_ATR变化", "前20根_ER变化", "前20根_ADX变化", "前20根_ST距离变化",
               "前50根_ST翻转次数", "前50根_高低点次数", "前50根_趋势持续时间",
-              "前100根_趋势生命周期", "前100根_横盘周期", "前100根_波动周期"]
+              "前100根_趋势生命周期", "前100根_横盘周期", "前100根_波动周期",
+              "V3_分数", "V3_路径", "V3_可执行"]
     with open(OUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=header)
         w.writeheader()

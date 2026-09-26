@@ -55,13 +55,7 @@ class SymbolIn(BaseModel):
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
     reverse_close:    Optional[bool]  = None
-    filter_flip:      Optional[bool]  = None
-    filter_vol:       Optional[bool]  = None
-    filter_position:  Optional[bool]  = None
-    filter_candle:    Optional[bool]  = None
-    filter_near_high: Optional[bool]  = None
-    filter_score:     Optional[bool]  = None
-    filter_score_cut: Optional[float] = None
+    filter_v3:        Optional[bool]  = None
 
 
 def _symbols_view() -> list[dict]:
@@ -77,10 +71,7 @@ def _symbols_view() -> list[dict]:
             "sl_pct": sc.sl_pct,
             "move_sl_to_entry": sc.move_sl_to_entry,
             "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
-            "filter_flip": sc.filter_flip, "filter_vol": sc.filter_vol,
-            "filter_position": sc.filter_position, "filter_candle": sc.filter_candle,
-            "filter_near_high": sc.filter_near_high,
-            "filter_score": sc.filter_score, "filter_score_cut": sc.filter_score_cut,
+            "filter_v3": sc.filter_v3,
             "position": None,
         }
         if st and st.position:

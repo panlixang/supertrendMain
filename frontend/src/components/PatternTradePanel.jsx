@@ -52,16 +52,6 @@ const SZ = {
   },
 };
 
-// 7 条规则 + ⑥⑦ 打分过滤（对应 趋势形态识别.md + 近高价 + 打分 + 统计相关性分析），挂在每个品种上（止盈止损上方）
-const FILTER_DEFS = [
-  { key: "filter_flip",     label: "① 连续翻转过滤（bars&lt;20 拦截）" },
-  { key: "filter_vol",      label: "② 波动异常过滤（ATR%&gt;0.8 拦截）" },
-  { key: "filter_position", label: "③ 箱体错误位置（多&lt;0.3 / 空&gt;0.7 拦截）" },
-  { key: "filter_candle",   label: "④ 极端K过滤（candle&gt;3ATR 拦截）" },
-  { key: "filter_near_high", label: "⑤ 近高价过滤（距48根高点&gt;3.47ATR 拦截）" },
-  { key: "filter_score",    label: "⑥ 加权打分过滤（多指标打分&gt;阈值 拦截，只拦大部分垃圾单）" },
-  { key: "filter_stats",    label: "⑦ 统计相关性过滤（risk_score&gt;48 OR bars&lt;45，基于808信号分析）" },
-];
 
 const getJSON = async (url, opts) => {
   const r = await fetch(url, opts);
@@ -445,54 +435,21 @@ export default function PatternTradePanel({ currentSymbol }) {
                 <button style={{ ...SZ.btnGhost, marginLeft: "auto" }} onClick={() => closePos(s.symbol)}>平仓</button>
               )}
             </div>
-            {/* 该品种过滤规则 */}
+            {/* 该品种过滤策略 */}
             <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 6 }}>
               <div style={{ fontSize: 11, color: C.neutral, marginBottom: 4 }}>
-                过滤规则（趋势形态识别.md，勾选即启用）
+                过滤策略（勾选即启用）
               </div>
-              {FILTER_DEFS.map((fd) => (
-                <div style={SZ.row} key={fd.key}>
-                  <input
-                    type="checkbox"
-                    checked={!!s[fd.key]}
-                    onChange={(e) => updateSymbol(s.symbol, { [fd.key]: e.target.checked })}
-                  />
-                  <span style={{ fontSize: 11 }}>{fd.label}</span>
-                  {fd.key === "filter_score" && (
-                    <>
-                      <span style={{ color: C.neutral, fontSize: 11 }}>阈值</span>
-                      <input style={{ ...SZ.inp, width: 58 }} type="number" step={0.01}
-                             defaultValue={s.filter_score_cut ?? 0.48}
-                             onBlur={(e) => {
-                               const v = e.target.value.trim();
-                               if (v !== "") updateSymbol(s.symbol, { filter_score_cut: Number(v) });
-                             }} />
-                    </>
-                  )}
-                  {fd.key === "filter_stats" && (
-                    <>
-                      <span style={{ color: C.neutral, fontSize: 11 }}>策略</span>
-                      <select style={{ ...SZ.sel, width: 46, fontSize: 11 }}
-                              value={s.filter_stats_strategy ?? 'B'}
-                              onChange={(e) => updateSymbol(s.symbol, { filter_stats_strategy: e.target.value })}>
-                        <option value="B">B</option>
-                        <option value="D">D</option>
-                      </select>
-                      {s.filter_stats_strategy === 'D' && (
-                        <>
-                          <span style={{ color: C.neutral, fontSize: 11 }}>阈值</span>
-                          <input style={{ ...SZ.inp, width: 52 }} type="number" step={1}
-                                 defaultValue={s.filter_stats_threshold ?? 60}
-                                 onBlur={(e) => {
-                                   const v = e.target.value.trim();
-                                   if (v !== "") updateSymbol(s.symbol, { filter_stats_threshold: Number(v) });
-                                 }} />
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-              ))}
+              <div style={SZ.row}>
+                <input
+                  type="checkbox"
+                  checked={!!s.filter_v3}
+                  onChange={(e) => updateSymbol(s.symbol, { filter_v3: e.target.checked })}
+                />
+                <span style={{ fontSize: 11 }}>
+                  V3 趋势过滤（Trend Score：成熟趋势 / 早期启动 才放行，含两级Fuse）
+                </span>
+              </div>
             </div>
             {/* 该品种独立止盈止损 */}
             <div style={{ borderTop: `1px dashed ${C.border}`, marginTop: 6, paddingTop: 6 }}>

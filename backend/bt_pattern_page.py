@@ -36,10 +36,9 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import history
-from indicators import super_trend
+from indicators import super_trend, ta_sma
 from pattern_recog import recognize as recognize_pattern
-from pattern_trade import (signal_features, filter_decide, FilterFlags,
-                           SCORE_CUT_DEFAULT, TQI_THR_DEFAULT)
+from signal_v3 import v3_decide, base_features, SCORE_MATURE, SCORE_EARLY
 
 SYM_DEFAULT = "BTC-USDT"
 BASE_TF, H4_TF = "1h", "4h"
@@ -89,6 +88,7 @@ def load(sym: str, use_cache: bool = True):
 
 # ── 信号 ────────────────────────────────────────────────────────
 def build_signals(base, h4):
+    """用 V3 口径重构信号生成和过滤逻辑"""
     opens = [c["o"] for c in base]
     highs = [c["h"] for c in base]
     lows = [c["l"] for c in base]
@@ -109,70 +109,73 @@ def build_signals(base, h4):
         idx = bisect.bisect_right(pts, ts) - 1
         return pmap[pts[idx]].get("dir") if idx >= 0 else None
 
+    # 计算 V3 所需的基础指标
+    from signal_v3 import features_from_candles
+
+    # 准备 4h K 线供 features_from_candles 使用
+    h4_candles = [{"ts": c["ts"], "o": c["o"], "h": c["h"],
+                   "l": c["l"], "c": c["c"], "vol": c.get("vol", 0)} for c in h4]
+
     sigs = []
     for f in st["flips"]:
         i = f["i"]
-        if i >= len(base):
+        if i >= len(base) or i < 50:  # V3 需要至少 50 根历史
             continue
         sd = 1 if f["type"] == "buy" else -1
         pdir = dir_at(tss[i])
-        feat = signal_features(closes, highs, lows, opens, vols,
-                               st["atr"], st["flips"], i)
-        pass_flip, _ = filter_decide(feat, sd, FilterFlags(flip=True))
-        pass_vol, _ = filter_decide(feat, sd, FilterFlags(vol=True))
-        pass_position, _ = filter_decide(feat, sd, FilterFlags(position=True))
-        pass_candle, _ = filter_decide(feat, sd, FilterFlags(candle=True))
-        pass_near_high, _ = filter_decide(feat, sd, FilterFlags(near_high=True))
-        pass_score, _ = filter_decide(feat, sd, FilterFlags(score=True),
-                                      score_cut=SCORE_CUT_DEFAULT)
-        pass_tqi, _ = filter_decide(feat, sd, FilterFlags(tqi=True),
-                                    tqi_thr=TQI_THR_DEFAULT)
+
+        # 使用 V3 特征提取
+        feats = features_from_candles(base, i, sd, h4_candles,
+                                     st_periods=ST_PERIODS, st_mult=ST_MULT)
+
+        if not feats:
+            continue
+
+        # V3 决策
+        v3_result = v3_decide(sd, feats)
+
         sigs.append({
             "i": i, "ts": tss[i], "type": f["type"], "dir": sd,
             "price": closes[i], "pdir": pdir,
-            "pass_4h": (pdir != -sd),          # pattern_trade._allow_by_4h
-            "feat": feat,                       # 5 条规则信号画像
-            "pass_flip": pass_flip,             # ① 连续翻转过滤
-            "pass_vol": pass_vol,               # ② 波动异常过滤
-            "pass_position": pass_position,     # ③ 箱体错误位置过滤
-            "pass_candle": pass_candle,         # ④ 极端K过滤
-            "pass_near_high": pass_near_high,   # ⑤ 近高价过滤
-            "pass_score": pass_score,           # ⑥ 加权打分过滤（>0.48 拦）
-            "pass_tqi": pass_tqi,               # ⑦ TQI趋势质量过滤（TQI<thr 拦）
-            "pass_filter": (pass_flip and pass_vol and pass_position
-                            and pass_candle and pass_near_high),
+            "pass_4h": (pdir != -sd),          # 4h 趋势对齐
+            "feat": feats,                      # V3 特征
+            "v3_score": v3_result["score"],     # V3 打分
+            "v3_path": v3_result["path"],       # 通过路径
+            "v3_execute": v3_result["execute"], # 是否放行
+            "v3_fused": v3_result["fused"],     # 是否熔断
+            # 兼容旧的 pass_filter 字段（供回测统计用）
+            "pass_filter": v3_result["execute"],
         })
     return sigs, opens, highs, lows, closes, st["up_plot"], st["dn_plot"], \
         {f["i"] for f in st["flips"] if f["i"] < len(base)}
 
 
 def print_funnel(sigs):
-    """过滤漏斗：把页面/实盘那套过滤链按闸门逐层拆开，验证回测与页面一致。"""
+    """过滤漏斗：V3 口径（趋势打分闸门）"""
     total = len(sigs)
     a4h = [s for s in sigs if s["pass_4h"]]
-    f_flip = sum(1 for s in a4h if not s["pass_flip"])
-    f_vol = sum(1 for s in a4h if not s["pass_vol"])
-    f_pos = sum(1 for s in a4h if not s["pass_position"])
-    f_candle = sum(1 for s in a4h if not s["pass_candle"])
-    f_near = sum(1 for s in a4h if not s["pass_near_high"])
-    f_score = sum(1 for s in a4h if not s["pass_score"])
-    f_tqi = sum(1 for s in a4h if not s["pass_tqi"])
-    final = [s for s in sigs if s["pass_4h"] and s["pass_filter"]]
-    print("  ── 过滤漏斗（与形态页 /api/pattern → pattern_trade.filter_decide 一致）──")
+
+    # V3 路径统计
+    from signal_v3 import PATH_MATURE, PATH_EARLY, PATH_FUSE, PATH_NONE
+
+    mature = [s for s in a4h if s.get("v3_path") == PATH_MATURE]
+    early = [s for s in a4h if s.get("v3_path") == PATH_EARLY]
+    fused = [s for s in a4h if s.get("v3_fused")]
+    failed = [s for s in a4h if s.get("v3_path") == PATH_NONE]
+
+    final = [s for s in sigs if s["pass_4h"] and s.get("v3_execute")]
+
+    print("  ── V3 过滤漏斗（趋势打分闸门）──")
     print(f"     ① SuperTrend 翻转信号总数        : {total}")
     print(f"     ② 过 4h 趋势对齐闸门            : {len(a4h)}  "
-          f"(拦截 {total - len(a4h)} = 4h 反向/数据不足)")
-    print(f"     ③ ①连续翻转过滤(bars<20) 拦截   : {f_flip}  (放行 {len(a4h) - f_flip})")
-    print(f"     ④ ②波动异常过滤(ATR%>0.8) 拦截  : {f_vol}  (放行 {len(a4h) - f_vol})")
-    print(f"     ⑤ ③箱体错误位置过滤 拦截        : {f_pos}  (放行 {len(a4h) - f_pos})")
-    print(f"     ⑥ ④极端K过滤(candle>3ATR) 拦截  : {f_candle}  (放行 {len(a4h) - f_candle})")
-    print(f"     ⑦ ⑤近高价过滤(距高点>3.47ATR) 拦截: {f_near}  (放行 {len(a4h) - f_near})")
-    print(f"     ⑧ ⑥加权打分过滤(score>{SCORE_CUT_DEFAULT}) 拦截: {f_score}  "
-          f"(放行 {len(a4h) - f_score})")
-    print(f"     ⑨ ⑦TQI趋势质量过滤(TQI<{TQI_THR_DEFAULT}) 拦截: {f_tqi}  "
-          f"(放行 {len(a4h) - f_tqi})")
-    print(f"     ⑨ 最终放行开仓                  : {len(final)}  "
+          f"(拦截 {total - len(a4h)} = 4h 反向)")
+    print(f"     ③ V3 路径1 成熟趋势（score=100） : {len(mature)}")
+    print(f"     ④ V3 路径2 早期启动（score=80）  : {len(early)}")
+    print(f"     ⑤ V3 震荡熔断（极端震荡拦截）    : {len(fused)}")
+    print(f"     ⑥ V3 未通过任何路径              : {len(failed)}")
+    print(f"     ⑦ 最终放行开仓                  : {len(final)}  "
           f"(总拦截 {total - len(final)})")
+    print(f"     放行率: {len(final)/total*100:.1f}%")
 
 
 # ── 回测 ────────────────────────────────────────────────────────

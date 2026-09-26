@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bt_pattern_page as BP
-from pattern_trade import SCORE_CUT_DEFAULT
+# V3 口径：不再有 SCORE_CUT_DEFAULT
 
 SYM = "BTC-USDT"
 NOTIONAL = 100.0
@@ -59,21 +59,12 @@ def main():
     start = int(dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
     end = int(dt.datetime(2027, 1, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
     win = [s for s in sigs if start <= tss[s["i"]] < end]
-    print(f"2026 窗口信号 {len(win)} 笔；⑥ 打分阈值 cut={SCORE_CUT_DEFAULT}")
+    print(f"2026 窗口信号 {len(win)} 笔；V3 口径（趋势打分闸门）")
 
-    P = lambda k: [s for s in win if s[k]]
-    print("\n== 2026 组合对比（AND 组合）==")
+    P = lambda k: [s for s in win if s.get(k)]
+    print("\n== 2026 V3 路径对比 ==")
     report("不过滤 baseline", win, closes, highs, lows, up, dn, flip_idx)
-    report("⑥ 单独", P("pass_score"), closes, highs, lows, up, dn, flip_idx)
-    report("⑥+② 波动异常", [s for s in win if s["pass_score"] and s["pass_vol"]],
-           closes, highs, lows, up, dn, flip_idx)
-    report("⑥+④ 极端K", [s for s in win if s["pass_score"] and s["pass_candle"]],
-           closes, highs, lows, up, dn, flip_idx)
-    report("⑥+⑤ 近高价", [s for s in win if s["pass_score"] and s["pass_near_high"]],
-           closes, highs, lows, up, dn, flip_idx)
-    report("②+④+⑤(参考)", [s for s in win
-                          if s["pass_vol"] and s["pass_candle"] and s["pass_near_high"]],
-           closes, highs, lows, up, dn, flip_idx)
+    report("V3 放行", P("v3_execute"), closes, highs, lows, up, dn, flip_idx)
 
 
 if __name__ == "__main__":

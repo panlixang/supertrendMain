@@ -1,4 +1,9 @@
-"""临时：拆解 ⑥ 加权打分的逐项计算过程（取 2026 极值样本）。"""
+"""临时：V3 口径已弃用旧的 signal_score，此脚本不再适用。
+保留仅作参考，需要手动适配 V3 的 v3_decide 函数。
+"""
+import sys
+sys.exit(0)  # 直接退出，避免导入错误
+
 import csv
 import os
 import sys

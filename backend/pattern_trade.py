@@ -34,7 +34,7 @@ from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
 from regime import TradeConfig
 from state import SymbolStore, SymbolTradeConfig
-from signal_filter_stats import apply_statistical_filter
+import signal_v3
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +72,9 @@ class PatternConfig:
     exchange:     str   = "okx"
     block_4h:     bool  = True     # True = 4h 形态反向则不下单
 
-    # ── 5 条过滤规则（趋势形态识别.md + 近高价）──
-    # 品种独立开关，挂在 SymbolTradeConfig（见 state.py），默认全关=不过滤；
-    # 本全局档只保留 block_4h 硬门槛。规则实现见 _allow_by_filter / filter_decide：
-    #   ① 连续翻转过滤  filter_flip     : bars_since_last_flip < 20 拦截（震荡）
-    #   ② 波动异常过滤  filter_vol      : ATR_percent > 0.8 拦截（追涨杀跌）
-    #   ③ 箱体错误位置  filter_position : 多 Pos<0.3 / 空 Pos>0.7 拦截（非突破是反抽）
-    #   ④ 极端K过滤     filter_candle   : candle_range_ATR > 3 拦截（情绪K）
-    #   ⑤ 近高价过滤    filter_near_high: 距48根高点 (Hi48-C)/ATR > 3.47 拦截（非突破弱势）
+    # ── 过滤策略 ──
+    # 品种独立开关 filter_v3，挂在 SymbolTradeConfig（见 state.py），默认关=不过滤；
+    # 本全局档只保留 block_4h 硬门槛。过滤实现见 _allow_by_filter / _v3_allow（signal_v3 打分体系）。
 
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
@@ -186,13 +181,7 @@ class PatternTrader:
                         move_sl_to_entry=row.get("move_sl_to_entry"),
                         trail_with_st=row.get("trail_with_st"),
                         reverse_close=row.get("reverse_close"),
-                        filter_flip=row.get("filter_flip"),
-                        filter_vol=row.get("filter_vol"),
-                        filter_position=row.get("filter_position"),
-                        filter_candle=row.get("filter_candle"),
-                        filter_near_high=row.get("filter_near_high"),
-                        filter_score=row.get("filter_score"),
-                        filter_score_cut=row.get("filter_score_cut"),
+                        filter_v3=bool(row.get("filter_v3") or False),
                     )
             except Exception as e:
                 logger.warning(f"[形态下单] 读取配置失败: {e}")
@@ -250,13 +239,7 @@ class PatternTrader:
             move_sl_to_entry=kw.get("move_sl_to_entry"),
             trail_with_st=kw.get("trail_with_st"),
             reverse_close=kw.get("reverse_close"),
-            filter_flip=kw.get("filter_flip"),
-            filter_vol=kw.get("filter_vol"),
-            filter_position=kw.get("filter_position"),
-            filter_candle=kw.get("filter_candle"),
-            filter_near_high=kw.get("filter_near_high"),
-            filter_score=kw.get("filter_score"),
-            filter_score_cut=kw.get("filter_score_cut"),
+            filter_v3=kw.get("filter_v3"),
         )
         self._sync()
         self.save()
@@ -279,8 +262,7 @@ class PatternTrader:
         xr_keys = ("enabled", "margin_usdt", "leverage", "allow_tfs",
                    "tp1_pct", "tp1_ratio", "sl_pct",
                    "move_sl_to_entry", "trail_with_st", "reverse_close",
-                   "filter_flip", "filter_vol", "filter_position", "filter_candle",
-                   "filter_near_high", "filter_score", "filter_score_cut")
+                   "filter_v3")
         for k in xr_keys:
             if k in kw and kw[k] is not None:
                 setattr(sc, k, kw[k])
@@ -585,255 +567,56 @@ class PatternTrader:
         return pdir != -sig_dir(sig)
 
     async def _allow_by_filter(self, sym: str, sc: "SymbolTradeConfig", sig: dict) -> bool:
-        """True=放行。5 条过滤规则（趋势形态识别.md + 近高价），品种独立开关，默认全关=放行。
+        """True=放行。当前唯一过滤策略是 V3 趋势过滤，品种独立开关，默认关=放行。
 
-        ① 连续翻转过滤  filter_flip     : bars_since_last_flip < 20 拦截
-        ② 波动异常过滤  filter_vol      : ATR_percent > 0.8 拦截
-        ③ 箱体错误位置  filter_position : 多 Pos<0.3 / 空 Pos>0.7 拦截
-        ④ 极端K过滤     filter_candle   : candle_range_ATR > 3 拦截
-        ⑤ 近高价过滤    filter_near_high: 距48根高点 (Hi48-C)/ATR > 3.47 拦截
-        指标定义与 backtest/_raw_full.py 完全一致；数据不足一律放行。
+        V3（signal_v3 打分体系）：
+          ST Signal → Trend Gate(成熟趋势) / Early Breakout V2(早期启动) → Trend Score
+          → Range Penalty(两级 Fuse) → Execute
+        数据不足 / 信号根对不上 → 一律放行。
         """
-        if not (sc.filter_flip or sc.filter_vol or sc.filter_position
-                or sc.filter_candle or sc.filter_near_high or sc.filter_score):
+        if not getattr(sc, "filter_v3", False):
             return True
+        ok, why = await self._v3_allow(sym, sc, sig)
+        if not ok:
+            logger.info("[形态下单] %s %s V3拦截: %s", sym, sig.get("tf") or "1h", why)
+        return ok
+
+    async def _v3_allow(self, sym: str, sc, sig: dict):
+        """V3 趋势过滤：Trend Score 通过（成熟趋势 / 早期启动）才放行。
+
+        与回测 build_signal_features_1h.py 共用 backend/signal_v3.py，口径单一。
+        注意：V3 是在「1h 信号 + 4h 上下文」上拟合的，其它周期开启请谨慎。
+        数据不足 / 信号根对不上 → 一律放行。
+        返回 (是否放行, 说明)。
+        """
         tf = sig.get("tf") or "1h"
         try:
             cs = await self._kline(sym, tf, 600)
+            cs4 = await self._kline(sym, "4h", 300)
         except Exception as e:
-            logger.warning(f"[形态下单] {sym} {tf} 过滤取数失败: {e}")
-            return True
-        if len(cs) < 60:
-            return True
-        st = super_trend([c["o"] for c in cs], [c["h"] for c in cs],
-                         [c["l"] for c in cs], [c["c"] for c in cs],
+            logger.warning(f"[形态下单] {sym} {tf} V3 取数失败: {e}")
+            return True, "取数失败放行"
+        if len(cs) < 120 or len(cs4) < 60:
+            return True, "数据不足放行"
+
+        st = super_trend([x["o"] for x in cs], [x["h"] for x in cs],
+                         [x["l"] for x in cs], [x["c"] for x in cs],
                          periods=ST_PERIODS, multiplier=ST_MULTIPLIER, change_atr=True)
         flips = st.get("flips") or []
         if not flips:
-            return True
-        f = flips[-1]
-        if f["i"] >= len(cs) or cs[f["i"]]["ts"] != sig["ts"]:
-            return True   # 信号根对不上（数据延迟），不拦
-        sd = 1 if f["type"] == "buy" else -1
-        feat = signal_features([c["c"] for c in cs], [c["h"] for c in cs],
-                               [c["l"] for c in cs], [c["o"] for c in cs],
-                               [c["vol"] for c in cs], st["atr"], flips, f["i"])
-        flags = FilterFlags(flip=sc.filter_flip, vol=sc.filter_vol,
-                            position=sc.filter_position, candle=sc.filter_candle,
-                            near_high=sc.filter_near_high, score=sc.filter_score,
-                            stats=sc.filter_stats)
-        cut = (sc.filter_score_cut if sc.filter_score_cut is not None
-               else SCORE_CUT_DEFAULT)
-        stats_strategy = getattr(sc, 'filter_stats_strategy', 'B') or 'B'
-        stats_threshold = getattr(sc, 'filter_stats_threshold', 60.0) or 60.0
-        allow, reasons = filter_decide(feat, sd, flags, score_cut=cut,
-                                      stats_strategy=stats_strategy,
-                                      stats_threshold=stats_threshold)
-        if not allow:
-            logger.info("[形态下单] %s %s 过滤拦截: %s", sym, tf, "; ".join(reasons))
-        return allow
+            return True, "无翻转放行"
+        fd = flips[-1]
+        i = fd["i"]
+        if i >= len(cs) or cs[i]["ts"] != sig.get("ts"):
+            return True, "信号根对不上放行"   # 数据延迟，不拦
 
-
-@dataclass
-class FilterFlags:
-    """7 条规则 + ⑥⑦ 打分过滤 的开关集合（与 SymbolTradeConfig 的 filter_* 字段对应）。"""
-    flip:       bool = False   # ① 连续翻转过滤
-    vol:        bool = False   # ② 波动异常过滤
-    position:   bool = False   # ③ 箱体错误位置过滤
-    candle:     bool = False   # ④ 极端K过滤
-    near_high:  bool = False   # ⑤ 近高价过滤（距48根高点>3.47ATR 拦）
-    score:      bool = False   # ⑥ 加权打分过滤（多指标尾部惩罚求和 > cut 拦）
-    stats:      bool = False   # ⑦ 统计相关性过滤（基于808信号分析：risk_score>48 OR bars<45）
-    tqi:        bool = False   # ⑧ TQI趋势质量过滤（TQI<thr 视为低质量震荡，拦）
-
-
-def signal_features(closes: list[float], highs: list[float], lows: list[float],
-                    opens: list[float], vols: list[float],
-                    atr: list[float], flips: list[dict], i: int) -> dict:
-    """计算 6 条规则 / 打分所需的信号画像（与 backtest/_raw_full.py 定义完全一致）。
-
-    返回字段：bars_since_last_flip / range_position / candle_range_ATR / ATR_percent
-             distance_to_range_high_ATR / distance_to_range_low_ATR
-             upper_wick_ratio / lower_wick_ratio / mom12_ATR / volume_ratio / ADX14
-    """
-    fi = [f["i"] for f in flips]
-    pos = bisect.bisect_left(fi, i)
-    bslf = (i - fi[pos - 1]) if pos > 0 else 9999
-    lo_w = max(0, i - 47)
-    lo48 = min(lows[lo_w:i + 1]); hi48 = max(highs[lo_w:i + 1])
-    rng48 = hi48 - lo48
-    ci = closes[i]; oi = opens[i]; ai = atr[i] or 0.0
-    range_pos = (ci - lo48) / rng48 if rng48 > 0 else 0.5
-    candle_rng = (highs[i] - lows[i]) / ai if ai > 0 else 0.0
-    atr_pct = ai / ci * 100.0 if ci > 0 else 0.0
-    dist_hi_atr = (hi48 - ci) / ai if ai > 0 else 0.0
-    dist_lo_atr = (ci - lo48) / ai if ai > 0 else 0.0
-    body = abs(ci - oi)
-    up_w = highs[i] - max(oi, ci); dn_w = min(oi, ci) - lows[i]
-    up_r = up_w / body if body > 1e-9 else 9.99
-    dn_r = dn_w / body if body > 1e-9 else 9.99
-    mom12 = (ci - closes[i - 12]) / ai if (i >= 12 and ai > 0) else 0.0
-    vol_ma20 = ta_sma(vols, 20)
-    vol_r = (vols[i] / vol_ma20[i]
-             if (i < len(vol_ma20) and vol_ma20[i] is not None and vol_ma20[i] > 0)
-             else 0.0)
-    adx_a = ta_adx(highs, lows, closes, 14)
-    adx_i = adx_a[i] if (i < len(adx_a) and adx_a[i] is not None) else 0.0
-    # 效率比 ER（Kaufman）：净位移 / 总路径，∈[0,1]。高=趋势流畅，低=震荡无意义。
-    # 参考 self-version.md(LunqFX) / SATS 的 Regime Filter；高 ER=好，故评分时取 low=bad。
-    er_len = 14
-    if i >= er_len:
-        net = abs(closes[i] - closes[i - er_len])
-        path = sum(abs(closes[k] - closes[k - 1]) for k in range(i - er_len + 1, i + 1))
-        er = net / path if path > 0 else 0.0
-    else:
-        er = 0.0
-    # ATR_rel：当前波动相对近 48 根中位数的倍数（≈1 为常态）。
-    # 用相对量而非绝对 ATR%，可消除波动率随市场环境的漂移（拟合显示绝对阈值
-    # 2025=0.43 / 2026=0.78 跨年漂移，相对量收敛到 ≈1.0）。
-    atr_pct_win = [atr[k] / closes[k] * 100.0 for k in range(lo_w, i + 1)
-                   if atr[k] and closes[k] > 0]
-    atr_rel = atr_pct / float(np.median(atr_pct_win)) if atr_pct_win else 0.0
-    # ── ⑦ TQI 趋势质量指数（取自 SATSS / WillyAlgoTrader，权重用脚本默认）──
-    # 4 因子合成 0..1：高=干净趋势，低=震荡无意义。用作第7过滤：TQI<thr 视为低质量震荡，拦截。
-    #   er     = Kaufman 效率比(len20)；vol = ATR/ATR基线(100) 映射 0.6~1.8→0~1；
-    #   struct = 价格在 20 根区间的位置偏离中线程度；mom = 10 根同向K占比。
-    lo100 = max(0, i - 99)
-    atr_base_win = [atr[k] for k in range(lo100, i + 1) if atr[k] and atr[k] > 0]
-    atr_base_v = sum(atr_base_win) / len(atr_base_win) if atr_base_win else 0.0
-    vol_ratio = ai / atr_base_v if atr_base_v > 0 else 1.0
-    tqi_vol = max(0.0, min(1.0, (vol_ratio - 0.6) / 1.2))
-    erl = 20
-    if i >= erl:
-        net20 = abs(closes[i] - closes[i - erl])
-        path20 = sum(abs(closes[k] - closes[k - 1]) for k in range(i - erl + 1, i + 1))
-        er20 = net20 / path20 if path20 > 0 else 0.0
-    else:
-        er20 = 0.0
-    tqi_er = max(0.0, min(1.0, er20))
-    lo20 = max(0, i - 19)
-    sh = max(highs[lo20:i + 1]); slv = min(lows[lo20:i + 1]); sr = sh - slv
-    pos20 = (ci - slv) / sr if sr > 0 else 0.5
-    tqi_struct = max(0.0, min(1.0, abs(pos20 - 0.5) * 2.0))
-    if i >= 10:
-        wc = closes[i] - closes[i - 10]
-        um = sum(1 for k in range(i - 9, i + 1) if closes[k] > closes[k - 1])
-        dm = sum(1 for k in range(i - 9, i + 1) if closes[k] < closes[k - 1])
-        tqi_mom = um / 10.0 if wc > 0 else (dm / 10.0 if wc < 0 else 0.0)
-    else:
-        tqi_mom = 0.0
-    tqi = 0.35 * tqi_er + 0.20 * tqi_vol + 0.25 * tqi_struct + 0.20 * tqi_mom
-    return {
-        "bars_since_last_flip": bslf,
-        "range_position": range_pos,
-        "candle_range_ATR": candle_rng,
-        "ATR_percent": atr_pct,
-        "ATR_rel": atr_rel,
-        "distance_to_range_high_ATR": dist_hi_atr,
-        "distance_to_range_low_ATR": dist_lo_atr,
-        "upper_wick_ratio": up_r,
-        "lower_wick_ratio": dn_r,
-        "mom12_ATR": mom12,
-        "volume_ratio": vol_r,
-        "ADX14": adx_i,
-        "efficiency_ratio": er,
-        "TQI": tqi,
-        "TQI_er": tqi_er, "TQI_vol": tqi_vol,
-        "TQI_struct": tqi_struct, "TQI_mom": tqi_mom,
-    }
-
-
-# ── ⑥ 加权打分过滤模型（实盘出场口径重拟合，2026-09）──────────────────────
-# 方法：标签用 bt_pattern_page.backtest 实盘出场（TP1 1.5%+保本+ST跟踪），与线上同源；
-#       best_split 扫切分点 + 置换检验(500次)筛掉多重检验噪声 + 双向交叉验证(2025↔2026)。
-# 关键结论：
-#   1) 9 个指标在实盘标签下几乎全部落入随机噪声（置换分位<80%），只有波动率有效。
-#   2) ATR_percent 绝对阈值跨年漂移（2025训=0.43 / 2026训=0.78）→ 不可靠；
-#      改用 ATR_rel = ATR% / 近48根中位数 后，阈值收敛到 ≈1.0（2025=1.024/2026=1.000），
-#      且高波动侧在两年交叉验证中胜率一致更低（+5.9~+7.6pp）。故 ⑥ 退化为 regime-adjusted 波动率拦截。
-#   3) 单指标时 score = b∈[0,1]，cut 直接控制拦截比例（≈ 拦「当前波动>近期中位」的信号）。
-# 其余 8 个指标权重置 0（live 标签下无稳健信号）；如未来样本增多可重拟合恢复多指标。
-SCORE_MODEL = [
-    {"name": "ATR_rel",              "thr": 1.02, "s": 0.18, "w": 1.0,
-     "get": lambda f, sd: f["ATR_rel"]},
-]
-SCORE_CUT_DEFAULT = 0.40
-TQI_THR_DEFAULT = 0.40   # ⑦ 阈值：回测(2026-09)显示 0.40 为 ⑦+⑥ 合计最优(+0.22U)、
-                          # 2026 +4.01U、回撤最低(3.78%)；TQI<thr 拦（低质量震荡）
-
-
-def signal_score(feat: dict, sd: int) -> float:
-    """多指标加权打分（∈[0,1]），越高越像垃圾单。见 SCORE_MODEL。"""
-    s = 0.0
-    for m in SCORE_MODEL:
-        x = m["get"](feat, sd)
-        b = 1.0 / (1.0 + math.exp(-(x - m["thr"]) / m["s"]))
-        s += m["w"] * b
-    return s
-
-
-def filter_decide(feat: dict, sd: int, flags: FilterFlags,
-                  score_cut: float = SCORE_CUT_DEFAULT,
-                  tqi_thr: float = TQI_THR_DEFAULT,
-                  stats_strategy: str = 'B',
-                  stats_threshold: float = 60.0) -> tuple[bool, list[str]]:
-    """对单笔信号应用 7 条规则 + ⑥⑦ 打分过滤。返回 (是否放行, [拦截原因...])。
-
-    规则（趋势形态识别.md + 近高价 + 加权打分 + 统计相关性，均可在回测验证）：
-      ① 连续翻转过滤  : bars_since_last_flip < 20                          → 拦截
-      ② 波动异常过滤  : ATR_percent > 0.8                                 → 拦截
-      ③ 箱体错误位置  : 多 range_position<0.3 / 空 range_position>0.7       → 拦截
-      ④ 极端K过滤     : candle_range_ATR > 3                              → 拦截
-      ⑤ 近高价过滤    : (Hi48-C)/ATR > 3.47                               → 拦截（距近期高点过远，弱势非突破）
-      ⑥ 加权打分过滤  : signal_score > score_cut                          → 拦截（多指标尾部惩罚求和，拦大部分垃圾单）
-      ⑦ 统计相关性过滤: 基于808信号分析 (risk_score>48 OR bars<45)         → 拦截（统计显著p<0.001）
-    """
-    reasons: list[str] = []
-    if flags.flip and feat["bars_since_last_flip"] < 20:
-        reasons.append(f"连续翻转(bars={feat['bars_since_last_flip']}<20)")
-    if flags.vol and feat["ATR_percent"] > 0.8:
-        reasons.append(f"波动异常(ATR%={feat['ATR_percent']:.2f}>0.8)")
-    if flags.position:
-        rp = feat["range_position"]
-        if sd > 0 and rp < 0.3:
-            reasons.append(f"箱体位置错误(多 Pos={rp:.2f}<0.3)")
-        elif sd < 0 and rp > 0.7:
-            reasons.append(f"箱体位置错误(空 Pos={rp:.2f}>0.7)")
-    if flags.candle and feat["candle_range_ATR"] > 3:
-        reasons.append(f"极端K(candle/ATR={feat['candle_range_ATR']:.2f}>3)")
-    if flags.near_high and feat["distance_to_range_high_ATR"] > 3.47:
-        reasons.append(f"近高价失败(距高点={feat['distance_to_range_high_ATR']:.2f}ATR>3.47)")
-    if flags.score:
-        sc = signal_score(feat, sd)
-        if sc > score_cut:
-            reasons.append(f"加权打分过高({sc:.2f}>{score_cut})")
-    if flags.stats:
-        # ⑦ 统计相关性过滤：基于2022-09至今808个BTC 1h信号的统计分析
-        # 关键特征：risk_score (Cohen's d=0.432***), bars_since_flip (d=0.308***)
-        # 简化版：使用 risk_score 的近似计算（基于现有特征）
-        # risk_score 在原数据中是综合评分，这里用类似逻辑近似
-        bars = feat.get("bars_since_last_flip", 9999)
-        adx = feat.get("ADX14", 0)
-
-        # 计算近似 risk_score：基于统计分析，risk_score 与 bars_since_flip、ADX14 相关
-        # 原始分析显示：保留信号 risk_score 平均46.1，过滤信号52.6
-        # 这里基于特征构建近似评分
-        approx_risk_score = 50.0  # 基准分
-        if bars < 45:
-            approx_risk_score += 10.0  # 翻转时间短增加风险
-        if adx < 22:
-            approx_risk_score += 5.0   # 趋势弱增加风险
-
-        should_filter, stat_reasons, _ = apply_statistical_filter(
-            {'risk_score': approx_risk_score, 'bars_since_flip': bars, 'ADX14': adx},
-            strategy=stats_strategy,
-            threshold=stats_threshold
-        )
-        if should_filter:
-            reasons.extend(stat_reasons)
-    if flags.tqi and feat["TQI"] < tqi_thr:
-        reasons.append(f"趋势质量低(TQI={feat['TQI']:.2f}<{tqi_thr})")
-    return (len(reasons) == 0, reasons)
+        sd = 1 if fd["type"] == "buy" else -1
+        feats = signal_v3.features_from_candles(
+            cs, i, sd, cs4, st_periods=ST_PERIODS, st_mult=ST_MULTIPLIER)
+        if not feats:
+            return True, "特征不足放行"
+        v = signal_v3.v3_decide(sd, feats)
+        return v["execute"], f"{v['path']} score={v['score']}"
 
 
 def pattern_score_detail(closes, highs, lows, opens, vols, h4_closes=None, h4_highs=None,

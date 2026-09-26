@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bt_pattern_page as BP
-from pattern_trade import SCORE_CUT_DEFAULT
+# V3 口径：不再有 SCORE_CUT_DEFAULT，V3 是打分制（score > 0 即放行）
+# 为了兼容旧代码显示，这里只作占位
 
 SYM = "BTC-USDT"
 NOTIONAL = 100.0
@@ -59,19 +60,13 @@ def main():
     start = int(dt.datetime(year, 1, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
     end = int(dt.datetime(year + 1, 1, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
     win = [s for s in sigs if start <= tss[s["i"]] < end]
-    print(f"{year} 窗口信号 {len(win)} 笔；⑥ 打分阈值 cut={SCORE_CUT_DEFAULT}")
+    print(f"{year} 窗口信号 {len(win)} 笔；V3 口径（趋势打分闸门）")
 
     print(f"\n== {year} 对比 ==")
     report("不过滤 baseline", win, len(win), closes, highs, lows, up, dn, flip_idx)
-    report("⑥ 单独", [s for s in win if s["pass_score"]], len(win),
+    # V3 口径：用 v3_execute 判断是否放行
+    report("V3 放行", [s for s in win if s.get("v3_execute")], len(win),
            closes, highs, lows, up, dn, flip_idx)
-    report("⑤ 单独", [s for s in win if s["pass_near_high"]], len(win),
-           closes, highs, lows, up, dn, flip_idx)
-    report("⑥+⑤ 近高价", [s for s in win if s["pass_score"] and s["pass_near_high"]],
-           len(win), closes, highs, lows, up, dn, flip_idx)
-    report("②+④+⑤(参考)", [s for s in win
-                          if s["pass_vol"] and s["pass_candle"] and s["pass_near_high"]],
-           len(win), closes, highs, lows, up, dn, flip_idx)
 
 
 if __name__ == "__main__":
