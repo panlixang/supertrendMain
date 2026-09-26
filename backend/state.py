@@ -154,7 +154,8 @@ class SymbolTradeConfig:
     trail_with_st:     Optional[bool]  = None
     reverse_close:     Optional[bool]  = None   # 反向平仓（None=用 PatternConfig 全局）；True=只按反向信号平仓，TP1/止损全失效
     # ── 形态识别页 过滤策略（品种独立开关；默认关=不过滤）──
-    filter_v3:         bool = False   # V3趋势过滤：Trend Score 未通过（非「成熟趋势/早期启动」）拦截；含两级Fuse
+    filter_v3:         bool = True    # V3趋势过滤：Trend Score 未通过（非「成熟趋势/早期启动」）拦截；含两级Fuse
+                                      # 默认开=走「形态页+V3」回测档（出场参数保持 tp1 1.5%/70% 默认）；V3 在 1h+4h 上拟合，非 1h 周期请在面板单独关闭
 
 
 # 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；

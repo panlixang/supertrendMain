@@ -181,7 +181,7 @@ class PatternTrader:
                         move_sl_to_entry=row.get("move_sl_to_entry"),
                         trail_with_st=row.get("trail_with_st"),
                         reverse_close=row.get("reverse_close"),
-                        filter_v3=bool(row.get("filter_v3") or False),
+                        filter_v3=bool(row.get("filter_v3", True)),
                     )
             except Exception as e:
                 logger.warning(f"[形态下单] 读取配置失败: {e}")
@@ -239,7 +239,7 @@ class PatternTrader:
             move_sl_to_entry=kw.get("move_sl_to_entry"),
             trail_with_st=kw.get("trail_with_st"),
             reverse_close=kw.get("reverse_close"),
-            filter_v3=kw.get("filter_v3"),
+            filter_v3=bool(kw.get("filter_v3", True)),
         )
         self._sync()
         self.save()
