@@ -29,6 +29,11 @@ class CfgIn(BaseModel):
     poll_sec:      Optional[int]   = None
     tp1_pct:         Optional[float] = None
     tp1_ratio:       Optional[float] = None
+    tp2_pct:         Optional[float] = None
+    tp2_ratio:       Optional[float] = None
+    tp3_pct:         Optional[float] = None   # 0 = 反向信号平仓
+    tp3_ratio:       Optional[float] = None
+    tp3_mode:        Optional[str]   = None   # pct | reverse_signal
     sl_pct:          Optional[float] = None
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
@@ -51,6 +56,11 @@ class SymbolIn(BaseModel):
     allow_tfs:   Optional[list]  = None
     tp1_pct:         Optional[float] = None
     tp1_ratio:       Optional[float] = None
+    tp2_pct:         Optional[float] = None
+    tp2_ratio:       Optional[float] = None
+    tp3_pct:         Optional[float] = None   # 0 = 反向信号平仓
+    tp3_ratio:       Optional[float] = None
+    tp3_mode:        Optional[str]   = None   # pct | reverse_signal
     sl_pct:          Optional[float] = None
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
@@ -68,6 +78,9 @@ def _symbols_view() -> list[dict]:
             "margin_usdt": sc.margin_usdt, "leverage": sc.leverage,
             "allow_tfs": list(sc.allow_tfs),
             "tp1_pct": sc.tp1_pct, "tp1_ratio": sc.tp1_ratio,
+            "tp2_pct": sc.tp2_pct, "tp2_ratio": sc.tp2_ratio,
+            "tp3_pct": sc.tp3_pct, "tp3_ratio": sc.tp3_ratio,
+            "tp3_mode": sc.tp3_mode,
             "sl_pct": sc.sl_pct,
             "move_sl_to_entry": sc.move_sl_to_entry,
             "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
@@ -118,15 +131,17 @@ async def set_keys(body: KeysIn):
 @router.post("/api/pattern/trade/symbols")
 async def symbols(body: SymbolIn):
     t = pattern_trade.trader
+    # 以前这里只转发 enabled/margin_usdt/leverage/allow_tfs，
+    # 出场参数（tp1~tp3、sl_pct、保本、ST跟踪、reverse_close）和 filter_v3 全被丢掉，
+    # 表现为「面板改了保存不了、刷新回默认值」。现在按 body 显式传值全量转发。
+    fields = {k: v for k, v in body.model_dump().items()
+              if k not in ("action", "symbol") and v is not None}
     if body.action == "add":
-        r = t.add_symbol(body.symbol, enabled=body.enabled, margin_usdt=body.margin_usdt,
-                         leverage=body.leverage, allow_tfs=body.allow_tfs)
+        r = t.add_symbol(body.symbol, **fields)
     elif body.action == "remove":
         r = t.remove_symbol(body.symbol)
     else:
-        r = t.update_symbol(body.symbol, enabled=body.enabled,
-                            margin_usdt=body.margin_usdt, leverage=body.leverage,
-                            allow_tfs=body.allow_tfs)
+        r = t.update_symbol(body.symbol, **fields)
     return {**r, "symbols": _symbols_view()}
 
 

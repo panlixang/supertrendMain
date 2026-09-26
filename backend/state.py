@@ -147,9 +147,18 @@ class SymbolTradeConfig:
     ma30_tf:          str   = "4h"    # 方向参考周期
     ma30_period:      int   = 30      # MA 周期
     # ── 形态识别页出场（品种独立；None=用 PatternConfig 全局默认）──
+    # 三档止盈：TP1 平一部分并把止损移到开仓价（保本）→ TP2 再平一部分（锁1%利润）
+    #         → TP3 剩余全平。tp3_pct=0 表示「反向信号平仓」：所有价格止盈止损失效。
     tp1_pct:           Optional[float] = None
     tp1_ratio:         Optional[float] = None
+    tp2_pct:           Optional[float] = None
+    tp2_ratio:         Optional[float] = None
+    tp3_pct:           Optional[float] = None
+    tp3_ratio:         Optional[float] = None
+    tp3_mode:          Optional[str]   = None   # pct=按幅度 | reverse_signal=同周期反向可下单信号全平剩余
+    exit_mode:         Optional[str]   = None   # 出场档位：multi=三挡(EnhancedExitRules) | single=单档(ExitRules，TP1 平一部分后剩余靠保本/跟踪/反向信号平)（None=用全局）
     sl_pct:            Optional[float] = None
+    sl_mode:           Optional[str]   = None   # 止损方式：st=超趋线（sl_pct 仅轨道无效时兜底）| pct=固定百分比「真实硬止损」（None=用 PatternConfig 全局）
     move_sl_to_entry:  Optional[bool]  = None
     trail_with_st:     Optional[bool]  = None
     reverse_close:     Optional[bool]  = None   # 反向平仓（None=用 PatternConfig 全局）；True=只按反向信号平仓，TP1/止损全失效

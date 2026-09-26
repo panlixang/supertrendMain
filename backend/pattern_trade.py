@@ -32,6 +32,7 @@ from executor import Executor
 from indicators import ma, super_trend, ta_adx, ta_atr, ta_ema, ta_sma
 from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
+from position_enhanced import EnhancedExitRules
 from regime import TradeConfig
 from state import SymbolStore, SymbolTradeConfig
 import signal_v3
@@ -78,11 +79,18 @@ class PatternConfig:
 
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
-    # 出场参数（回测验证档，面板可配置）
-    tp1_pct:         float = 1.5
-    tp1_ratio:       float = 70.0
-    sl_pct:          float = 2.0    # 初始止损兜底（SuperTrend 轨道无效时用）
-    move_sl_to_entry: bool  = True   # 止盈后止损移到开仓价保本
+    # 出场参数：三档止盈（回测验证档，面板可按品种覆盖）
+    tp1_pct:         float = 1.0     # 第一档触发涨幅 %；触发后止损移到开仓价（保本）
+    tp1_ratio:       float = 30.0    # 第一档平掉的仓位 %
+    tp2_pct:         float = 2.0     # 第二档触发涨幅 %（需 TP1 已完成）
+    tp2_ratio:       float = 40.0    # 第二档平掉的仓位 %
+    tp3_pct:         float = 3.5     # 第三档触发涨幅 %；**设为 0 = 反向信号平仓**
+    tp3_ratio:       float = 100.0   # 第三档：剩余全平
+    tp3_mode:        str   = "pct"   # pct=按幅度 | reverse_signal=同周期反向可下单信号全平剩余
+    exit_mode:       str   = "multi" # 出场档位：multi=三挡(EnhancedExitRules) | single=单档(ExitRules：TP1 平一部分+保本，剩余靠跟踪/反向信号平)
+    sl_pct:          float = 2.0     # 初始止损幅度 %（sl_mode=pct 时=真实硬止损；sl_mode=st 时仅轨道无效兜底）
+    sl_mode:         str   = "st"    # 止损方式：st=超趋线（约3ATR宽，sl_pct 仅兜底）| pct=固定百分比「真实硬止损」
+    move_sl_to_entry: bool  = True   # TP1 后止损移到开仓价保本
     trail_with_st:    bool  = True   # 剩余仓位跟随 SuperTrend 跟踪
     reverse_close:    bool  = False  # 反向平仓：True=只按同周期反向信号平仓，TP1/保本/跟踪/硬止损全失效
 
@@ -177,7 +185,14 @@ class PatternTrader:
                         allow_tfs=list(row.get("allow_tfs") or ["1h"]),
                         tp1_pct=row.get("tp1_pct"),
                         tp1_ratio=row.get("tp1_ratio"),
+                        tp2_pct=row.get("tp2_pct"),
+                        tp2_ratio=row.get("tp2_ratio"),
+                        tp3_pct=row.get("tp3_pct"),
+                        tp3_ratio=row.get("tp3_ratio"),
+                        tp3_mode=row.get("tp3_mode"),
+                        exit_mode=row.get("exit_mode"),
                         sl_pct=row.get("sl_pct"),
+                        sl_mode=row.get("sl_mode"),
                         move_sl_to_entry=row.get("move_sl_to_entry"),
                         trail_with_st=row.get("trail_with_st"),
                         reverse_close=row.get("reverse_close"),
@@ -235,7 +250,14 @@ class PatternTrader:
             allow_tfs=list(kw.get("allow_tfs") or ["1h"]),
             tp1_pct=kw.get("tp1_pct"),
             tp1_ratio=kw.get("tp1_ratio"),
+            tp2_pct=kw.get("tp2_pct"),
+            tp2_ratio=kw.get("tp2_ratio"),
+            tp3_pct=kw.get("tp3_pct"),
+            tp3_ratio=kw.get("tp3_ratio"),
+            tp3_mode=kw.get("tp3_mode"),
+            exit_mode=kw.get("exit_mode"),
             sl_pct=kw.get("sl_pct"),
+            sl_mode=kw.get("sl_mode"),
             move_sl_to_entry=kw.get("move_sl_to_entry"),
             trail_with_st=kw.get("trail_with_st"),
             reverse_close=kw.get("reverse_close"),
@@ -260,7 +282,9 @@ class PatternTrader:
         if not sc:
             return {"ok": False, "error": "品种不存在"}
         xr_keys = ("enabled", "margin_usdt", "leverage", "allow_tfs",
-                   "tp1_pct", "tp1_ratio", "sl_pct",
+                   "tp1_pct", "tp1_ratio", "tp2_pct", "tp2_ratio",
+                   "tp3_pct", "tp3_ratio", "tp3_mode", "exit_mode",
+                   "sl_pct", "sl_mode",
                    "move_sl_to_entry", "trail_with_st", "reverse_close",
                    "filter_v3")
         for k in xr_keys:
@@ -388,30 +412,68 @@ class PatternTrader:
         )
 
     @property
-    def rules(self) -> ExitRules:
-        """回测验证的那套出场参数（TP1 平部分 + 保本 + 跟随 ST + 轨道无效硬止损）。"""
-        return ExitRules(
-            tp1_pct=self.cfg.tp1_pct,
-            tp1_ratio=self.cfg.tp1_ratio,
-            sl_mode="st",
-            sl_pct=self.cfg.sl_pct,
-        move_sl_to_entry=self.cfg.move_sl_to_entry,
-        trail_with_st=self.cfg.trail_with_st,
-        reverse_close=self.cfg.reverse_close,
-    )
+    def rules(self):
+        """全局默认档出场规则。
+        exit_mode=single → 原版单档 ExitRules（TP1 平一部分 + 保本，剩余靠跟踪/反向信号平）；
+        multi（默认）    → 三挡 EnhancedExitRules（三档止盈 + TP1 保本 + 跟随 ST）。"""
+        c = self.cfg
+        if c.exit_mode == "single":
+            return ExitRules(
+                tp1_pct=c.tp1_pct, tp1_ratio=c.tp1_ratio,
+                sl_mode=c.sl_mode, sl_pct=c.sl_pct,
+                move_sl_to_entry=c.move_sl_to_entry,
+                trail_with_st=c.trail_with_st,
+                reverse_close=c.reverse_close,
+            )
+        return EnhancedExitRules(
+            tp1_pct=c.tp1_pct, tp1_ratio=c.tp1_ratio,
+            tp2_pct=c.tp2_pct, tp2_ratio=c.tp2_ratio,
+            tp3_pct=c.tp3_pct, tp3_ratio=c.tp3_ratio, tp3_mode=c.tp3_mode,
+            sl_mode=c.sl_mode,
+            sl_pct=c.sl_pct,
+            move_sl_to_entry=c.move_sl_to_entry,
+            trail_with_st=c.trail_with_st,
+            reverse_close=c.reverse_close,
+        )
 
-    def rules_for_symbol(self, symbol: str) -> ExitRules:
-        """该品种出场规则：品种独立覆盖优先，未设置则回落全局默认档。"""
+    def rules_for_symbol(self, symbol: str):
+        """该品种出场规则：品种独立覆盖优先，未设置则回落全局默认档。
+
+        exit_mode:
+          single → 原版单档 ExitRules（只有 TP1 一档 + 保本；剩余仓位由
+                   跟踪止损 / 同周期反向信号平掉，没有 TP2/TP3）
+          multi  → 三挡 EnhancedExitRules。其中 tp3_pct=0 为「反向信号平仓」：
+                   check_enhanced 首行即 return None，所有价格止盈止损失效，
+                   由 executor 在同周期反向信号时全平剩余。
+
+        两者都会被 executor._exit_action / 回测引擎按 isinstance 正确分派。
+        """
         sc = self.symbols.get(symbol)
         c = self.cfg
 
         def _v(sym_v, def_v):
             return sym_v if sym_v is not None else def_v
 
-        return ExitRules(
+        if _v(sc.exit_mode if sc else None, c.exit_mode) == "single":
+            return ExitRules(
+                tp1_pct=_v(sc.tp1_pct if sc else None, c.tp1_pct),
+                tp1_ratio=_v(sc.tp1_ratio if sc else None, c.tp1_ratio),
+                sl_mode=_v(sc.sl_mode if sc else None, c.sl_mode),
+                sl_pct=_v(sc.sl_pct if sc else None, c.sl_pct),
+                move_sl_to_entry=_v(sc.move_sl_to_entry if sc else None, c.move_sl_to_entry),
+                trail_with_st=_v(sc.trail_with_st if sc else None, c.trail_with_st),
+                reverse_close=_v(sc.reverse_close if sc else None, c.reverse_close),
+            )
+
+        return EnhancedExitRules(
             tp1_pct=_v(sc.tp1_pct if sc else None, c.tp1_pct),
             tp1_ratio=_v(sc.tp1_ratio if sc else None, c.tp1_ratio),
-            sl_mode="st",
+            tp2_pct=_v(sc.tp2_pct if sc else None, c.tp2_pct),
+            tp2_ratio=_v(sc.tp2_ratio if sc else None, c.tp2_ratio),
+            tp3_pct=_v(sc.tp3_pct if sc else None, c.tp3_pct),
+            tp3_ratio=_v(sc.tp3_ratio if sc else None, c.tp3_ratio),
+            tp3_mode=_v(sc.tp3_mode if sc else None, c.tp3_mode),
+            sl_mode=_v(sc.sl_mode if sc else None, c.sl_mode),
             sl_pct=_v(sc.sl_pct if sc else None, c.sl_pct),
             move_sl_to_entry=_v(sc.move_sl_to_entry if sc else None, c.move_sl_to_entry),
             trail_with_st=_v(sc.trail_with_st if sc else None, c.trail_with_st),

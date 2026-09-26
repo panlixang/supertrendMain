@@ -166,6 +166,20 @@ export default function PatternTradePanel({ currentSymbol }) {
     }
   };
 
+  // 品种独立数值输入：失焦即下发。留空=回落全局默认（后端 None 语义）。
+  const tpInput = (sym, row, key, fallback, step = 0.1, width = 60) => (
+    <input
+      style={{ ...SZ.inp, width }}
+      type="number"
+      step={step}
+      defaultValue={row?.[key] ?? fallback}
+      onBlur={(e) => {
+        const v = e.target.value.trim();
+        if (v !== "") updateSymbol(sym, { [key]: Number(v) });
+      }}
+    />
+  );
+
   const removeSymbol = async (symbol) => {
     try {
       const d = await postJSON("/api/pattern/trade/symbols", { action: "remove", symbol });
@@ -457,21 +471,69 @@ export default function PatternTradePanel({ currentSymbol }) {
                 止盈止损（{s.symbol} 独立，留空=用默认）
               </div>
               <div style={SZ.row}>
-                <span style={{ color: C.neutral, width: 56 }}>TP3 幅度</span>
-                <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
-                       defaultValue={s.tp3_pct ?? cfg.tp3_pct ?? 3.5}
-                       onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { tp3_pct: Number(v) }); }} />
-                <span style={{ color: C.neutral }}>%（设为 0 = 反向信号平仓）</span>
+                <span style={{ color: C.neutral, width: 56 }}>TP1</span>
+                {tpInput(s.symbol, s, "tp1_pct", cfg?.tp1_pct ?? 1.0)}
+                <span style={{ color: C.neutral }}>% 平</span>
+                {tpInput(s.symbol, s, "tp1_ratio", cfg?.tp1_ratio ?? 30, 1)}
+                <span style={{ color: C.neutral }}>%</span>
+              </div>
+              <div style={SZ.row}>
+                <span style={{ color: C.neutral, width: 56 }}>TP2</span>
+                {tpInput(s.symbol, s, "tp2_pct", cfg?.tp2_pct ?? 2.0)}
+                <span style={{ color: C.neutral }}>% 平</span>
+                {tpInput(s.symbol, s, "tp2_ratio", cfg?.tp2_ratio ?? 40, 1)}
+                <span style={{ color: C.neutral }}>%</span>
+              </div>
+              <div style={SZ.row}>
+                <span style={{ color: C.neutral, width: 56 }}>TP3</span>
+                {tpInput(s.symbol, s, "tp3_pct", cfg?.tp3_pct ?? 3.5)}
+                <span style={{ color: C.neutral }}>% 剩余全平（0 = 反向信号平仓）</span>
               </div>
               <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>
-                TP3=0 时，所有价格止盈止损失效，只在反向信号时平仓
+                {(s.exit_mode ?? cfg?.exit_mode ?? "multi") === "single"
+                  ? "单档模式（ExitRules）：只有 TP1 一档，平掉后剩余仓位靠保本 / 跟踪止损 / 同周期反向信号平掉，TP2、TP3 不生效。"
+                  : "TP1 达成后止损移到开仓价保本；TP2 依次解锁并把止损抬到锁 1% 利润；TP3=0 时所有价格止盈止损失效，只在反向信号时平仓"}
+              </div>
+              {/* 出场档位：单档(ExitRules) / 三挡(EnhancedExitRules) + 一键预设 */}
+              <div style={{ ...SZ.row, marginBottom: 4 }}>
+                <span style={{ color: C.neutral, width: 56 }}>档位</span>
+                <select
+                  style={{ ...SZ.inp, width: 66 }}
+                  value={s.exit_mode ?? cfg?.exit_mode ?? "multi"}
+                  onChange={(e) => updateSymbol(s.symbol, { exit_mode: e.target.value })}
+                >
+                  <option value="multi">三挡</option>
+                  <option value="single">单档</option>
+                </select>
+                <button
+                  style={SZ.btnGhost}
+                  title="切到单档 ExitRules：TP1 +1.5% 平 70% + 保本，剩余 30% 由跟踪止损/同周期反向信号平掉；初始止损为固定 3% 真实硬止损"
+                  onClick={() => updateSymbol(s.symbol, {
+                    exit_mode: "single",
+                    tp1_pct: 1.5, tp1_ratio: 70,
+                    sl_mode: "pct", sl_pct: 3.0,
+                    move_sl_to_entry: true, trail_with_st: true, reverse_close: false,
+                  })}
+                >
+                  预设：3%硬止损 · 单档1.5%/70% · 剩余反向平仓
+                </button>
               </div>
               <div style={SZ.row}>
                 <span style={{ color: C.neutral, width: 56 }}>硬止损</span>
+                <select
+                  style={{ ...SZ.inp, width: 62 }}
+                  value={s.sl_mode ?? cfg?.sl_mode ?? "st"}
+                  onChange={(e) => updateSymbol(s.symbol, { sl_mode: e.target.value })}
+                >
+                  <option value="st">超趋线</option>
+                  <option value="pct">固定%</option>
+                </select>
                 <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
-                       defaultValue={s.sl_pct ?? cfg.sl_pct ?? 2.0}
+                       defaultValue={s.sl_pct ?? cfg?.sl_pct ?? 2.0}
                        onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { sl_pct: Number(v) }); }} />
-                <span style={{ color: C.neutral }}>%（轨道无效兜底）</span>
+                <span style={{ color: C.neutral }}>
+                  %（{(s.sl_mode ?? cfg?.sl_mode ?? "st") === "pct" ? "真实硬止损" : "轨道无效兜底"}）
+                </span>
               </div>
               <div style={SZ.row}>
                 <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
