@@ -457,23 +457,14 @@ export default function PatternTradePanel({ currentSymbol }) {
                 止盈止损（{s.symbol} 独立，留空=用默认）
               </div>
               <div style={SZ.row}>
-                <span style={{ color: C.neutral, width: 56 }}>TP1 幅度</span>
+                <span style={{ color: C.neutral, width: 56 }}>TP3 幅度</span>
                 <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
-                       defaultValue={s.tp1_pct ?? cfg.tp1_pct ?? 1.5}
-                       onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { tp1_pct: Number(v) }); }} />
-                <span style={{ color: C.neutral }}>%</span>
-                <span style={{ color: C.neutral, width: 36, textAlign: "right" }}>比例</span>
-                <input style={{ ...SZ.inp, width: 52 }} type="number" step={1}
-                       defaultValue={s.tp1_ratio ?? cfg.tp1_ratio ?? 70}
-                       onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { tp1_ratio: Number(v) }); }} />
-                <span style={{ color: C.neutral }}>%</span>
+                       defaultValue={s.tp3_pct ?? cfg.tp3_pct ?? 3.5}
+                       onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { tp3_pct: Number(v) }); }} />
+                <span style={{ color: C.neutral }}>%（设为 0 = 反向信号平仓）</span>
               </div>
-              <div style={SZ.row}>
-                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
-                  <input type="checkbox" defaultChecked={s.reverse_close ?? cfg.reverse_close ?? false}
-                         onChange={(e) => updateSymbol(s.symbol, { reverse_close: e.target.checked })} />
-                  反向平仓（信号反向才平；开启后 TP1 / 硬止损 / 保本 / 跟踪 全部失效）
-                </label>
+              <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>
+                TP3=0 时，所有价格止盈止损失效，只在反向信号时平仓
               </div>
               <div style={SZ.row}>
                 <span style={{ color: C.neutral, width: 56 }}>硬止损</span>

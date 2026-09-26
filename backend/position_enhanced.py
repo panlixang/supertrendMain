@@ -108,11 +108,15 @@ def check_enhanced(pos: Position, price: float, rules: EnhancedExitRules,
 
     改进：
     1. 三档止盈按 TP1→TP2→TP3 顺序检查（从低到高，确保分批离场顺序正确）
-    2. 止盈不受 enabled=False 影响（enabled 只控制价格止损）
+    2. tp3_pct=0 时为"反向信号平仓"模式，所有价格检查（止盈、止损）全部失效
     3. 盈利保护：浮盈达标后允许适度回撤
     4. 极端保护止损：避免单次巨额亏损
     """
     if pos.qty <= 0:
+        return None
+
+    # ── tp3_pct=0 → 反向信号平仓模式：跳过所有价格检查 ──────
+    if rules.tp3_pct <= 0:
         return None
 
     current_pnl = pos.pnl_pct(price)

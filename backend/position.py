@@ -44,7 +44,7 @@ class ExitRules:
     # 剩余仓位是否跟随超趋线移动止损（超趋线会随趋势推进）
     trail_with_st: bool = True
     # 反向平仓开关：True = 只按「同周期反向信号」平仓，
-    # TP1 分批止盈 / 保本 / ST 跟踪 / 固定百分比硬止损 全部失效（on_price、on_st_line 直接跳过）。
+    # TP1 分批止盈 / 保本 / ST 跟踪 / 固定百分比硬止损 全部失效。
     reverse_close: bool = False
 
 
@@ -155,6 +155,10 @@ def hit_stop(pos: Position, price: float) -> bool:
 def check(pos: Position, price: float, rules: ExitRules) -> dict | None:
     """按当前价判断该不该动作。返回 None 表示不动。"""
     if not rules.enabled or pos.qty <= 0:
+        return None
+
+    # reverse_close 模式：不检查价格，只等反向信号（在 on_signal 里处理）
+    if rules.reverse_close:
         return None
 
     # 止损优先于止盈：同一 tick 同时满足时，风控优先

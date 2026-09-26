@@ -817,13 +817,14 @@ class ExitRulesPatch(BaseModel):
     tp1_ratio:        Optional[float] = None
     tp2_pct:          Optional[float] = None   # 第二档止盈触发幅度 %
     tp2_ratio:        Optional[float] = None   # 第二档止盈平仓比例 %
-    tp3_pct:          Optional[float] = None   # 第三档止盈触发幅度 %
+    tp3_pct:          Optional[float] = None   # 第三档止盈触发幅度 %（0=反向信号平仓）
     tp3_ratio:        Optional[float] = None   # 第三档止盈平仓比例 %（建议100全平）
     tp3_mode:         Optional[str]   = None   # pct | reverse_signal
     move_sl_to_entry: Optional[bool]  = None
     sl_mode:          Optional[str]   = None
     sl_pct:           Optional[float] = None
     trail_with_st:    Optional[bool]  = None
+    reverse_close:    Optional[bool]  = None   # 反向信号平仓开关（保留兼容）
     max_loss_enabled: Optional[bool]  = None
     max_loss_pct:     Optional[float] = None
     sl_buffer_atr:    Optional[float] = None
@@ -846,7 +847,8 @@ def _apply_exit_patch(r, patch: ExitRulesPatch):
     if patch.tp1_ratio        is not None: r.tp1_ratio = max(1.0, min(100.0, patch.tp1_ratio))
     if patch.tp2_pct          is not None: r.tp2_pct = max(0.1, min(100.0, patch.tp2_pct))
     if patch.tp2_ratio        is not None: r.tp2_ratio = max(0.0, min(100.0, patch.tp2_ratio))
-    if patch.tp3_pct          is not None: r.tp3_pct = max(0.1, min(100.0, patch.tp3_pct))
+    # tp3_pct 允许为 0（反向信号平仓模式）
+    if patch.tp3_pct          is not None: r.tp3_pct = max(0.0, min(100.0, patch.tp3_pct))
     if patch.tp3_ratio        is not None: r.tp3_ratio = max(0.0, min(100.0, patch.tp3_ratio))
     if patch.tp3_mode is not None:
         if patch.tp3_mode not in ("pct", "reverse_signal"):
@@ -860,6 +862,7 @@ def _apply_exit_patch(r, patch: ExitRulesPatch):
         r.sl_mode = patch.sl_mode
     if patch.sl_pct           is not None: r.sl_pct = max(0.1, min(50.0, patch.sl_pct))
     if patch.trail_with_st    is not None: r.trail_with_st = patch.trail_with_st
+    if patch.reverse_close    is not None: r.reverse_close = patch.reverse_close
     if patch.max_loss_enabled is not None and hasattr(r, "max_loss_enabled"):
         r.max_loss_enabled = patch.max_loss_enabled
     if patch.max_loss_pct is not None and hasattr(r, "max_loss_pct"):
