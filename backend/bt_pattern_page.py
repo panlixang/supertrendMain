@@ -156,10 +156,12 @@ def print_funnel(sigs):
     a4h = [s for s in sigs if s["pass_4h"]]
 
     # V3 路径统计
-    from signal_v3 import PATH_MATURE, PATH_EARLY, PATH_FUSE, PATH_NONE
+    from signal_v3 import (PATH_MATURE, PATH_EARLY, PATH_SLOW,
+                           PATH_FUSE, PATH_NONE)
 
     mature = [s for s in a4h if s.get("v3_path") == PATH_MATURE]
     early = [s for s in a4h if s.get("v3_path") == PATH_EARLY]
+    slow = [s for s in a4h if s.get("v3_path") == PATH_SLOW]
     fused = [s for s in a4h if s.get("v3_fused")]
     failed = [s for s in a4h if s.get("v3_path") == PATH_NONE]
 
@@ -171,9 +173,10 @@ def print_funnel(sigs):
           f"(拦截 {total - len(a4h)} = 4h 反向)")
     print(f"     ③ V3 路径1 成熟趋势（score=100） : {len(mature)}")
     print(f"     ④ V3 路径2 早期启动（score=80）  : {len(early)}")
-    print(f"     ⑤ V3 震荡熔断（极端震荡拦截）    : {len(fused)}")
-    print(f"     ⑥ V3 未通过任何路径              : {len(failed)}")
-    print(f"     ⑦ 最终放行开仓                  : {len(final)}  "
+    print(f"     ⑤ V3 路径3 慢热接住（score=60）  : {len(slow)}")
+    print(f"     ⑥ V3 震荡熔断（极端震荡拦截）    : {len(fused)}")
+    print(f"     ⑦ V3 未通过任何路径              : {len(failed)}")
+    print(f"     ⑧ 最终放行开仓                  : {len(final)}  "
           f"(总拦截 {total - len(final)})")
     print(f"     放行率: {len(final)/total*100:.1f}%")
 

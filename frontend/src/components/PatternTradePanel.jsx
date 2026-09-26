@@ -447,7 +447,7 @@ export default function PatternTradePanel({ currentSymbol }) {
                   onChange={(e) => updateSymbol(s.symbol, { filter_v3: e.target.checked })}
                 />
                 <span style={{ fontSize: 11 }}>
-                  V3 趋势过滤（Trend Score：成熟趋势 / 早期启动 才放行，含两级Fuse）
+                  V3 趋势过滤（Trend Score：成熟趋势 / 早期启动 / 慢热接住 才放行，含两级Fuse）
                 </span>
               </div>
             </div>

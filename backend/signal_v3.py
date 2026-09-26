@@ -8,11 +8,11 @@
 
               ST Signal
                    |
-        +----------+-----------+
-    Trend Gate            Early Breakout V2 旁路（仅多头）
-   （成熟趋势）            （早期启动，避免追趋势末端）
-        |                      |
-        +----------+-----------+
+        +----------+-----------+-----------+
+    Trend Gate          Early Breakout V2      Slow Catch
+   （成熟趋势）          （早期启动，仅多头）    （慢热接住，仅多头）
+        |                      |                    |
+        +----------+-----------+----------+---------+
                    |
               Trend Score
                    |
@@ -20,12 +20,17 @@
                    |
                 Execute
 
-多头两条放行路径（score 100 / 80）：
+多头三条放行路径（score 100 / 80 / 60）：
   路径1「成熟趋势」Trend Gate : 4h MA30 斜率 > 0.16  或 (斜率 > 0 且 1h MA30 距离 > 0.13)
   路径2「早期启动」V2 旁路    : break_mom5      > 0.5   （动量突破）
                              ㄱ atr_contract50  > 0     （波动收缩后重新扩张）
                              ㄱ st_dist_change  > 0     （ST 方向一致，不是冲一下就回落）
                              ㄱ |C-MA30|/ATR    < 3     （可以脱离 MA，但不能已飞太远＝末端追涨）
+  路径3「慢热接住」（新增）   : 4h MA30 斜率    > -0.6  （允许 4h 尚未转正，但不可太熊）
+                             ㄱ mom5           > 0.6   （1h 5根动量已启动）
+    └ 动机：漏掉的大赢家中 19 个是多头，几乎全因「4h 斜率 ≤ 0」被路径1 硬门槛
+      挡掉（其中 17 笔是「先逆信号洗盘再反转」型）。路径3 放宽斜率、改用 1h
+      动量作证据，接住慢热型启动（详见 backtest/_v3_exit_research.py）。
 
 空头：沿用原 Short Gate（数据未证明需要放宽，不做旁路）
   (前100根_波动周期 < 9.5 且 前20根_ADX变化 < 3.25)
@@ -35,7 +40,12 @@
   一级（降权，非禁止） flip50 > 6                 → score -= 20
   二级（硬禁）         flip50 > 8 且 ER20 < 0.15  → 禁止交易
 
-回测口径（808 笔 1h 信号）：放行 498 笔，累计 +175.45%，PF 1.35，覆盖红字（盈亏>2%）105/137 = 77%。
+回测口径（808 笔 1h 信号，1x 满仓复利 + 标准最大回撤）：
+  仅路径1/2（旧）          ：放行 498 笔，累计 +314.4%，PF 1.35，DD 28.2%，红字（盈亏>2%）105/137 = 77%
+  含路径3「慢热接住」（现行）：放行 550 笔，累计 +404.6%，PF 1.37，DD 26.8%，红字 116/137 = 85%
+    └ 路径3 单独看：新增放行 52 笔（其中 33 笔亏损），净贡献 +22.95%；
+      但挽回 11/32 个原被漏掉的大赢家（多头漏赢家 19 个中挽回 11 个 ≈ 58%，贡献 +61.13%）。
+  验证脚本：backtest/_verify_v3_third.py（用本模块真实 v3_decide 含 Fuse 复算）。
 """
 from __future__ import annotations
 
@@ -46,11 +56,19 @@ from indicators import super_trend, ta_adx, ta_sma
 # 打分常量（tenure）
 SCORE_MATURE = 100      # 路径1：成熟趋势（Trend Gate 通过）
 SCORE_EARLY = 80        # 路径2：早期启动（V2 旁路通过）
+SCORE_SLOW = 60         # 路径3：慢热接住（4h未转正但1h已启动，信心低于前两条）
 PENALTY_RANGE = 20      # 一级 Fuse：震荡减权
 SCORE_BAN = -1000       # 二级 Fuse：硬禁
 
+# 路径3「慢热接住」阈值 —— backtest/_v3_exit_research.py 网格寻优结果
+#   （slope=-0.6 / mom=0.6 为最优：550笔 复利404.6% PF1.37 DD26.8%，
+#    挽回 11/32 漏掉的大赢家，其中多头漏赢家挽回 11/19 ≈ 58%）
+SLOW_SLOPE_MIN = -0.6   # 4h MA30 斜率下界：允许仍为负，但不能太熊
+SLOW_MOM_MIN = 0.6      # 1h 5根动量(mom5=(C[i]-C[i-5])/ATR) 下界：已启动
+
 PATH_MATURE = "成熟趋势"
 PATH_EARLY = "早期启动"
+PATH_SLOW = "慢热接住"
 PATH_NONE = "未通过"
 PATH_FUSE = "极端震荡熔断"
 
@@ -80,6 +98,27 @@ def long_breakout_bypass(mom5, atr_contract50, st_dist_change, close_ma30_atr):
             and atr_contract50 > 0
             and st_dist_change > 0
             and close_ma30_atr < 3)
+
+
+# ── 路径3：多头 慢热接住（4h 未转正，但 1h 动量已启动）──────────
+def long_slow_catch(slope_htf, mom5):
+    """接住「4h 趋势尚未转正、但 1h 短期动量已经起来」的慢热型启动。
+
+    动机：V3 漏掉的大赢家中 19 个是多头，几乎全部因 `4h_MA30斜率 ≤ 0` 被
+    Trend Gate 硬门槛挡掉（见 backtest/_v3_diag.py PART A/D：其中 17 笔是
+    「先逆信号洗盘再反转」的震荡洗盘型——入场被扫一下才拉升，4h 斜率当时仍为负）。
+    本路径放宽 4h 斜率要求（只要不太熊即可），改用 1h 5 根动量作为启动证据。
+
+    与路径2 的区别：路径2 要求「波动收缩后重新扩张 + ST 距离变化 + 未追涨末端」
+    四条同时成立（严格的早期突破）；本路径只看 1h 动量，因此能接住那些
+    动量慢慢爬升、不算典型突破但最后走成大趋势的慢热型。
+
+    slope_htf : 4h_MA30斜率（%），允许为负但不能太熊（> SLOW_SLOPE_MIN）
+    mom5      : (C[i]-C[i-5])/ATR —— 1h 5 根动量，> SLOW_MOM_MIN 视为已启动
+    """
+    if slope_htf is None or mom5 is None:
+        return False
+    return slope_htf > SLOW_SLOPE_MIN and mom5 > SLOW_MOM_MIN
 
 
 # ── 空头 Short Gate（沿用，不放宽）─────────────────────────────
@@ -119,6 +158,10 @@ def v3_decide(side, feats):
             feats.get("close_ma30_atr", 0.0),
         ):
             score, path = SCORE_EARLY, PATH_EARLY
+        elif long_slow_catch(feats.get("slope_htf"), feats.get("mom5", 0.0)):
+            # 路径3：4h 未转正但 1h 动量已起 —— 接住慢热型，挽回被 Trend Gate
+            # 斜率硬门槛挡掉的多头大赢家（仅多头，空头数据未证明需要放宽）
+            score, path = SCORE_SLOW, PATH_SLOW
     else:
         if short_gate(feats.get("vol100"), feats.get("adx_chg20"),
                       feats.get("dist_htf_ma"), feats.get("er_chg20")):
