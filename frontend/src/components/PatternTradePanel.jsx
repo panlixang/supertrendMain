@@ -520,7 +520,7 @@ export default function PatternTradePanel({ currentSymbol }) {
                   : "TP1 达成后止损移到开仓价保本；TP2 依次解锁并把止损抬到锁 1% 利润；TP3=0 时所有价格止盈止损失效，只在反向信号时平仓"}
               </div>
               {/* 出场档位：单档(ExitRules) / 三挡(EnhancedExitRules) + 一键预设 */}
-              <div style={{ ...SZ.row, marginBottom: 4 }}>
+              <div style={{ ...SZ.row, marginBottom: 4, flexWrap: "wrap" }}>
                 <span style={{ color: C.neutral, width: 56 }}>档位</span>
                 <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
                   <input
@@ -551,7 +551,7 @@ export default function PatternTradePanel({ currentSymbol }) {
                   预设：3%硬止损 · 单档1.5%/70% · 剩余反向平仓
                 </button>
               </div>
-              <div style={SZ.row}>
+              <div style={{ ...SZ.row, flexWrap: "wrap" }}>
                 <span style={{ color: C.neutral, width: 56 }}>硬止损</span>
                 <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
                   <input
@@ -569,11 +569,11 @@ export default function PatternTradePanel({ currentSymbol }) {
                   />
                   超趋线
                 </label>
-                <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
+                <input style={{ ...SZ.inp, width: 62, flex: "0 0 62px" }} type="number" step={0.1}
                        defaultValue={s.sl_pct ?? cfg?.sl_pct ?? 2.0}
                        onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { sl_pct: Number(v) }); }} />
-                <span style={{ color: C.neutral }}>
-                  %（{(s.sl_mode ?? cfg?.sl_mode ?? "st") === "pct" ? "真实硬止损" : "轨道无效兜底"}）
+                <span style={{ color: C.neutral, fontSize: 11 }}>
+                  %（{(s.sl_mode ?? cfg?.sl_mode ?? "st") === "pct" ? "真实硬止损" : "轨道兜底"}）
                 </span>
               </div>
               <div style={SZ.row}>
