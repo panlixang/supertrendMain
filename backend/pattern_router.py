@@ -38,6 +38,8 @@ class CfgIn(BaseModel):
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
     reverse_close:    Optional[bool]  = None
+    exit_mode:        Optional[str]   = None   # 全局档位：multi=三挡 | single=单档
+    sl_mode:          Optional[str]   = None   # st=超趋线 | pct=固定百分比真实硬止损
 
 
 class KeysIn(BaseModel):
@@ -54,6 +56,8 @@ class SymbolIn(BaseModel):
     margin_usdt: Optional[float] = None
     leverage:    Optional[int]   = None
     allow_tfs:   Optional[list]  = None
+    sizing_mode:     Optional[str]   = None   # 保证金口径：fixed=固定U | equity_pct=净值百分比
+    equity_pct:      Optional[float] = None   # equity_pct 模式的百分比（1-100）
     tp1_pct:         Optional[float] = None
     tp1_ratio:       Optional[float] = None
     tp2_pct:         Optional[float] = None
@@ -66,6 +70,8 @@ class SymbolIn(BaseModel):
     trail_with_st:    Optional[bool]  = None
     reverse_close:    Optional[bool]  = None
     filter_v3:        Optional[bool]  = None
+    exit_mode:        Optional[str]   = None   # 档位：multi=三挡 | single=单档
+    sl_mode:          Optional[str]   = None   # st=超趋线 | pct=固定百分比真实硬止损
 
 
 def _symbols_view() -> list[dict]:
@@ -77,11 +83,14 @@ def _symbols_view() -> list[dict]:
             "symbol": sym, "enabled": sc.enabled,
             "margin_usdt": sc.margin_usdt, "leverage": sc.leverage,
             "allow_tfs": list(sc.allow_tfs),
+            "sizing_mode": sc.sizing_mode, "equity_pct": sc.equity_pct,
             "tp1_pct": sc.tp1_pct, "tp1_ratio": sc.tp1_ratio,
             "tp2_pct": sc.tp2_pct, "tp2_ratio": sc.tp2_ratio,
             "tp3_pct": sc.tp3_pct, "tp3_ratio": sc.tp3_ratio,
             "tp3_mode": sc.tp3_mode,
+            "exit_mode": sc.exit_mode,
             "sl_pct": sc.sl_pct,
+            "sl_mode": sc.sl_mode,
             "move_sl_to_entry": sc.move_sl_to_entry,
             "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
             "filter_v3": sc.filter_v3,

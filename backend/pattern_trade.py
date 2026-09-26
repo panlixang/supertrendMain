@@ -183,6 +183,8 @@ class PatternTrader:
                         margin_usdt=float(row.get("margin_usdt") or 10.0),
                         leverage=int(row.get("leverage") or 3),
                         allow_tfs=list(row.get("allow_tfs") or ["1h"]),
+                        sizing_mode=row.get("sizing_mode") or "fixed",
+                        equity_pct=float(row.get("equity_pct") or 10.0),
                         tp1_pct=row.get("tp1_pct"),
                         tp1_ratio=row.get("tp1_ratio"),
                         tp2_pct=row.get("tp2_pct"),
@@ -248,6 +250,8 @@ class PatternTrader:
             margin_usdt=float(kw.get("margin_usdt") or 10.0),
             leverage=int(kw.get("leverage") or 3),
             allow_tfs=list(kw.get("allow_tfs") or ["1h"]),
+            sizing_mode=str(kw.get("sizing_mode") or "fixed"),
+            equity_pct=float(kw.get("equity_pct") or 10.0),
             tp1_pct=kw.get("tp1_pct"),
             tp1_ratio=kw.get("tp1_ratio"),
             tp2_pct=kw.get("tp2_pct"),
@@ -282,6 +286,7 @@ class PatternTrader:
         if not sc:
             return {"ok": False, "error": "品种不存在"}
         xr_keys = ("enabled", "margin_usdt", "leverage", "allow_tfs",
+                   "sizing_mode", "equity_pct",
                    "tp1_pct", "tp1_ratio", "tp2_pct", "tp2_ratio",
                    "tp3_pct", "tp3_ratio", "tp3_mode", "exit_mode",
                    "sl_pct", "sl_mode",

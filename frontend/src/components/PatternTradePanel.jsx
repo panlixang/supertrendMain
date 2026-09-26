@@ -417,12 +417,37 @@ export default function PatternTradePanel({ currentSymbol }) {
               {s.position && <span style={{ ...SZ.tag, color: C.up }}>持仓中</span>}
               <button style={{ ...SZ.btnGhost, marginLeft: "auto" }} onClick={() => removeSymbol(s.symbol)}>删除</button>
             </div>
-            <div style={SZ.row}>
-              <span style={{ color: C.neutral }}>保证金</span>
+            <div style={{ ...SZ.row, flexWrap: "wrap" }}>
+              <span style={{ color: C.neutral }}>
+                保证金{(s.sizing_mode ?? "fixed") === "equity_pct" ? "(净值%)" : "(固定U)"}
+              </span>
               <input
-                style={{ ...SZ.inp, width: 66 }} type="number" defaultValue={s.margin_usdt}
-                onBlur={(e) => updateSymbol(s.symbol, { margin_usdt: Number(e.target.value) })}
+                style={{
+                  ...SZ.inp, width: 62,
+                  borderColor: (s.sizing_mode ?? "fixed") === "fixed" ? C.up : undefined,
+                }}
+                type="number" defaultValue={s.margin_usdt}
+                title="固定保证金（U）：在这框里填值即按固定金额下单"
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (v !== "") updateSymbol(s.symbol, { margin_usdt: Number(v), sizing_mode: "fixed" });
+                }}
               />
+              <span style={{ color: C.neutral }}>U</span>
+              <span style={{ color: C.neutral, fontSize: 11 }}>或</span>
+              <input
+                style={{
+                  ...SZ.inp, width: 52,
+                  borderColor: (s.sizing_mode ?? "fixed") === "equity_pct" ? C.up : undefined,
+                }}
+                type="number" step={0.5} defaultValue={s.equity_pct ?? 10}
+                title="账户净值百分比（%）：在这框里填值即按 净值×% 下单，并受 USDT 可用余额封顶"
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (v !== "") updateSymbol(s.symbol, { equity_pct: Number(v), sizing_mode: "equity_pct" });
+                }}
+              />
+              <span style={{ color: C.neutral }}>%</span>
               <span style={{ color: C.neutral }}>杠杆</span>
               <input
                 style={{ ...SZ.inp, width: 52 }} type="number" defaultValue={s.leverage}
@@ -497,14 +522,22 @@ export default function PatternTradePanel({ currentSymbol }) {
               {/* 出场档位：单档(ExitRules) / 三挡(EnhancedExitRules) + 一键预设 */}
               <div style={{ ...SZ.row, marginBottom: 4 }}>
                 <span style={{ color: C.neutral, width: 56 }}>档位</span>
-                <select
-                  style={{ ...SZ.inp, width: 66 }}
-                  value={s.exit_mode ?? cfg?.exit_mode ?? "multi"}
-                  onChange={(e) => updateSymbol(s.symbol, { exit_mode: e.target.value })}
-                >
-                  <option value="multi">三挡</option>
-                  <option value="single">单档</option>
-                </select>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={(s.exit_mode ?? cfg?.exit_mode ?? "multi") === "single"}
+                    onChange={(e) => updateSymbol(s.symbol, { exit_mode: e.target.checked ? "single" : "multi" })}
+                  />
+                  单档止盈
+                </label>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={(s.exit_mode ?? cfg?.exit_mode ?? "multi") === "multi"}
+                    onChange={(e) => updateSymbol(s.symbol, { exit_mode: e.target.checked ? "multi" : "single" })}
+                  />
+                  三挡止盈
+                </label>
                 <button
                   style={SZ.btnGhost}
                   title="切到单档 ExitRules：TP1 +1.5% 平 70% + 保本，剩余 30% 由跟踪止损/同周期反向信号平掉；初始止损为固定 3% 真实硬止损"
@@ -520,14 +553,22 @@ export default function PatternTradePanel({ currentSymbol }) {
               </div>
               <div style={SZ.row}>
                 <span style={{ color: C.neutral, width: 56 }}>硬止损</span>
-                <select
-                  style={{ ...SZ.inp, width: 62 }}
-                  value={s.sl_mode ?? cfg?.sl_mode ?? "st"}
-                  onChange={(e) => updateSymbol(s.symbol, { sl_mode: e.target.value })}
-                >
-                  <option value="st">超趋线</option>
-                  <option value="pct">固定%</option>
-                </select>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={(s.sl_mode ?? cfg?.sl_mode ?? "st") === "pct"}
+                    onChange={(e) => updateSymbol(s.symbol, { sl_mode: e.target.checked ? "pct" : "st" })}
+                  />
+                  固定%
+                </label>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={(s.sl_mode ?? cfg?.sl_mode ?? "st") === "st"}
+                    onChange={(e) => updateSymbol(s.symbol, { sl_mode: e.target.checked ? "st" : "pct" })}
+                  />
+                  超趋线
+                </label>
                 <input style={{ ...SZ.inp, width: 60 }} type="number" step={0.1}
                        defaultValue={s.sl_pct ?? cfg?.sl_pct ?? 2.0}
                        onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") updateSymbol(s.symbol, { sl_pct: Number(v) }); }} />
