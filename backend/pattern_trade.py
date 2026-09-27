@@ -155,6 +155,8 @@ class PatternTrader:
         self._last_order_at: dict[tuple, float] = {}
         self._pat_cache: dict[str, tuple] = {}      # sym -> (最新4h ts, pts, pmap)
         self._running = False
+        self._load_rows = 0       # 上一次加载时 json 里的品种行数
+        self._load_bad_rows = 0   # 其中解析失败（被跳过）的行数
         self._load()
 
     # ── 配置持久化（与首页 settings.json 完全分开）─────────────
@@ -177,38 +179,60 @@ class PatternTrader:
                 for k, v in (data.get("cfg") or {}).items():
                     if hasattr(self.cfg, k):
                         setattr(self.cfg, k, v)
-                for row in (data.get("symbols") or []):
-                    sym = _okx_symbol(row.get("symbol") or "")
-                    if not sym:
-                        continue
-                    self.symbols[sym] = SymbolTradeConfig(
-                        symbol=sym,
-                        enabled=bool(row.get("enabled")),
-                        margin_usdt=float(row.get("margin_usdt") or 10.0),
-                        leverage=int(row.get("leverage") or 3),
-                        allow_tfs=list(row.get("allow_tfs") or ["1h"]),
-                        sizing_mode=row.get("sizing_mode") or "fixed",
-                        equity_pct=float(row.get("equity_pct") or 10.0),
-                        tp1_pct=row.get("tp1_pct"),
-                        tp1_ratio=row.get("tp1_ratio"),
-                        tp2_pct=row.get("tp2_pct"),
-                        tp2_ratio=row.get("tp2_ratio"),
-                        tp3_pct=row.get("tp3_pct"),
-                        tp3_ratio=row.get("tp3_ratio"),
-                        tp3_mode=row.get("tp3_mode"),
-                        exit_mode=row.get("exit_mode"),
-                        sl_pct=row.get("sl_pct"),
-                        sl_mode=row.get("sl_mode"),
-                        move_sl_to_entry=row.get("move_sl_to_entry"),
-                        trail_with_st=row.get("trail_with_st"),
-                        reverse_close=row.get("reverse_close"),
-                        filter_v3=bool(row.get("filter_v3", True)),
-                    )
+                rows = data.get("symbols") or []
+                for row in rows:
+                    # 逐行容错：坏行只跳过它自己，绝不牵连其余品种
+                    # （历史坑：整段共用一个 try，一行数据异常 → symbols 全丢 →
+                    #   后续 save() 把空清单写回磁盘，原配置永久销毁）
+                    try:
+                        sym = _okx_symbol(row.get("symbol") or "")
+                        if not sym:
+                            continue
+                        self.symbols[sym] = SymbolTradeConfig(
+                            symbol=sym,
+                            enabled=bool(row.get("enabled")),
+                            margin_usdt=float(row.get("margin_usdt") or 10.0),
+                            leverage=int(float(row.get("leverage") or 3)),
+                            allow_tfs=list(row.get("allow_tfs") or ["1h"]),
+                            sizing_mode=row.get("sizing_mode") or "fixed",
+                            equity_pct=float(row.get("equity_pct") or 10.0),
+                            tp1_pct=row.get("tp1_pct"),
+                            tp1_ratio=row.get("tp1_ratio"),
+                            tp2_pct=row.get("tp2_pct"),
+                            tp2_ratio=row.get("tp2_ratio"),
+                            tp3_pct=row.get("tp3_pct"),
+                            tp3_ratio=row.get("tp3_ratio"),
+                            tp3_mode=row.get("tp3_mode"),
+                            exit_mode=row.get("exit_mode"),
+                            sl_pct=row.get("sl_pct"),
+                            sl_mode=row.get("sl_mode"),
+                            move_sl_to_entry=row.get("move_sl_to_entry"),
+                            trail_with_st=row.get("trail_with_st"),
+                            reverse_close=row.get("reverse_close"),
+                            filter_v3=bool(row.get("filter_v3", True)),
+                        )
+                    except Exception as e2:
+                        self._load_bad_rows += 1
+                        logger.warning(f"[形态下单] 品种配置行读取失败已跳过: {row.get('symbol')!r} err={e2!r}")
+                self._load_rows = len(rows)
+                if rows and not self.symbols:
+                    logger.error(f"[形态下单] json 里 {len(rows)} 个品种全部加载失败，清单已为空；"
+                                 f"已阻止回写，请检查 {CONFIG_FILE}")
             except Exception as e:
                 logger.warning(f"[形态下单] 读取配置失败: {e}")
         self._sync()
 
     def save(self):
+        # 保险：本轮加载若有品种行解析失败（清单可能已残缺），首次回写前留一份备份，
+        # 避免磁盘上的原始配置被残缺清单静默覆盖 —— 原配置还能从 .bak 找回
+        if getattr(self, "_load_bad_rows", 0) and not os.path.exists(CONFIG_FILE + ".bak"):
+            try:
+                import shutil
+                shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+                logger.warning(f"[形态下单] 有 {self._load_bad_rows} 个品种行解析失败，"
+                               f"已备份原始配置到 {CONFIG_FILE}.bak")
+            except Exception:
+                pass
         tmp = CONFIG_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump({
