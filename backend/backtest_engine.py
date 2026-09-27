@@ -37,6 +37,7 @@ from indicators import ma, st_signals, super_trend
 from integration import enhanced_signal_handler
 from position import ExitRules
 from regime import TradeConfig, classify, efficiency_ratio
+from signal_v3 import features_from_candles, v3_decide
 
 try:
     from position_enhanced import (
@@ -109,6 +110,7 @@ def run_backtest(
     trend_align: dict[int, int] | None = None,
     max_loss_pct: float | None = None,
     enhanced_stop: bool = False,
+    v3_filter: bool = False,
 ) -> dict:
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
@@ -127,16 +129,20 @@ def run_backtest(
     flip_at = {f["i"]: f["type"] for f in st["flips"]}
     trend, up, dn = st["trend"], st["up"], st["dn"]
     sig_by_ts = {}
-    if live_gate:
-        # 与实盘一致：信号要带 grade（A/B/C），否则打分制里 grade=None 不在
-        # allow_grades 会一律 alert_only，回测全被拦成 0 交易
-        try:
-            verdict = strategy.mtf_bias(candles_by_tf or {gate_tf: candles}, p)["verdict"]
-        except Exception:
-            verdict = "mixed"
-        for s in st_signals(candles, st, gate_tf):
-            s["grade"] = strategy.grade(s, verdict)
-            sig_by_ts[s["ts"]] = s
+    if live_gate or v3_filter:
+        if live_gate:
+            # 与实盘一致：信号要带 grade（A/B/C），否则打分制里 grade=None 不在
+            # allow_grades 会一律 alert_only，回测全被拦成 0 交易
+            try:
+                verdict = strategy.mtf_bias(candles_by_tf or {gate_tf: candles}, p)["verdict"]
+            except Exception:
+                verdict = "mixed"
+            for s in st_signals(candles, st, gate_tf):
+                s["grade"] = strategy.grade(s, verdict)
+                sig_by_ts[s["ts"]] = s
+        if v3_filter:
+            for s in st_signals(candles, st, gate_tf):
+                sig_by_ts[s["ts"]] = s
 
     def _cbtf_at(i: int) -> dict[str, list[dict]]:
         ts = candles[i]["ts"]
@@ -318,6 +324,20 @@ def run_backtest(
         对齐实盘 executor（trade_half → 保证金减半）。默认 1.0。
         """
         profile = "normal"
+        if v3_filter:
+            sig = sig_by_ts.get(candles[i]["ts"])
+            if not sig or sig["type"] != typ:
+                return False, profile, 1.0
+            feats = features_from_candles(
+                candles, i, 1 if typ == "buy" else -1,
+                candles_htf=_cbtf_at(i).get("4h"),
+                st_periods=10, st_mult=3.0)
+            if not feats:
+                return False, profile, 1.0
+            dec = v3_decide(1 if typ == "buy" else -1, feats)
+            if not dec.get("execute"):
+                return False, profile, 1.0
+            return True, "normal", 1.0
         if live_gate:
             sig = sig_by_ts.get(candles[i]["ts"])
             if not sig or sig["type"] != typ:
@@ -481,7 +501,7 @@ def run_backtest(
                                         or (d == -1 and typ == "sell"))
                 if gate_ok and aligned:
                     open_pos(i, price, typ, profile, size_mul)
-                elif aligned and (live_gate or er_min is not None):
+                elif aligned and (live_gate or er_min is not None or v3_filter):
                     n_block += 1
                 elif not aligned:
                     n_align_block += 1
