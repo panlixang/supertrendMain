@@ -104,25 +104,16 @@ function drawMain(el, data) {
     )
   );
 
-  // 当前策略标记：入场(ST翻转箭头) + 出场(v4-exit 圆点，按盈亏上色，标注 SL/TP/ST)
-  const mk = [...base.signals].flatMap((s) => {
+  // 当前策略标记：入场(ST翻转箭头)。出场盈亏不在此页模拟（实盘由 executor 按 ExitRules 执行）。
+  const mk = [...base.signals].map((s) => {
     const isBuy = s.type === "buy";
-    const entry = {
+    return {
       time: toT(s.ts),
       position: isBuy ? "belowBar" : "aboveBar",
       color: isBuy ? C.up : C.down,
       shape: isBuy ? "arrowUp" : "arrowDown",
       text: isBuy ? "买" : "卖",
     };
-    const win = s.pnl > 0;
-    const exit = {
-      time: toT(s.exit_ts),
-      position: isBuy ? "aboveBar" : "belowBar",
-      color: win ? C.up : C.down,
-      shape: "circle",
-      text: (s.exit_type || "").toUpperCase(),
-    };
-    return [entry, exit];
   });
   mk.sort((a, b) => a.time - b.time);
   candle.setMarkers(mk);
@@ -200,14 +191,13 @@ export default function PatternPage() {
   }, [data]);
 
   const sigs = data?.base?.signals || [];
-  const stats = data?.base?.stats || { n: 0 };
 
   return (
     <div style={{ display: "flex", height: "100%", minWidth: 0, color: "#e8eaed" }}>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       {/* 工具栏 */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid #1e1e1e", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 14, fontWeight: 700 }}>当前策略 · ST翻转 + v4-exit</span>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>当前策略 · ST翻转信号</span>
         <label style={{ fontSize: 12, color: "#8b93a0" }}>
           品种
           <input
@@ -223,7 +213,7 @@ export default function PatternPage() {
             {BASE_TFS.map((t) => (<option key={t} value={t}>{t}</option>))}
           </select>
         </label>
-        <span style={{ fontSize: 12, color: "#5a6270" }}>出场：SL 1.5×ATR / TP 2×ATR 半仓 / ST 尾随</span>
+        <span style={{ fontSize: 12, color: "#5a6270" }}>出场：tp1 浮盈1.5%平70% → 保本 → 反向信号离场（实盘口径）</span>
         <label style={{ fontSize: 12, color: "#8b93a0", display: "flex", alignItems: "center", gap: 4 }}>
           <input type="checkbox" checked={filterD} onChange={(e) => setFilterD(e.target.checked)} style={{ accentColor: "#00c9a7" }} />
           D 评分过滤(评分≤60)
@@ -235,22 +225,16 @@ export default function PatternPage() {
 
       {/* 图例 / 策略统计（与回测同口径） */}
       <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "6px 14px", fontSize: 12, color: "#8b93a0", borderBottom: "1px solid #1e1e1e", flexWrap: "wrap" }}>
-        <span><i style={dot(C.up)} /> 买 / 盈利出场</span>
-        <span><i style={dot(C.down)} /> 卖 / 亏损出场</span>
-        <span><i style={dot(C.neutral)} /> 圆点=出场(SL/TP/ST)</span>
         <span style={{ color: filterD ? C.up : "#5a6270" }}>入场过滤：{filterD ? "D(评分≤60)" : "不过滤(全ST)"}</span>
         <span style={{ marginLeft: "auto" }}>
-          信号 <b style={{ color: "#e8eaed" }}>{stats.n}</b> 笔 · 胜率 <b style={{ color: C.up }}>{stats.win_rate ?? "-"}%</b>
-          · 均盈 <b style={{ color: (stats.avg_pnl ?? 0) >= 0 ? C.up : C.down }}>{(stats.avg_pnl ?? 0) > 0 ? "+" : ""}{stats.avg_pnl ?? "-"}%</b>
+          信号 <b style={{ color: "#e8eaed" }}>{sigs.length}</b> 笔
+          {filterD && <span style={{ color: C.up }}> · 已按 D 评分过滤</span>}
         </span>
-        <span>盈亏比 <b style={{ color: "#e8eaed" }}>{stats.pl_ratio ?? "-"}</b></span>
-        <span>PF <b style={{ color: "#e8eaed" }}>{stats.pf ?? "-"}</b></span>
-        <span>t <b style={{ color: (stats.t ?? 0) >= 2 ? C.up : C.down }}>{stats.t ?? "-"}</b></span>
       </div>
 
       {/* 主图（基础周期） */}
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        <div style={tag("主图 · SuperTrend 翻转信号 10/3.0 + v4-exit（" + baseTf + "）")} />
+        <div style={tag("主图 · SuperTrend 翻转信号 10/3.0（" + baseTf + "）")} />
         {data?.base?.candles?.length ? <div ref={mainRef} style={{ position: "absolute", inset: 0, padding: 6 }} /> : (
           <Empty err={error} loading={loading} />
         )}
@@ -274,9 +258,6 @@ const btn = {
   background: "#00c9a7", color: "#000", border: "none", borderRadius: 6,
   padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer",
 };
-const dot = (color) => ({
-  display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: color, marginRight: 5,
-});
 const tag = (text) => ({
   position: "absolute", top: 10, left: 14, zIndex: 2, fontSize: 10.5, fontWeight: 700,
   color: "#8b93a0", letterSpacing: 0.3, pointerEvents: "none",

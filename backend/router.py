@@ -1,7 +1,6 @@
 """HTTP / WebSocket 路由"""
 
 import asyncio
-import bisect
 import json
 import logging
 import math
@@ -132,28 +131,35 @@ async def _pattern_candles(symbol: str, tf: str, limit: int) -> list:
     return got or []
 
 
-@router.get("/api/pattern")
-async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
-                     filter_by_regime: bool = False):
-    """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转 + v4-exit 出场 + 六大市场状态判定。
+async def _pattern_impl(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
+                       filter_by_regime: bool = False, candles: Optional[list] = None):
+    """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转信号 + 六大市场状态判定。
 
     策略：
       - 信号：基础周期原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
-      - 出场 v4-exit：SL = 1.5×ATR；TP = 2×ATR 时平半仓，剩余仓位尾随至下一 ST 翻转；
-        若 H=300 根内未出现翻转，则在 H 处强制平仓。
       - 行情分类：趋势启动期、趋势运行期、趋势衰减期、震荡吸收期、假突破期、恐慌释放期。
 
+    说明：本接口只产出「信号 + 行情诊断」，不含出场/盈亏模拟。实盘出场由 executor
+      按 ExitRules 执行（tp1 1.5% 平 70% → 保本 → 反向信号/超趋线离场），故不再计算
+      v4-exit，避免页面展示与真实下单口径不一致。
+
     filter_by_regime=True 时只保留可交易状态（趋势启动期/运行期/恐慌释放期）的信号。
+    candles 可选：直接传入已构造好的 K 线列表（[{ts,o,h,l,c,vol}]），跳过本地库/REST 取数，
+      用于「策略学习」等需要超长历史（如 5 年 1h）的场景。
     返回每笔信号的完整行情诊断（regime, confidence, tradeable, metrics）。
     """
     symbol = (symbol or "BTCUSDT").strip().upper()
-    base = await _pattern_candles(symbol, base_tf, limit)
+    if candles:
+        base = [{"ts": int(c["ts"]), "o": float(c["o"]), "h": float(c["h"]),
+                "l": float(c["l"]), "c": float(c["c"]), "vol": float(c["vol"])}
+               for c in candles]
+    else:
+        base = await _pattern_candles(symbol, base_tf, limit)
     if not base:
         return {"symbol": symbol, "base_tf": base_tf, "error": "no_base_candles",
                 "base": None}
 
-    bcandles = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol}
-                for c in base]
+    bcandles = base
     opens = [c["o"] for c in bcandles]
     highs = [c["h"] for c in bcandles]
     lows = [c["l"] for c in bcandles]
@@ -168,41 +174,11 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
     flips = st["flips"]
     flip_idx = [f["i"] for f in flips]
 
-    def v4_exit(i, sd, sl, tp, H=300):
-        """v4-exit：返回 (exit_type, exit_price, pnl_pct, exit_i)。"""
-        entry = closes[i]
-        p = bisect.bisect_right(flip_idx, i)
-        nf = flips[p]["i"] if p < len(flips) else i + H
-        rest_close = lambda: closes[nf] if nf < len(closes) else closes[-1]
-        end = min(i + H + 1, len(closes))
-        for j in range(i + 1, end):
-            if sd == 1:
-                if lows[j] <= sl:
-                    return ("sl", sl, (sl - entry) / entry * 100, j)
-                if highs[j] >= tp:
-                    rc = rest_close()
-                    return ("tp", tp, 0.5 * (tp - entry) / entry * 100 + 0.5 * (rc - entry) / entry * 100, j)
-                if j == nf:
-                    return ("st", closes[min(nf, len(closes) - 1)], (closes[min(nf, len(closes) - 1)] - entry) / entry * 100, j)
-            else:
-                if highs[j] >= sl:
-                    # 空单：SL 在入场价上方，撞止损为亏损 → (entry - sl)
-                    return ("sl", sl, (entry - sl) / entry * 100, j)
-                if lows[j] <= tp:
-                    rc = rest_close()
-                    return ("tp", tp, 0.5 * (entry - tp) / entry * 100 + 0.5 * (entry - rc) / entry * 100, j)
-                if j == nf:
-                    return ("st", closes[min(nf, len(closes) - 1)], (entry - closes[min(nf, len(closes) - 1)]) / entry * 100, j)
-        last = min(i + H, len(closes) - 1)
-        if sd == 1:
-            return ("st", closes[last], (closes[last] - entry) / entry * 100, last)
-        return ("st", closes[last], (entry - closes[last]) / entry * 100, last)
-
     # 计算行情分类所需指标
     from market_regime import classify_market_regime
     adx14_values = ta_adx(highs, lows, closes, 14)
 
-    signals, pnls = [], []
+    signals = []
     regime_stats = {}  # 统计各状态的信号数量
 
     for f in flips:
@@ -210,8 +186,7 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
         if i >= len(bcandles):
             continue
         sd = 1 if f["type"] == "buy" else -1
-        a = atr[i]
-        if a is None or (isinstance(a, float) and math.isnan(a)):
+        if atr[i] is None or (isinstance(atr[i], float) and math.isnan(atr[i])):
             continue
         entry = closes[i]
 
@@ -235,16 +210,9 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
         if filter_by_regime and not regime_info["tradeable"]:
             continue
 
-        sl = entry - 1.5 * a if sd == 1 else entry + 1.5 * a
-        tp = entry + 2.0 * a if sd == 1 else entry - 2.0 * a
-        etype, eprice, pnl, ei = v4_exit(i, sd, sl, tp)
-        pnls.append(pnl)
         signals.append({
             "ts": bcandles[i]["ts"], "type": f["type"], "dir": sd,
             "price": round(entry, 6),
-            "sl": round(sl, 6), "tp": round(tp, 6),
-            "exit_ts": bcandles[ei]["ts"], "exit_price": round(eprice, 6),
-            "exit_type": etype, "pnl": round(pnl, 3),
             # 行情状态诊断
             "regime": regime_info["regime"],
             "regime_cn": regime_info["regime_cn"],
@@ -252,27 +220,6 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
             "tradeable": regime_info["tradeable"],
             "metrics": regime_info["metrics"],
         })
-
-    # ── 窗口策略统计（与回测同口径）──
-    n = len(pnls)
-    stats = {"n": n}
-    if n:
-        mean = sum(pnls) / n
-        wins = [x for x in pnls if x > 0]
-        losses = [x for x in pnls if x <= 0]
-        aw = sum(wins) / len(wins) if wins else 0.0
-        al = sum(losses) / len(losses) if losses else 0.0
-        w = sum(wins)
-        l = -sum(losses)
-        var = sum((x - mean) ** 2 for x in pnls) / (n - 1) if n > 1 else 0.0
-        stats = {
-            "n": n,
-            "win_rate": round(len(wins) / n * 100, 1),
-            "avg_pnl": round(mean, 3),
-            "pl_ratio": round(aw / abs(al), 2) if al else None,
-            "pf": round(w / l, 2) if l > 0 else None,
-            "t": round(mean / math.sqrt(var / n), 2) if var > 0 else 0.0,
-        }
 
     return {
         "symbol": symbol,
@@ -286,10 +233,28 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
                 "trend": st["trend"],
             },
             "signals": signals,
-            "stats": stats,
         },
         "regime_stats": regime_stats,  # 各状态信号数量统计
     }
+
+
+@router.get("/api/pattern")
+async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
+                     filter_by_regime: bool = False):
+    """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转信号 + 六大市场状态判定。
+
+    策略：
+      - 信号：基础周期原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
+      - 行情分类：趋势启动期、趋势运行期、趋势衰减期、震荡吸收期、假突破期、恐慌释放期。
+
+    说明：本接口只产出「信号 + 行情诊断」，不含出场/盈亏模拟（实盘出场由 executor
+      按 ExitRules 执行）。
+
+    filter_by_regime=True 时只保留可交易状态（趋势启动期/运行期/恐慌释放期）的信号。
+    返回每笔信号的完整行情诊断（regime, confidence, tradeable, metrics）。
+    """
+    return await _pattern_impl(symbol=symbol, base_tf=base_tf, limit=limit,
+                              filter_by_regime=filter_by_regime)
 
 
 # ─── 参数（对应 Pine 的 input 面板） ─────────────────────────────

@@ -32,6 +32,14 @@ except ImportError as e:
     ML_AVAILABLE = False
     logger.warning(f"机器学习模块未安装，相关功能将不可用: {e}")
 
+# 策略学习模块（LightGBM / 聚类 / SHAP，依赖缺失时自动降级到 sklearn）
+try:
+    from strategy_learning import sl_router
+    SL_AVAILABLE = True
+except ImportError as e:
+    SL_AVAILABLE = False
+    logger.warning(f"策略学习模块未加载: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -115,3 +123,10 @@ if ML_AVAILABLE:
     logger.info("机器学习 API 已启用")
 else:
     logger.warning("机器学习 API 未启用（缺少依赖）")
+
+# 策略学习 API
+if SL_AVAILABLE:
+    app.include_router(sl_router)
+    logger.info("策略学习 API 已启用")
+else:
+    logger.warning("策略学习 API 未启用")

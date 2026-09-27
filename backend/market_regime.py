@@ -43,10 +43,11 @@ def calculate_price_momentum(closes: list, period: int = 20) -> float:
 
 def calculate_adx_slope(adx_values: list, lookback: int = 10) -> float:
     """计算ADX斜率 (判断趋势强度变化)"""
-    if len(adx_values) < lookback + 1:
+    vals = [v for v in adx_values if v is not None]   # 跳过指标预热期的 None
+    if len(vals) < lookback + 1:
         return 0.0
 
-    recent = adx_values[-lookback:]
+    recent = vals[-lookback:]
     if not recent:
         return 0.0
 

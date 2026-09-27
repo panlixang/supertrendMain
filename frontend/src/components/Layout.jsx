@@ -54,6 +54,7 @@ const MENU_ITEMS = [
   { path: "/", label: "首页", icon: "📊" },
   { path: "/research", label: "策略研究", icon: "🔬" },
   { path: "/pattern", label: "形态识别", icon: "📐" },
+  { path: "/strategy-learning", label: "策略学习", icon: "🧠" },
 ];
 
 const SIDEBAR_COLLAPSED_KEY = "st.sidebar.collapsed";

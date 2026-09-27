@@ -22,14 +22,20 @@ REST_URLS = ["https://www.okx.com", "https://aws.okx.com"]
 PAGE_LIMIT = 300
 
 
-def _get(url: str, timeout: int = 12):
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "supertrend-monitor/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        logger.warning(f"REST 失败 {url.split('?')[0]}: {e}")
-        return None
+def _get(url: str, timeout: int = 12, retries: int = 3):
+    """带退避重试的 REST GET；瞬时错误（SSL 握手超时 / EOF）会重试，全部失败才返回 None。"""
+    last = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "supertrend-monitor/1.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())
+        except Exception as e:
+            last = e
+            logger.warning(f"REST 失败(第{attempt + 1}/{retries}次) {url.split('?')[0]}: {e}")
+            if attempt < retries - 1:
+                time.sleep(0.5 * (attempt + 1))
+    return None
 
 
 def _rows_to_candles(rows: list) -> list[Candle]:
