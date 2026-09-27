@@ -276,7 +276,7 @@ class PatternTrader:
             symbol=sym,
             enabled=bool(kw.get("enabled", False)),
             margin_usdt=float(kw.get("margin_usdt") or 10.0),
-            leverage=int(kw.get("leverage") or 3),
+            leverage=int(float(kw.get("leverage") or 3)),
             allow_tfs=list(kw.get("allow_tfs") or ["1h"]),
             sizing_mode=str(kw.get("sizing_mode") or "fixed"),
             equity_pct=float(kw.get("equity_pct") or 10.0),
@@ -322,7 +322,15 @@ class PatternTrader:
                    "filter_v3")
         for k in xr_keys:
             if k in kw and kw[k] is not None:
-                setattr(sc, k, kw[k])
+                v = kw[k]
+                # 存盘前规范类型：leverage 必须是 int、金额必须是 float。
+                # 否则一旦被写成 "10.0" 这种浮点/字符串，下次 _load 的 int() 会直接
+                # 抛错 → 整个品种清单加载失败（该事故形态见 _load 里的逐行容错说明）。
+                if k == "leverage":
+                    v = int(float(v))
+                elif k in ("margin_usdt", "equity_pct"):
+                    v = float(v)
+                setattr(sc, k, v)
         self.save()
         self._sync()
         return {"ok": True}
