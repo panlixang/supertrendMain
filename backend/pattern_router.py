@@ -24,6 +24,7 @@ class CfgIn(BaseModel):
     price_offset:  Optional[float] = None
     exchange:      Optional[str]   = None
     block_4h:      Optional[bool]  = None
+    confirm_close: Optional[bool]  = None   # True = 只在信号 K 收盘后下单（对齐回测口径）
 
     cooldown_sec:  Optional[int]   = None
     poll_sec:      Optional[int]   = None

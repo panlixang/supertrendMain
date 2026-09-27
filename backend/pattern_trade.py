@@ -46,6 +46,9 @@ CRED_FILE = os.path.join(_DIR, "pattern_credentials.json")
 EXCHANGES = ("okx", "bitget")
 ALL_TFS = ["15m", "1h", "4h", "1d"]
 
+# 各周期 K 线时长（秒），用于"收盘确认"判断
+TF_SEC = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+
 # 形态识别页基础信号的 SuperTrend 参数（必须和 /api/pattern 一致）
 ST_PERIODS = 10
 ST_MULTIPLIER = 3.0
@@ -72,6 +75,7 @@ class PatternConfig:
     price_offset: float = 0.05
     exchange:     str   = "okx"
     block_4h:     bool  = True     # True = 4h 形态反向则不下单
+    confirm_close: bool = True     # True = 只在信号那根 K 收盘后才下单（对齐回测：用收盘数据确认 flip，避免未收盘 K 的 ST 重绘假信号）
 
     # ── 过滤策略 ──
     # 品种独立开关 filter_v3，挂在 SymbolTradeConfig（见 state.py），默认关=不过滤；
@@ -546,6 +550,12 @@ class PatternTrader:
         for tf in sc.allow_tfs:
             sig = await self._latest_signal(sym, tf)
             if not sig:
+                continue
+            # 收盘确认：只有信号所在那根 K 已收盘才认。
+            # 未收盘 K 的 ST 会随实时价重绘（盘中假翻转，事后可能消失），
+            # 与回测"用收盘数据确认 flip"的口径不一致，故等收盘后再下单。
+            if self.cfg.confirm_close and \
+                    time.time() * 1000 < sig["ts"] + TF_SEC.get(tf, 3600) * 1000:
                 continue
             key = (sym, tf)
             if self._last_flip.get(key) is None:
