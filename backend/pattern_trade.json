@@ -28,8 +28,8 @@
     {
       "symbol": "NVDA-USDT-SWAP",
       "enabled": true,
-      "margin_usdt": 10.0,
-      "leverage": 3,
+      "margin_usdt": 50.0,
+      "leverage": 10,
       "allow_tfs": ["1h"],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
@@ -120,8 +120,8 @@
     {
       "symbol": "SKHYNIX-USDT-SWAP",
       "enabled": true,
-      "margin_usdt": 10.0,
-      "leverage": 3,
+      "margin_usdt": 50.0,
+      "leverage": 10,
       "allow_tfs": ["1h"],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
@@ -143,8 +143,8 @@
     {
       "symbol": "TSLA-USDT-SWAP",
       "enabled": true,
-      "margin_usdt": 10.0,
-      "leverage": 3,
+      "margin_usdt": 50.0,
+      "leverage": 10,
       "allow_tfs": ["1h"],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
