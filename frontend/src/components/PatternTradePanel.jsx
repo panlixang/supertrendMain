@@ -552,13 +552,16 @@ export default function PatternTradePanel({ currentSymbol }) {
                 </button>
                 <button
                   style={{ ...SZ.btnGhost, marginLeft: 6 }}
-                  title="4h 趋势跟随策略（已 walk-forward 样本外验证）：4h SuperTrend(10,3.0) 翻转开仓，TP1 +2.0% 平 50% 后止损移到开仓价保本，剩余由同周期反向信号（下一翻转）平仓，初始止损固定 2%。样本外 +837%、pf 7.72、回撤 -7.4%（1X、约 50 笔/年、均持仓 7.3 天）。点击会顺带把该品种「允许周期」设为仅 4h。"
+                  title="4h 趋势跟随策略（已 walk-forward 样本外验证）：4h SuperTrend(10,3.0) 翻转开仓，TP1 +2.0% 平 50% 后止损移到开仓价保本，剩余由同周期反向信号（下一翻转）平仓，初始止损固定 2%。样本外 +837%、pf 7.72、回撤 -7.4%（1X、约 50 笔/年、均持仓 7.3 天）。点击会顺带把该品种「允许周期」设为仅 4h，并关闭 V3 过滤（验证基准为零过滤）。"
                   onClick={() => updateSymbol(s.symbol, {
                     exit_mode: "single",
                     tp1_pct: 2.0, tp1_ratio: 50,
                     sl_mode: "pct", sl_pct: 2.0,
                     move_sl_to_entry: true, trail_with_st: true, reverse_close: false,
                     allow_tfs: ["4h"],
+                    // 验证基准是「零过滤」：V3 是为 1h 设计的（含 4H 趋势环境维度），
+                    // base=4h 时它会自我比较且未经任何验证，开着会偏离回测结论。
+                    filter_v3: false,
                   })}
                 >
                   预设：4h趋势跟随 · 单档2.0%/50% · 下一翻转平仓
