@@ -1,0 +1,97 @@
+//@version=5
+// ============================================================
+// Trend Hub 复刻版 —— 波动自适应趋势中枢 + 多空结构信号
+// 依据 MicroChainAi Trend Hub 公开描述复现：
+//   1. 动态趋势中枢：根据波动强度自适应调整（KAMA 型自适应均线）
+//   2. 趋势状态识别：中枢方向 + 价格相对位置 → 多头 / 空头 / 震荡
+//   3. 仅在结构发生变化时给出多/空信号（不做频繁信号）
+//   4. 多周期共振：可选只在与高周期同向时触发信号
+// 仅供学习研究，不构成投资建议
+// ============================================================
+indicator("Trend Hub 复刻版 (多空信号)", overlay=true, max_labels_count=500)
+
+// ---------------- 输入参数 ----------------
+grpCore   = "趋势中枢"
+erPeriod  = input.int(34,  "自适应基准周期", minval=5, group=grpCore, tooltip="效率比计算窗口，越大中枢越平滑")
+fastLen   = input.int(2,   "最快响应周期",   minval=1, group=grpCore)
+slowLen   = input.int(60,  "最慢响应周期",   minval=2, group=grpCore)
+bandMult  = input.float(1.6, "中枢带宽度(ATR倍数)", step=0.1, group=grpCore, tooltip="价格需突破中枢带才算有效趋势结构")
+
+grpHtf    = "多周期共振"
+htf       = input.timeframe("240", "共振周期", options=["60","120","240","480","D"], group=grpHtf)
+useHtf    = input.bool(true, "仅与共振周期同向时给信号", group=grpHtf)
+
+grpStyle  = "显示风格"
+cnColor   = input.bool(true, "红涨绿跌 (A股配色)", group=grpStyle)
+showBand  = input.bool(true, "显示中枢带", group=grpStyle)
+showTable = input.bool(true, "显示状态面板", group=grpStyle)
+
+colBull = cnColor ? color.new(#e03131, 0) : color.new(#2f9e44, 0)
+colBear = cnColor ? color.new(#2f9e44, 0) : color.new(#e03131, 0)
+colFlat = color.new(#868e96, 0)
+
+// ---------------- 核心：波动自适应中枢 (KAMA 型) ----------------
+// 效率比 ER = 净位移 / 路程，趋势强时 ER→1（响应快），震荡时 ER→0（平滑）
+f_kamaState() =>
+    chg   = math.abs(close - close[erPeriod])
+    path  = math.sum(math.abs(close - close[1]), erPeriod)
+    er    = path > 0 ? chg / path : 0.0
+    sc    = math.pow(er * (2.0 / (fastLen + 1) - 2.0 / (slowLen + 1)) + 2.0 / (slowLen + 1), 2)
+    var float k = na
+    k := na(k[1]) ? ta.sma(close, erPeriod) : k[1] + sc * (close - k[1])
+    a     = ta.atr(14)
+    up    = k + a * bandMult
+    lo    = k - a * bandMult
+    // 原始状态：+1 多头结构 / -1 空头结构 / 0 震荡或趋势减弱
+    raw   = k > k[1] and close > up ? 1 : k < k[1] and close < lo ? -1 : 0
+    [k, up, lo, raw]
+
+[center, bandUp, bandLo, rawState] = f_kamaState()
+
+// ---------------- 状态机：震荡期延续既有趋势认知 ----------------
+// raw=0 只表示"减弱/回抽"，不推翻趋势，直到结构真正反向才切换
+var int state = 0
+state := rawState != 0 ? rawState : state
+
+// ---------------- 多周期共振 ----------------
+htfState = request.security(syminfo.tickerid, htf, f_kamaState()[3], lookahead=barmerge.lookahead_off)
+
+// ---------------- 多空信号（仅结构变化时触发） ----------------
+htfOkL  = not useHtf or htfState == 1
+htfOkS  = not useHtf or htfState == -1
+longSig  = state == 1  and state[1] != 1  and htfOkL
+shortSig = state == -1 and state[1] != -1 and htfOkS
+
+if longSig
+    label.new(bar_index, low - bandUp * 0.0 - (high - low) * 0.6, "多",
+      style=label.style_label_up, color=colBull, textcolor=color.white, size=size.normal)
+if shortSig
+    label.new(bar_index, high + (high - low) * 0.6, "空",
+      style=label.style_label_down, color=colBear, textcolor=color.white, size=size.normal)
+
+// ---------------- 绘图 ----------------
+centerCol = rawState == 1 ? colBull : rawState == -1 ? colBear : colFlat
+plot(center, "动态趋势中枢", color=centerCol, linewidth=2)
+
+pUp = plot(showBand ? bandUp : na, "中枢上沿", color=color.new(centerCol, 70), linewidth=1)
+pLo = plot(showBand ? bandLo : na, "中枢下沿", color=color.new(centerCol, 70), linewidth=1)
+fill(pUp, pLo, color=color.new(centerCol, 90), title="中枢带")
+
+// K 线染色：有效结构同色，减弱/震荡期灰色降权
+barcolor(rawState == 1 ? colBull : rawState == -1 ? colBear : color.new(colFlat, 30))
+bgcolor(longSig  ? color.new(colBull, 85) : shortSig ? color.new(colBear, 85) : na)
+
+// ---------------- 状态面板 ----------------
+var table t = table.new(position.top_right, 2, 2, bgcolor=color.new(color.white, 20), border_width=1)
+f_txt(s) => s == 1 ? "多头" : s == -1 ? "空头" : "震荡"
+f_col(s) => s == 1 ? colBull : s == -1 ? colBear : colFlat
+if showTable and barstate.islast
+    table.cell(t, 0, 0, "当前周期", text_color=color.black, text_size=size.small)
+    table.cell(t, 1, 0, f_txt(state), text_color=f_col(state), text_size=size.small)
+    table.cell(t, 0, 1, "共振周期(" + htf + ")", text_color=color.black, text_size=size.small)
+    table.cell(t, 1, 1, f_txt(htfState), text_color=f_col(htfState), text_size=size.small)
+
+// ---------------- 报警条件 ----------------
+alertcondition(longSig,  "多空信号·做多", "Trend Hub: 出现多头结构信号")
+alertcondition(shortSig, "多空信号·做空", "Trend Hub: 出现空头结构信号")
+alertcondition(state == 0 and state[1] != 0, "趋势减弱", "Trend Hub: 价格回到中枢带内，趋势减弱")

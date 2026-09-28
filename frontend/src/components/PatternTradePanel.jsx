@@ -550,6 +550,19 @@ export default function PatternTradePanel({ currentSymbol }) {
                 >
                   预设：3%硬止损 · 单档1.5%/70% · 剩余反向平仓
                 </button>
+                <button
+                  style={{ ...SZ.btnGhost, marginLeft: 6 }}
+                  title="4h 趋势跟随策略（已 walk-forward 样本外验证）：4h SuperTrend(10,3.0) 翻转开仓，TP1 +2.0% 平 50% 后止损移到开仓价保本，剩余由同周期反向信号（下一翻转）平仓，初始止损固定 2%。样本外 +837%、pf 7.72、回撤 -7.4%（1X、约 50 笔/年、均持仓 7.3 天）。点击会顺带把该品种「允许周期」设为仅 4h。"
+                  onClick={() => updateSymbol(s.symbol, {
+                    exit_mode: "single",
+                    tp1_pct: 2.0, tp1_ratio: 50,
+                    sl_mode: "pct", sl_pct: 2.0,
+                    move_sl_to_entry: true, trail_with_st: true, reverse_close: false,
+                    allow_tfs: ["4h"],
+                  })}
+                >
+                  预设：4h趋势跟随 · 单档2.0%/50% · 下一翻转平仓
+                </button>
               </div>
               <div style={{ ...SZ.row, flexWrap: "wrap" }}>
                 <span style={{ color: C.neutral, width: 56 }}>硬止损</span>

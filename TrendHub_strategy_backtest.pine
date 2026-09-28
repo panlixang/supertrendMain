@@ -1,0 +1,91 @@
+//@version=5
+// ============================================================
+// Trend Hub 复刻版 —— 回测策略版
+// 与 TrendHub_signal.pine 信号逻辑完全一致，转为 strategy
+// 用于在 TradingView 上测真实胜率/盈亏比（策略测试器面板）
+// 仅用于研究验证，不构成投资建议
+// ============================================================
+strategy("Trend Hub 复刻版 (回测)", overlay=true, max_labels_count=500,
+  initial_capital=10000, default_qty_type=strategy.percent_of_equity,
+  default_qty_value=10, commission_type=strategy.commission.percent,
+  commission_value=0.05, calc_on_every_tick=false)
+
+// ---------------- 输入参数（与指标版一致） ----------------
+grpCore   = "趋势中枢"
+erPeriod  = input.int(34,  "自适应基准周期", minval=5, group=grpCore)
+fastLen   = input.int(2,   "最快响应周期",   minval=1, group=grpCore)
+slowLen   = input.int(60,  "最慢响应周期",   minval=2, group=grpCore)
+bandMult  = input.float(1.6, "中枢带宽度(ATR倍数)", step=0.1, group=grpCore)
+
+grpHtf    = "多周期共振"
+htf       = input.timeframe("240", "共振周期", options=["60","120","240","480","D"], group=grpHtf)
+useHtf    = input.bool(true, "仅与共振周期同向时给信号", group=grpHtf)
+
+grpExit   = "出场规则"
+atrLen    = input.int(14, "ATR 周期", group=grpExit)
+slMult    = input.float(2.0, "止损 ATR 倍数", step=0.1, group=grpExit)
+tpMult    = input.float(3.0, "止盈 ATR 倍数", step=0.1, group=grpExit)
+useTrail  = input.bool(false, "改用 ATR 移动止损 (替代固定止盈)", group=grpExit)
+trailMult = input.float(3.0, "移动止损 ATR 倍数", step=0.1, group=grpExit)
+oppExit   = input.bool(true, "出现反向结构信号时平仓", group=grpExit)
+
+// ---------------- 核心：波动自适应中枢 ----------------
+f_kamaState() =>
+    chg   = math.abs(close - close[erPeriod])
+    path  = math.sum(math.abs(close - close[1]), erPeriod)
+    er    = path > 0 ? chg / path : 0.0
+    sc    = math.pow(er * (2.0 / (fastLen + 1) - 2.0 / (slowLen + 1)) + 2.0 / (slowLen + 1), 2)
+    var float k = na
+    k := na(k[1]) ? ta.sma(close, erPeriod) : k[1] + sc * (close - k[1])
+    a     = ta.atr(atrLen)
+    up    = k + a * bandMult
+    lo    = k - a * bandMult
+    raw   = k > k[1] and close > up ? 1 : k < k[1] and close < lo ? -1 : 0
+    [k, up, lo, raw]
+
+[center, bandUp, bandLo, rawState] = f_kamaState()
+
+var int state = 0
+state := rawState != 0 ? rawState : state
+
+htfState = request.security(syminfo.tickerid, htf, f_kamaState()[3], lookahead=barmerge.lookahead_off)
+
+// ---------------- 信号 ----------------
+htfOkL  = not useHtf or htfState == 1
+htfOkS  = not useHtf or htfState == -1
+longSig  = state == 1  and state[1] != 1  and htfOkL
+shortSig = state == -1 and state[1] != -1 and htfOkS
+
+// ---------------- 进出场 ----------------
+atr = ta.atr(atrLen)
+if longSig
+    strategy.entry("Long", strategy.long)
+if shortSig
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    if useTrail
+        strategy.exit("L-X", from_entry="Long", trail_points=atr * trailMult / syminfo.mintick, trail_offset=atr * trailMult / syminfo.mintick)
+    else
+        strategy.exit("L-X", from_entry="Long", stop=close - atr * slMult, limit=close + atr * tpMult)
+    if oppExit and shortSig
+        strategy.close("Long", comment="反向信号")
+
+if strategy.position_size < 0
+    if useTrail
+        strategy.exit("S-X", from_entry="Short", trail_points=atr * trailMult / syminfo.mintick, trail_offset=atr * trailMult / syminfo.mintick)
+    else
+        strategy.exit("S-X", from_entry="Short", stop=close + atr * slMult, limit=close - atr * tpMult)
+    if oppExit and longSig
+        strategy.close("Short", comment="反向信号")
+
+// ---------------- 绘图 ----------------
+colBull = color.new(#e03131, 0)
+colBear = color.new(#2f9e44, 0)
+colFlat = color.new(#868e96, 0)
+centerCol = rawState == 1 ? colBull : rawState == -1 ? colBear : colFlat
+plot(center, "动态趋势中枢", color=centerCol, linewidth=2)
+pUp = plot(bandUp, "中枢上沿", color=color.new(centerCol, 70))
+pLo = plot(bandLo, "中枢下沿", color=color.new(centerCol, 70))
+fill(pUp, pLo, color=color.new(centerCol, 90))
+bgcolor(longSig ? color.new(colBull, 85) : shortSig ? color.new(colBear, 85) : na)

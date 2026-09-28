@@ -1,0 +1,185 @@
+{
+  "name": "btc_1h_vol50",
+  "created_at": "2026-09-28T02:48:55.833851+00:00",
+  "symbol": "BTC-USDT",
+  "base_tf": "1h",
+  "limit": 36500,
+  "label_mode": "vol",
+  "horizon": 50,
+  "tp_pct": 2.5,
+  "sl_pct": 2.0,
+  "sample": "all",
+  "task": "reg",
+  "test_size": 0.3,
+  "valid_size": 0.2,
+  "split": "train / valid(early-stop) / test(仅评估)",
+  "seed": 42,
+  "num_boost_round": 400,
+  "best_iteration": 23,
+  "pred_spread_test": null,
+  "lightgbm": "4.7.0",
+  "params": {},
+  "n_features": 28,
+  "feature_order": [
+    "dir",
+    "confidence",
+    "bodyAtrRatio",
+    "flipDensity",
+    "wickRatio",
+    "trendAge",
+    "gapRatio",
+    "er",
+    "momentum",
+    "atr_trend",
+    "adx",
+    "adx_slope",
+    "flip_count",
+    "volatility_spike",
+    "mom5",
+    "atr_contract50",
+    "st_dist_change",
+    "close_ma30_atr",
+    "flip50",
+    "er20",
+    "dist_base_ma",
+    "adx_chg20",
+    "er_chg20",
+    "vol100",
+    "slope_htf",
+    "dist_htf_ma",
+    "v3_score",
+    "v3_pass"
+  ],
+  "metrics": {
+    "task": "reg",
+    "n_test": 251,
+    "mae": 0.24870647534533508,
+    "rmse": 0.3835758045195305,
+    "r2": 0.16026749696087383,
+    "n_train": 467,
+    "n_valid": 117,
+    "n_rows": 835
+  },
+  "importance": [
+    {
+      "feature": "atr_contract50",
+      "cn": "波动收缩",
+      "gain": 110.98531591147184,
+      "ratio": 0.3742141851790705
+    },
+    {
+      "feature": "adx",
+      "cn": "ADX",
+      "gain": 27.410921901464462,
+      "ratio": 0.09242263915836998
+    },
+    {
+      "feature": "dist_base_ma",
+      "cn": "基础MA距离",
+      "gain": 23.005341842770576,
+      "ratio": 0.07756814657648343
+    },
+    {
+      "feature": "adx_chg20",
+      "cn": "ADX变化20",
+      "gain": 18.44173637032509,
+      "ratio": 0.06218083259422522
+    },
+    {
+      "feature": "close_ma30_atr",
+      "cn": "偏离MA30",
+      "gain": 13.724135980010033,
+      "ratio": 0.04627428701597602
+    },
+    {
+      "feature": "atr_trend",
+      "cn": "ATR趋势%",
+      "gain": 11.793994203209877,
+      "ratio": 0.039766341110217734
+    },
+    {
+      "feature": "er",
+      "cn": "效率比ER",
+      "gain": 11.48759288340807,
+      "ratio": 0.038733233988921756
+    },
+    {
+      "feature": "trendAge",
+      "cn": "趋势年龄",
+      "gain": 10.408912986516953,
+      "ratio": 0.035096200428498925
+    },
+    {
+      "feature": "v3_score",
+      "cn": "V3评分",
+      "gain": 10.272577203810215,
+      "ratio": 0.03463651093338546
+    },
+    {
+      "feature": "st_dist_change",
+      "cn": "ST距离变化",
+      "gain": 7.480992816388607,
+      "ratio": 0.025224000203309567
+    },
+    {
+      "feature": "volatility_spike",
+      "cn": "波动尖峰",
+      "gain": 6.458682030439377,
+      "ratio": 0.021777028911459387
+    },
+    {
+      "feature": "dist_htf_ma",
+      "cn": "4hMA距离",
+      "gain": 6.00366023927927,
+      "ratio": 0.020242811457381753
+    },
+    {
+      "feature": "er_chg20",
+      "cn": "ER变化20",
+      "gain": 5.441556006669998,
+      "ratio": 0.01834753931562049
+    },
+    {
+      "feature": "vol100",
+      "cn": "百根波动",
+      "gain": 5.406346403062344,
+      "ratio": 0.018228821510329687
+    },
+    {
+      "feature": "adx_slope",
+      "cn": "ADX斜率",
+      "gain": 5.0580330193042755,
+      "ratio": 0.017054397596503464
+    },
+    {
+      "feature": "momentum",
+      "cn": "动量%",
+      "gain": 4.445104822516441,
+      "ratio": 0.014987760007102072
+    },
+    {
+      "feature": "slope_htf",
+      "cn": "4h斜率",
+      "gain": 3.9891600012779236,
+      "ratio": 0.01345043033096288
+    },
+    {
+      "feature": "wickRatio",
+      "cn": "影线比",
+      "gain": 3.386418990790844,
+      "ratio": 0.01141814133614354
+    },
+    {
+      "feature": "mom5",
+      "cn": "5根动量",
+      "gain": 3.3059879168868065,
+      "ratio": 0.011146948264006994
+    },
+    {
+      "feature": "gapRatio",
+      "cn": "跳空/ATR",
+      "gain": 2.824679970741272,
+      "ratio": 0.00952410059800827
+    }
+  ]
+}

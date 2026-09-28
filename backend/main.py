@@ -40,6 +40,15 @@ except ImportError as e:
     SL_AVAILABLE = False
     logger.warning(f"策略学习模块未加载: {e}")
 
+# 策略学习 · 独立新管线（sl_v2.py → /api/sl2）。
+# 独立文件、以子进程方式调 sl_v2.py，与上面原有的 /api/sl 完全隔离；失败不影响主流程。
+try:
+    from sl2_api import sl2_router
+    SL2_AVAILABLE = True
+except ImportError as e:
+    SL2_AVAILABLE = False
+    logger.warning(f"策略学习 sl_v2 模块未加载: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -130,3 +139,10 @@ if SL_AVAILABLE:
     logger.info("策略学习 API 已启用")
 else:
     logger.warning("策略学习 API 未启用")
+
+# 策略学习 · 独立新管线 API（/api/sl2，追加挂载，不影响上面的 /api/sl）
+if SL2_AVAILABLE:
+    app.include_router(sl2_router)
+    logger.info("策略学习 sl_v2 API 已启用（/api/sl2）")
+else:
+    logger.warning("策略学习 sl_v2 API 未启用")

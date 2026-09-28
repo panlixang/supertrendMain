@@ -1,0 +1,193 @@
+{
+  "name": "btc_1h_tpsl_h30_v3",
+  "created_at": "2026-09-28T02:31:49.791866+00:00",
+  "symbol": "BTC-USDT",
+  "base_tf": "1h",
+  "limit": 36500,
+  "label_mode": "tpsl",
+  "horizon": 30,
+  "tp_pct": 2.5,
+  "sl_pct": 2.0,
+  "sample": "v3",
+  "task": "cls",
+  "test_size": 0.3,
+  "valid_size": 0.2,
+  "split": "train / valid(early-stop) / test(仅评估)",
+  "seed": 42,
+  "num_boost_round": 300,
+  "best_iteration": 35,
+  "pred_spread_test": 0.5114405531921101,
+  "lightgbm": "4.7.0",
+  "params": {},
+  "n_features": 28,
+  "feature_order": [
+    "dir",
+    "confidence",
+    "bodyAtrRatio",
+    "flipDensity",
+    "wickRatio",
+    "trendAge",
+    "gapRatio",
+    "er",
+    "momentum",
+    "atr_trend",
+    "adx",
+    "adx_slope",
+    "flip_count",
+    "volatility_spike",
+    "mom5",
+    "atr_contract50",
+    "st_dist_change",
+    "close_ma30_atr",
+    "flip50",
+    "er20",
+    "dist_base_ma",
+    "adx_chg20",
+    "er_chg20",
+    "vol100",
+    "slope_htf",
+    "dist_htf_ma",
+    "v3_score",
+    "v3_pass"
+  ],
+  "metrics": {
+    "task": "cls",
+    "n_test": 171,
+    "accuracy": 0.5321637426900585,
+    "precision": 0.48333333333333334,
+    "recall": 0.3717948717948718,
+    "f1": 0.42028985507246375,
+    "confusion_matrix": {
+      "tn": 62,
+      "fp": 31,
+      "fn": 49,
+      "tp": 29
+    },
+    "auc": 0.5168183071408878,
+    "n_train": 319,
+    "n_valid": 80,
+    "n_rows": 570
+  },
+  "importance": [
+    {
+      "feature": "dist_htf_ma",
+      "cn": "4hMA距离",
+      "gain": 155.75376963615417,
+      "ratio": 0.11019747570424662
+    },
+    {
+      "feature": "slope_htf",
+      "cn": "4h斜率",
+      "gain": 112.28692054748535,
+      "ratio": 0.07944421010060708
+    },
+    {
+      "feature": "er_chg20",
+      "cn": "ER变化20",
+      "gain": 110.42341923713684,
+      "ratio": 0.07812576277922492
+    },
+    {
+      "feature": "adx",
+      "cn": "ADX",
+      "gain": 109.058109998703,
+      "ratio": 0.07715979173414164
+    },
+    {
+      "feature": "dist_base_ma",
+      "cn": "基础MA距离",
+      "gain": 89.69750952720642,
+      "ratio": 0.06346195761390641
+    },
+    {
+      "feature": "close_ma30_atr",
+      "cn": "偏离MA30",
+      "gain": 71.85307049751282,
+      "ratio": 0.05083682410333923
+    },
+    {
+      "feature": "trendAge",
+      "cn": "趋势年龄",
+      "gain": 68.54264962673187,
+      "ratio": 0.048494665551858274
+    },
+    {
+      "feature": "adx_slope",
+      "cn": "ADX斜率",
+      "gain": 67.46732997894287,
+      "ratio": 0.047733865276922124
+    },
+    {
+      "feature": "volatility_spike",
+      "cn": "波动尖峰",
+      "gain": 66.98682069778442,
+      "ratio": 0.04739389976623292
+    },
+    {
+      "feature": "er",
+      "cn": "效率比ER",
+      "gain": 66.20305752754211,
+      "ratio": 0.0468393788508649
+    },
+    {
+      "feature": "gapRatio",
+      "cn": "跳空/ATR",
+      "gain": 64.68238043785095,
+      "ratio": 0.04576348337150215
+    },
+    {
+      "feature": "adx_chg20",
+      "cn": "ADX变化20",
+      "gain": 60.66327118873596,
+      "ratio": 0.04291992013148118
+    },
+    {
+      "feature": "atr_contract50",
+      "cn": "波动收缩",
+      "gain": 60.36332803964615,
+      "ratio": 0.042707707111137
+    },
+    {
+      "feature": "st_dist_change",
+      "cn": "ST距离变化",
+      "gain": 55.54825961589813,
+      "ratio": 0.039300994150803674
+    },
+    {
+      "feature": "wickRatio",
+      "cn": "影线比",
+      "gain": 53.09096956253052,
+      "ratio": 0.03756243487492334
+    },
+    {
+      "feature": "atr_trend",
+      "cn": "ATR趋势%",
+      "gain": 48.222761154174805,
+      "ratio": 0.03411812480104079
+    },
+    {
+      "feature": "bodyAtrRatio",
+      "cn": "实体/ATR",
+      "gain": 40.934319734573364,
+      "ratio": 0.02896147370916301
+    },
+    {
+      "feature": "momentum",
+      "cn": "动量%",
+      "gain": 30.624789714813232,
+      "ratio": 0.02166736977492985
+    },
+    {
+      "feature": "mom5",
+      "cn": "5根动量",
+      "gain": 29.862309455871582,
+      "ratio": 0.02112790674937373
+    },
+    {
+      "feature": "vol100",
+      "cn": "百根波动",
+      "gain": 28.91269016265869,
+      "ratio": 0.020456040834111667
+    }
+  ]
+}

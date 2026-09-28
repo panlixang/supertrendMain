@@ -76,6 +76,8 @@ CLUSTER_COLS = [
     # ── 新增"锐"因子：波动率状态 / 摆幅回调 / 放量突变 / HTF背离 / 翻转密度 ──
     "atr_ratio50", "realized_vol20", "range_pos20", "pullback20", "body_frac20",
     "vol_ratio20", "vol_ratio50", "flipDensity20", "htf_div", "mom1h_norm",
+    # ── 特征组合（交互项）──
+    "mom_x_vol", "er_x_adx", "trend_vol", "div_x_dir",
 ]
 
 FEATURE_CN = {
@@ -93,6 +95,8 @@ FEATURE_CN = {
     "pullback20": "方向回撤", "body_frac20": "实体占比", "vol_ratio20": "量比20",
     "vol_ratio50": "量比50", "flipDensity20": "翻转密度20", "htf_div": "HTF背离",
     "mom1h_norm": "1h动量ATR",
+    "mom_x_vol": "动量×量比", "er_x_adx": "ER×ADX", "trend_vol": "趋势×波动",
+    "div_x_dir": "背离×方向",
 }
 
 # 训练结果缓存（让 SHAP 复用同一模型）
@@ -130,7 +134,7 @@ def _sharp_features(candles, i, atr, flips_sorted, htf_ts, htf_cl, side) -> dict
     hi = [c["h"] for c in candles]
     lo = [c["l"] for c in candles]
     vo = [c["vol"] for c in candles]
-    avg = lambda xs: (sum(xs) / len(xs)) if xs else 0.0
+    avg = lambda xs: (lambda ys: (sum(ys) / len(ys)) if ys else 0.0)([x for x in xs if x is not None])
     out = {}
 
     # 1) 波动率状态：当前 ATR 相对近 50 根均值（扩张/收缩）
@@ -187,6 +191,47 @@ def _sharp_features(candles, i, atr, flips_sorted, htf_ts, htf_cl, side) -> dict
     return out
 
 
+def _classify_regime6(m: dict, sharp: dict, feats: dict, side: int):
+    """为 ML 过滤重新设计的 regime 分类（6 类 + 震荡无序剔除标记）。
+
+    判别轴：趋势强度(ADX/ER) × 阶段(ADX斜率/动量) × 无序度(20根翻转密度)。
+    直接服务于「哪些 ST 翻转可学」：震荡无序期（反复跳信号、无趋势无波动）被标
+    is_disorder=True 剔除；其余按用户要求的 6 类细分。
+    阈值基于 1h BTC 的 ADX(0-100)/动量(%)尺度经验设定，后续可按分布微调。
+    """
+    adx = m.get("adx") or 0.0
+    adx_slope = m.get("adx_slope") or 0.0
+    er = m.get("er") or 0.0
+    mom = m.get("momentum") or 0.0
+    flip20 = sharp.get("flipDensity20") or 0.0
+    atr_ratio = sharp.get("atr_ratio50") or 0.0
+    htf_div = sharp.get("htf_div") or 0.0
+
+    # 震荡无序期：20 根内反复跳 ST 信号（>=2 次翻转）、且无明确趋势 → 直接剔除
+    # （按真实分布 flip20 中位数 0.05、p75 0.10、最大 0.20，>=0.10 即"反复跳"）
+    if flip20 >= 0.10 and adx < 23:
+        return ("choppy_disorder", "震荡无序期", True)
+
+    trending = (adx >= 23) and (er > 0.22)
+    if trending:
+        # 趋势末期：ADX 见顶回落，或多头价格却与 4h 动量背离
+        if adx_slope < -5 or (htf_div < 0 and adx >= 25):
+            return ("trend_end", "趋势末期", False)
+        # 趋势启动：ADX 中等且仍在爬升
+        if adx < 28 and adx_slope > 3:
+            return ("trend_init", "趋势启动", False)
+        return ("trend_run", "趋势", False)
+
+    # 非趋势 → 震荡系
+    # 震荡开启：刚从趋势转弱、翻转密度尚低（有序进入盘整）
+    if adx_slope < -5 and flip20 < 0.10:
+        return ("range_start", "震荡开启", False)
+    # 震荡末期：波动收缩、ADX 极低、翻转稀疏（压缩蓄势，临突破）
+    if atr_ratio < 1.0 and adx < 18 and flip20 < 0.05:
+        return ("range_end", "震荡末期", False)
+    return ("range_mid", "震荡", False)
+
+
 # 各周期一根 K 线对应的小时数（用于把「年」换算成 K 线根数）
 _TF_HOURS = {"1m": 1/60, "3m": 0.05, "5m": 5/60, "15m": 0.25, "30m": 0.5,
              "1h": 1, "2h": 2, "4h": 4, "6h": 6, "12h": 12, "1d": 24, "1w": 168, "1M": 720}
@@ -204,7 +249,8 @@ def compute_limit(base_tf: str, years: int = 5) -> int:
 
 
 async def build_dataset(symbol: str, base_tf: str, limit: int = None, years: int = 5,
-                        label_mode: str = "exit", horizon: int = 20) -> Optional[dict]:
+                        label_mode: str = "exit", horizon: int = 20,
+                        tp_pct: float = 2.5, sl_pct: float = 2.0) -> Optional[dict]:
     """取 SuperTrend 原始信号数据 + 现算原始/V3 特征，拼成 ML 数据集。
 
     label_mode:
@@ -223,7 +269,7 @@ async def build_dataset(symbol: str, base_tf: str, limit: int = None, years: int
     if limit is None:
         limit = compute_limit(base_tf, years)
 
-    ds_key = f"{symbol}|{base_tf}|{limit}|{label_mode}|{horizon}"
+    ds_key = f"{symbol}|{base_tf}|{limit}|{label_mode}|{horizon}|{tp_pct}|{sl_pct}"
     candle_key = f"{symbol}|{base_tf}|{limit}"  # K 线与标签模式无关，单独缓存
     if ds_key in _DS_CACHE:
         return _DS_CACHE[ds_key]
@@ -285,7 +331,7 @@ async def build_dataset(symbol: str, base_tf: str, limit: int = None, years: int
             pnl = ((cl[j] - entry) / entry * 100 if side > 0
                    else (entry - cl[j]) / entry * 100)
             exit_type = f"fwd{horizon}"
-        else:
+        elif label_mode == "exit":
             # exit 模式：tp1 1.5% 平 70% + 剩余 30% 反向信号（下一根 ST 翻转）平仓。
             #   入场以 1h K 线收盘确认（close[i]）；若 tp1 未触及则整笔反向平仓。
             #   若信号之后没有反向信号（末笔），无法判定出场则跳过。
@@ -310,12 +356,52 @@ async def build_dataset(symbol: str, base_tf: str, limit: int = None, years: int
                            else (entry - cl[nf]) / entry * 100)
             pnl = (0.7 * (tp_pct * 100) + 0.3 * reverse_pnl) if hit else reverse_pnl
             exit_type = "tp1_reverse"
+        elif label_mode == "tpsl":
+            # 结构化标签：未来 horizon 根内，先触 +tp_pct(TP) 还是先触 -sl_pct(SL)。
+            #   多: TP=high>=entry*(1+tp), SL=low<=entry*(1-sl); 空反之。
+            #   先触 TP → win=1（动量延续）；先触 SL → win=0；都未触 → 以末根净收益符号判定。
+            #   回归目标 = 首次触及时了结的收益率（TP→+tp*100，SL→-sl*100，未触→末根净收益）。
+            tp = tp_pct / 100.0
+            sl = sl_pct / 100.0
+            tp_price = entry * (1 + tp) if side > 0 else entry * (1 - tp)
+            sl_price = entry * (1 - sl) if side > 0 else entry * (1 + sl)
+            jmax = min(i + horizon, len(cl) - 1)
+            touch = 0  # 1=TP先, -1=SL先, 0=都未触
+            for k in range(i + 1, jmax + 1):
+                if side > 0:
+                    if h[k] >= tp_price:
+                        touch = 1; break
+                    if l[k] <= sl_price:
+                        touch = -1; break
+                else:
+                    if l[k] <= tp_price:
+                        touch = 1; break
+                    if h[k] >= sl_price:
+                        touch = -1; break
+            if touch == 1:
+                win = 1; pnl = tp * 100
+            elif touch == -1:
+                win = 0; pnl = -sl * 100
+            else:
+                net = ((cl[jmax] - entry) / entry * 100 if side > 0
+                       else (entry - cl[jmax]) / entry * 100)
+                win = 1 if net > 0 else 0
+                pnl = net
+            exit_type = f"tpsl{tp_pct}_{sl_pct}_h{horizon}"
         raw = _raw_st_features(candles, i, atr, flips_sorted)
         sharp = _sharp_features(candles, i, atr, flips_sorted, htf_ts, htf_cl, side)
         feats = features_from_candles(candles, i, side, candles_htf=candles_htf) or {}
         dec = v3_decide(side, feats) if feats else {
             "score": 0, "path": "未通过", "execute": False, "fused": False}
         m = sig.get("metrics") or {}
+        # 特征组合（交互项，便于树模型更易切分）
+        combo = {
+            "mom_x_vol": round((m.get("momentum") or 0) * sharp["vol_ratio20"], 4),
+            "er_x_adx": round((m.get("er") or 0) * (m.get("adx") or 0), 4),
+            "trend_vol": round(sharp["atr_ratio50"] * (m.get("adx") or 0), 4),
+            "div_x_dir": round(sharp["htf_div"] * side, 4),
+        }
+        reg6 = _classify_regime6(m, sharp, feats, side)
         rows.append({
             "ts": sig.get("ts"), "type": sig.get("type"), "dir": side,
             "pnl": round(pnl, 3), "win": 1 if pnl > 0 else 0,
@@ -343,6 +429,10 @@ async def build_dataset(symbol: str, base_tf: str, limit: int = None, years: int
             "v3_pass": bool(dec.get("execute")), "v3_fused": bool(dec.get("fused")),
             # 新锐因子
             **sharp,
+            # 特征组合
+            **combo,
+            # 新 regime 分类（6 类 + 震荡无序剔除标记）
+            "regime6": reg6[0], "regime6_cn": reg6[1], "is_disorder": reg6[2],
         })
 
     n = len(rows)
@@ -372,16 +462,26 @@ def _df_from(rows: List[dict]) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────
 # 2. LightGBM 训练（预测 / 找影响因素）
 # ──────────────────────────────────────────────────────────────
-def train_lightgbm(rows: List[dict], task: str = "cls", test_size: float = 0.3, seed: int = 42):
+def train_lightgbm(rows: List[dict], task: str = "cls", test_size: float = 0.3, seed: int = 42,
+                   time_split: bool = False):
     if len(rows) < 20:
         raise ValueError(f"样本不足（{len(rows)} 笔），至少需要 20 笔才能训练")
+    if time_split:
+        rows = sorted(rows, key=lambda r: r.get("ts", 0) or 0)
     df = _df_from(rows)
     X = df[FEATURE_COLS].values.astype(float)
     y = (df["win"].values.astype(int) if task == "cls"
          else df["pnl"].values.astype(float))
-    strat = y if task == "cls" else None
-    Xtr, Xte, ytr, yte, itr, ite = train_test_split(
-        X, y, np.arange(len(df)), test_size=test_size, random_state=seed, stratify=strat)
+    if time_split:
+        n = int(len(df) * (1 - test_size))
+        idx = np.arange(len(df))
+        itr, ite = idx[:n], idx[n:]
+        Xtr, Xte = X[itr], X[ite]
+        ytr, yte = y[itr], y[ite]
+    else:
+        strat = y if task == "cls" else None
+        Xtr, Xte, ytr, yte, itr, ite = train_test_split(
+            X, y, np.arange(len(df)), test_size=test_size, random_state=seed, stratify=strat)
 
     if LGBM_AVAILABLE:
         if task == "cls":
