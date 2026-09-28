@@ -255,9 +255,10 @@ async def main():
     print("\n=== 全部合计 ===")
     stat(trades)
 
-    # ETH 参数寻优网格（sl × tp1，合计 2024-2026）
-    if "ETH" in sym.upper():
-        print("\n=== ETH 参数寻优（sl × tp1，合计 2024-2026）===")
+    # 参数寻优网格（sl × tp1，合计 2024-2026）—— 对非 BTC 标的（ETH/CL）做寻优
+    if sym.upper() not in ("BTC-USDT", "BTC-USDT-SWAP"):
+        title = "CL" if "CL" in sym.upper() else "ETH"
+        print(f"\n=== {title} 参数寻优（sl × tp1，合计 2024-2026）===")
         print(f"{'sl%':>4} {'tp1%':>5} {'笔':>4} {'胜率':>6} {'收益%':>8} {'pf':>6} {'盈亏比':>6} {'回撤%':>7}")
         for sl in [2, 3, 4, 5]:
             for tp1 in [2, 3, 4, 5]:

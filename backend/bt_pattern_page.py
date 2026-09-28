@@ -270,17 +270,22 @@ def metrics(tr):
         max_dd = max(max_dd, (peak - eq) / NOTIONAL * 100)
         streak = 0 if t["pnl"] > 0 else streak + 1
         worst_streak = max(worst_streak, streak)
+    wins_p = [t["pnl"] for t in tr if t["pnl"] > 0]
+    loss_p = [-t["pnl"] for t in tr if t["pnl"] <= 0]
+    aw = sum(wins_p) / len(wins_p) if wins_p else 0.0
+    al = sum(loss_p) / len(loss_p) if loss_p else 0.0
+    payoff = aw / al if al else float("inf")
     return dict(n=n, wins=wins, wr=wins / n * 100 if n else 0, tot=tot,
                 ret=tot / NOTIONAL * 100, avg=tot / n / NOTIONAL * 100 if n else 0,
                 worst=min((t["ret_pct"] for t in tr), default=0),
-                max_dd=max_dd, streak=worst_streak)
+                max_dd=max_dd, streak=worst_streak, payoff=payoff)
 
 
 STRATS = [
     ("A", "A) 无过滤（全部翻转）", lambda s: True),
     ("B", "B) 仅 4h 形态过滤", lambda s: s["pass_4h"]),
-    ("C", "C) 页面默认(4h+趋势过滤)", lambda s: s["pass_4h"] and s["pass_trend"]),
-    ("D", "D) 页面默认 + 只做多", lambda s: s["pass_4h"] and s["pass_trend"] and s["dir"] > 0),
+    ("C", "C) V3 过滤（页面 filter_v3=true）", lambda s: s["v3_execute"]),
+    ("V", "V) V3 过滤 + 仅做多", lambda s: s["v3_execute"] and s["dir"] > 0),
 ]
 
 
@@ -297,24 +302,25 @@ def run(base, h4, start, end, label):
                        up_plot, dn_plot, flip_idx) for k, _, ok in STRATS}
     m = {k: metrics(v) for k, v in res.items()}
 
-    hdr = (f"{'策略':<28}{'笔数':>6}{'胜率':>8}{'收益USDT':>11}{'收益率%':>9}"
-           f"{'均笔%':>8}{'最大单笔亏%':>12}{'最大回撤%':>10}{'最长连亏':>9}")
+    hdr = (f"{'策略':<30}{'笔数':>6}{'胜率':>8}{'收益率%':>9}{'盈亏比':>8}"
+           f"{'最大回撤%':>11}{'最长连亏':>9}")
     print(hdr)
     print("-" * len(hdr))
     for k, lab, _ in STRATS:
         x = m[k]
-        print(f"{lab:<28}{x['n']:>6}{x['wr']:>7.1f}%{x['tot']:>11.0f}{x['ret']:>9.2f}"
-              f"{x['avg']:>8.3f}{x['worst']:>12.2f}{x['max_dd']:>10.2f}{x['streak']:>9}")
+        po = "   inf" if x["payoff"] == float("inf") else f"{x['payoff']:>8.2f}"
+        print(f"{lab:<30}{x['n']:>6}{x['wr']:>7.1f}%{x['ret']:>9.2f}{po}"
+              f"{x['max_dd']:>11.2f}{x['streak']:>9}")
 
     print("  放行/拦截（信号总数=%d）：" % len(win) + "  ".join(
         f"{k}={sum(1 for s in win if ok(s))}" for k, _, ok in STRATS))
     print_funnel(win)
     rc = Counter(t["reason"] for t in res["C"])
     print("  C 出场原因：" + "  ".join(f"{k}={v}" for k, v in rc.most_common()))
-    diagnose(res["C"], "C) 页面默认")
-    if res["D"]:
-        d = metrics(res["D"])
-        print(f"  仅多头对照：D) {d['n']} 笔 胜率 {d['wr']:.1f}%  "
+    diagnose(res["C"], "C) V3 过滤")
+    if res["V"]:
+        d = metrics(res["V"])
+        print(f"  仅多头对照：V) {d['n']} 笔 胜率 {d['wr']:.1f}%  "
               f"净 {d['ret']:+.2f}% 最大回撤 {d['max_dd']:.2f}% 最长连亏 {d['streak']}")
     return m
 
