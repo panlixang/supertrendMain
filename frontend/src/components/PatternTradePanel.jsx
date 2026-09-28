@@ -407,7 +407,13 @@ export default function PatternTradePanel({ currentSymbol }) {
         <div style={SZ.h}>下单品种</div>
         {symbols.length === 0 && <div style={{ color: C.dim }}>暂无品种</div>}
         {symbols.map((s) => (
-          <div key={s.symbol} style={{ borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 6 }}>
+          // key 带上关键字段指纹：框里用的是非受控 defaultValue，key 不变就不会重新挂载，
+          // 表现为「点了预设数字没变」。服务端值一变就重挂，立即反映真实配置。
+          <div key={s.symbol + "#" + JSON.stringify([
+                  s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
+                  s.allow_tfs, s.filter_v3,
+                ])}
+               style={{ borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 6 }}>
             <div style={SZ.row}>
               <input
                 type="checkbox" checked={s.enabled}
@@ -530,6 +536,35 @@ export default function PatternTradePanel({ currentSymbol }) {
                   />
                   单档止盈
                 </label>
+                {/* 单档模式的 TP1 两参数就摆在开关旁边，和下方的三挡 TP1/TP2/TP3 分开，
+                    避免「到底生效的是 70% 还是 50%」分不清。单档生效时边框高亮。 */}
+                <span style={{ fontSize: 11, color: C.neutral, display: "flex", alignItems: "center", gap: 3, marginLeft: 4 }}>
+                  触发
+                  <input
+                    style={{ ...SZ.inp, width: 46,
+                             borderColor: (s.exit_mode ?? cfg?.exit_mode ?? "multi") === "single" ? C.up : undefined }}
+                    type="number" step={0.1}
+                    defaultValue={s.tp1_pct ?? cfg?.tp1_pct ?? 1.5}
+                    title="单档止盈 TP1 触发涨幅（%）：浮盈达到该幅度即平掉下面比例"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v !== "") updateSymbol(s.symbol, { tp1_pct: Number(v) });
+                    }}
+                  />
+                  % 平
+                  <input
+                    style={{ ...SZ.inp, width: 46,
+                             borderColor: (s.exit_mode ?? cfg?.exit_mode ?? "multi") === "single" ? C.up : undefined }}
+                    type="number" step={1}
+                    defaultValue={s.tp1_ratio ?? cfg?.tp1_ratio ?? 70}
+                    title="单档止盈 TP1 平掉的比例（%）：剩余仓位靠保本 / 跟踪止损 / 同周期反向信号处理"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v !== "") updateSymbol(s.symbol, { tp1_ratio: Number(v) });
+                    }}
+                  />
+                  %
+                </span>
                 <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
                   <input
                     type="checkbox"
