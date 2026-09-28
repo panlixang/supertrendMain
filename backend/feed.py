@@ -293,15 +293,25 @@ class OKXFeed:
                     logger.warning(f"[{store.symbol} 移动止损失败] {e}")
 
     def _st_line(self, store: SymbolStore, tf: str) -> float | None:
-        """该品种该周期当前的超趋线值（多头取 up、空头取 dn）。"""
+        """该品种该周期当前的超趋线值（对齐 bt_compare 基准策略的跟踪取线）。
+
+        基准策略 bt_compare.py 的跟踪定义：多头持仓取 dn_plot、空头持仓取
+        up_plot（与「按最新 trend 取线」相反）。uptrend 时对应线为 None→不更新
+        止损（弱跟踪），趋势翻空根才抬到对方线。实盘与之严格一致，使 837% 成为
+        该策略的回测对标，而非另一套逻辑。
+        """
         candles = store.candles_by_tf(tf)
         if len(candles) < store.params.periods + 2:
             return None
         st = self._st_of(store, candles)
-        trend = st.get("trend") or []
-        if not trend or trend[-1] is None:
+        pos = store.position
+        if pos is None or getattr(pos, "qty", 0) <= 0:
             return None
-        return st["up"][-1] if trend[-1] == 1 else st["dn"][-1]
+        if getattr(pos, "long", False):
+            arr = st.get("dn_plot") or []
+        else:
+            arr = st.get("up_plot") or []
+        return arr[-1] if arr and arr[-1] is not None else None
 
     # ── 信号判定 ────────────────────────────────────────────────
     def _st_of(self, store: SymbolStore, candles: list[dict]) -> dict:
