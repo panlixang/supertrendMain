@@ -58,14 +58,43 @@ def stat(trades: list[dict]) -> None:
           f"pf={pf:5.2f}  最大回撤={mdd*100:6.1f}%")
 
 
+def summarize(trades: list[dict]) -> dict:
+    """返回数值版汇总（与 stat 同口径，含相对权益曲线最大回撤）。"""
+    rs = [t["realized"] for t in trades]
+    if not rs:
+        return {"n": 0, "wr": 0.0, "tot": 0.0, "pf": 0.0, "payoff": 0.0, "mdd": 0.0}
+    wins = [r for r in rs if r > 0]
+    losses = [r for r in rs if r <= 0]
+    tot = sum(rs)
+    pf = sum(wins) / (-sum(losses)) if losses and sum(losses) != 0 else float("inf")
+    wr = len(wins) / len(rs) * 100
+    aw = sum(wins) / len(wins) if wins else 0.0
+    al = (-sum(losses)) / len(losses) if losses else 0.0
+    payoff = aw / al if al else float("inf")
+    eq, cur = [], 0.0
+    for r in rs:
+        cur += r
+        eq.append(NOTIONAL + cur)
+    mx, mdd = eq[0], 0.0
+    for v in eq:
+        mx = max(mx, v)
+        mdd = min(mdd, (v - mx) / mx)
+    return {"n": len(rs), "wr": wr, "tot": tot / NOTIONAL * 100,
+            "pf": pf, "payoff": payoff, "mdd": mdd * 100}
+
+
 async def main():
     import sys
+    global SL_PCT, TP1_PCT
     targets = sys.argv[1:] or ["ETH-USDT-SWAP", "ETH-USDT"]
     # 止损模式：pct=开仓价固定2%(真实硬止损) | st=超趋线初始+跟随 | st_notrail=超趋线初始但不跟随
     mode = "pct"
+    sl_arg = float(sys.argv[3]) if len(sys.argv) > 3 else SL_PCT
+    tp1_arg = float(sys.argv[4]) if len(sys.argv) > 4 else TP1_PCT
     if len(sys.argv) > 2 and sys.argv[2] in ("pct", "st", "st_notrail"):
         mode = sys.argv[2]
         targets = sys.argv[1:2]
+    SL_PCT, TP1_PCT = sl_arg, tp1_arg
     loop = asyncio.get_event_loop()
     raw, sym = None, None
     for s in targets:
@@ -97,90 +126,143 @@ async def main():
     print(f"标的={sym}  数据范围: {fmt(tss[0])} ~ {fmt(tss[-1])}  4h根数={len(bc)}  信号数={len(signals)}")
     print(f"[校验] up_plot(支撑线)非None={n_up}/{len(bc)}  dn_plot(阻力线)非None={n_dn}/{len(bc)}")
 
-    trades = []
-    for f in signals:
-        i = f["i"]
-        long = f["type"] == "buy"
-        entry = closes[i]
-        fallback = entry * (1 - SL_PCT / 100) if long else entry * (1 + SL_PCT / 100)
-        if mode == "pct":
-            # sl_mode=pct：初始止损 = 开仓价固定百分比
-            stop = fallback
-        else:
-            # sl_mode=st：初始止损 = 超趋线轨道；轨道无效/方向不对则回落固定百分比
-            line0 = up_plot[i] if long else dn_plot[i]
-            if line0 is None or (long and line0 >= entry) or (not long and line0 <= entry):
+    def run_backtest(sl_pct: float, tp1_pct: float = TP1_PCT) -> list:
+        trades = []
+        for f in signals:
+            i = f["i"]
+            long = f["type"] == "buy"
+            entry = closes[i]
+            fallback = entry * (1 - sl_pct / 100) if long else entry * (1 + sl_pct / 100)
+            if mode == "pct":
                 stop = fallback
             else:
-                stop = line0
-        tp1_price = entry * (1 + TP1_PCT / 100) if long else entry * (1 - TP1_PCT / 100)
-        coins = NOTIONAL / entry
-        realized = -entry * coins * FEE      # 开仓手续费
-        tp1_done = False
-        closed = False
-        reason = "末根平仓"
-
-        for j in range(i + 1, len(bc)):
-            # trail_with_st：对齐「这套」基准策略（bt_compare / 改后 feed._st_line）
-            # 多头持仓跟踪取 dn_plot、空头取 up_plot（与按最新 trend 取线相反）
-            if mode != "st_notrail":
-                if long:
-                    line = dn_plot[j]
-                    if line is not None and line > stop:
-                        stop = line
+                line0 = up_plot[i] if long else dn_plot[i]
+                if line0 is None or (long and line0 >= entry) or (not long and line0 <= entry):
+                    stop = fallback
                 else:
-                    line = up_plot[j]
-                    if line is not None and line < stop:
-                        stop = line
+                    stop = line0
+            tp1_price = entry * (1 + tp1_pct / 100) if long else entry * (1 - tp1_pct / 100)
+            coins = NOTIONAL / entry
+            realized = -entry * coins * FEE
+            tp1_done = False
+            closed = False
 
-            # 止损优先于止盈（同 position.check）
-            if (lows[j] <= stop) if long else (highs[j] >= stop):
-                px = stop
+            for j in range(i + 1, len(bc)):
+                if mode != "st_notrail":
+                    if long:
+                        line = dn_plot[j]
+                        if line is not None and line > stop:
+                            stop = line
+                    else:
+                        line = up_plot[j]
+                        if line is not None and line < stop:
+                            stop = line
+                if (lows[j] <= stop) if long else (highs[j] >= stop):
+                    px = stop
+                    left = (1 - TP1_RATIO) if tp1_done else 1.0
+                    realized += ((px - entry) * coins * left) if long else ((entry - px) * coins * left)
+                    realized -= px * coins * left * FEE
+                    closed = True; break
+                if not tp1_done and ((highs[j] >= tp1_price) if long else (lows[j] <= tp1_price)):
+                    realized += ((tp1_price - entry) * coins * TP1_RATIO) if long \
+                        else ((entry - tp1_price) * coins * TP1_RATIO)
+                    realized -= tp1_price * coins * TP1_RATIO * FEE
+                    tp1_done = True
+                    stop = entry
+                if j in flip_idx:
+                    px = closes[j]
+                    left = (1 - TP1_RATIO) if tp1_done else 1.0
+                    realized += ((px - entry) * coins * left) if long else ((entry - px) * coins * left)
+                    realized -= px * coins * left * FEE
+                    closed = True; break
+            if not closed:
+                px = closes[-1]
                 left = (1 - TP1_RATIO) if tp1_done else 1.0
                 realized += ((px - entry) * coins * left) if long else ((entry - px) * coins * left)
                 realized -= px * coins * left * FEE
-                reason = "止损"; closed = True; break
-
-            if not tp1_done and ((highs[j] >= tp1_price) if long else (lows[j] <= tp1_price)):
-                realized += ((tp1_price - entry) * coins * TP1_RATIO) if long \
-                    else ((entry - tp1_price) * coins * TP1_RATIO)
-                realized -= tp1_price * coins * TP1_RATIO * FEE
-                tp1_done = True
-                stop = entry          # move_sl_to_entry 保本
-
-            if j in flip_idx:
-                px = closes[j]
-                left = (1 - TP1_RATIO) if tp1_done else 1.0
-                realized += ((px - entry) * coins * left) if long else ((entry - px) * coins * left)
-                realized -= px * coins * left * FEE
-                reason = "反向信号"; closed = True; break
-
-        if not closed:
-            px = closes[-1]
-            left = (1 - TP1_RATIO) if tp1_done else 1.0
-            realized += ((px - entry) * coins * left) if long else ((entry - px) * coins * left)
-            realized -= px * coins * left * FEE
-
-        trades.append({"y": y_of(tss[i]), "realized": realized, "reason": reason, "long": long})
+            trades.append({"y": y_of(tss[i]), "realized": realized, "long": long})
+        return trades
 
     print(f"\n配置: 止损模式={mode} · TP1 +{TP1_PCT}% 平 {TP1_RATIO*100:.0f}% · 保本 · "
           f"{'ST跟踪' if mode != 'st_notrail' else '不跟踪'} · 下一翻转平仓 · 费 0.05%单边")
 
+    # 硬止损敏感度：2% / 3% / 4% / 5%（2026 年，固定金额 1X 口径）
+    print("\n=== 硬止损敏感度（2026 年）===")
+    print(f"{'sl%':>4} {'笔数':>5} {'胜率':>7} {'收益%':>9} {'pf':>6} {'盈亏比':>7}")
+    for sl in [2, 3, 4, 5]:
+        tr = run_backtest(sl)
+        y26 = [t for t in tr if t["y"] == 2026]
+        rs = [t["realized"] for t in y26]
+        n = len(rs)
+        wins = [r for r in rs if r > 0]
+        losses = [-r for r in rs if r <= 0]
+        wr = len(wins) / n * 100 if n else 0
+        tot = sum(rs)
+        gw, gl = sum(wins), sum(losses)
+        pf = gw / gl if gl else float("inf")
+        aw = gw / len(wins) if wins else 0
+        al = gl / len(losses) if losses else 0
+        payoff = aw / al if al else float("inf")
+        print(f"{sl:>4} {n:>5} {wr:>6.1f}% {tot / NOTIONAL * 100:>+9.1f} {pf:>6.2f} {payoff:>7.2f}")
+
+    # TP1 阈值敏感度（固定 sl=2%）
+    print("\n=== TP1 阈值敏感度（sl=2%，2026 年）===")
+    print(f"{'tp1%':>5} {'笔数':>5} {'胜率':>7} {'收益%':>9} {'pf':>6} {'盈亏比':>7}")
+    for tp1 in [2, 3, 4, 5]:
+        tr = run_backtest(SL_PCT, tp1)
+        y26 = [t for t in tr if t["y"] == 2026]
+        rs = [t["realized"] for t in y26]
+        n = len(rs)
+        wins = [r for r in rs if r > 0]
+        losses = [-r for r in rs if r <= 0]
+        wr = len(wins)/n*100 if n else 0
+        tot = sum(rs)
+        gw, gl = sum(wins), sum(losses)
+        pf = gw/gl if gl else float("inf")
+        aw = gw/len(wins) if wins else 0
+        al = gl/len(losses) if losses else 0
+        payoff = aw/al if al else float("inf")
+        print(f"{tp1:>5} {n:>5} {wr:>6.1f}% {tot/NOTIONAL*100:>+9.1f} {pf:>6.2f} {payoff:>7.2f}")
+
+    # 组合：sl=3% 下 TP1 阈值变化
+    print("\n=== 组合：sl=3% 下 TP1 阈值敏感度（2026 年）===")
+    print(f"{'tp1%':>5} {'笔数':>5} {'胜率':>7} {'收益%':>9} {'pf':>6} {'盈亏比':>7}")
+    for tp1 in [2, 3, 4, 5]:
+        tr = run_backtest(3, tp1)
+        y26 = [t for t in tr if t["y"] == 2026]
+        rs = [t["realized"] for t in y26]
+        n = len(rs)
+        wins = [r for r in rs if r > 0]
+        losses = [-r for r in rs if r <= 0]
+        wr = len(wins)/n*100 if n else 0
+        tot = sum(rs)
+        gw, gl = sum(wins), sum(losses)
+        pf = gw/gl if gl else float("inf")
+        aw = gw/len(wins) if wins else 0
+        al = gl/len(losses) if losses else 0
+        payoff = aw/al if al else float("inf")
+        print(f"{tp1:>5} {n:>5} {wr:>6.1f}% {tot/NOTIONAL*100:>+9.1f} {pf:>6.2f} {payoff:>7.2f}")
+
+    # 原分年 + 合计（sl=基准值）
+    trades = run_backtest(SL_PCT)
     by_year = defaultdict(list)
     for t in trades:
         by_year[t["y"]].append(t)
-
-    print("\n=== 分年收益 ===")
+    print("\n=== 分年收益（sl=" + str(SL_PCT) + "%）===")
     for y in sorted(by_year):
         print(f"  {y} 年:")
         stat(by_year[y])
-
     print("\n=== 全部合计 ===")
     stat(trades)
 
-    print("\n出场原因分布:")
-    for k, v in Counter(t["reason"] for t in trades).most_common():
-        print(f"  {k:<10}{v}")
+    # ETH 参数寻优网格（sl × tp1，合计 2024-2026）
+    if "ETH" in sym.upper():
+        print("\n=== ETH 参数寻优（sl × tp1，合计 2024-2026）===")
+        print(f"{'sl%':>4} {'tp1%':>5} {'笔':>4} {'胜率':>6} {'收益%':>8} {'pf':>6} {'盈亏比':>6} {'回撤%':>7}")
+        for sl in [2, 3, 4, 5]:
+            for tp1 in [2, 3, 4, 5]:
+                s = summarize(run_backtest(sl, tp1))
+                print(f"{sl:>4} {tp1:>5} {s['n']:>4} {s['wr']:>5.1f}% {s['tot']:>+8.1f} {s['pf']:>6.2f} {s['payoff']:>6.2f} {s['mdd']:>7.1f}")
 
 
 if __name__ == "__main__":
