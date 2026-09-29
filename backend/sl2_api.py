@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import os
 import subprocess
@@ -285,3 +286,152 @@ async def run_predict(req: PredictReq):
     finally:
         out_file.unlink(missing_ok=True)
     return {"ok": True, **res}
+
+
+# ──────────────────────────────────────────────────────────────
+# ST 信号「大波动学习」静态结果接口
+#   数据源：backtest/learn_st_bigmove.py 生成的两份文件
+#     - st_bigmove_learn.json  （学习报告：相关性 / 分桶 / 最优切分 / 排名）
+#     - st_signals_full.csv    （每个信号的未来20根 outcome + 20 核心特征）
+#   纯文件读取，不触发训练子进程；重启后端后生效。
+# ──────────────────────────────────────────────────────────────
+@sl2_router.get("/bigmove")
+async def bigmove(
+    target: str = "big_move",        # big_move（任意方向摆动）| big_fav（方向有利盈利）
+    side: Optional[str] = None,      # "1" 多 / "-1" 空
+    session: Optional[str] = None,   # asia / eu / us
+    big: Optional[str] = None,       # "1" 仅返回大波动信号
+    sort: str = "max_profit",        # 信号明细排序字段
+    desc: bool = True,
+    limit: int = 500,
+):
+    learn_path = BACKEND_DIR / "backtest" / "st_bigmove_learn.json"
+    if not learn_path.exists():
+        return {"ok": False,
+                "error": "尚未生成学习报告，请先运行 python backtest/learn_st_bigmove.py"}
+    learn = json.loads(learn_path.read_text(encoding="utf-8"))
+    rep = learn.get(target) or learn.get("big_move")
+
+    csv_path = BACKEND_DIR / "backtest" / "st_signals_full.csv"
+    rows, tmin, tmax = [], None, None
+    if csv_path.exists():
+        with open(csv_path, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                ts = int(r.get("ts") or 0)
+                if tmin is None or ts < tmin:
+                    tmin = ts
+                if tmax is None or ts > tmax:
+                    tmax = ts
+                if side and r.get("side") != side:
+                    continue
+                if session and r.get("session") != session:
+                    continue
+                if big == "1" and r.get("big_move") != "True":
+                    continue
+                rows.append(r)
+
+    def _num(r, k):
+        try:
+            return float(r.get(k) or 0)
+        except Exception:
+            return 0.0
+
+    rows.sort(key=lambda r: _num(r, sort), reverse=desc)
+    if limit and limit > 0:
+        rows = rows[:limit]
+
+    meta = {
+        "n_total": (learn.get("big_move") or {}).get("n"),
+        "base_big_move": (learn.get("big_move") or {}).get("base_rate"),
+        "base_big_fav": (learn.get("big_fav") or {}).get("base_rate"),
+        "target": target,
+        "data_from": tmin,
+        "data_to": tmax,
+        "returned": len(rows),
+    }
+    return {"ok": True, "meta": meta, "learn": rep, "signals": rows}
+
+
+# ──────────────────────────────────────────────────────────────
+# ST 信号「真实盈亏 / 波动风控」静态结果接口
+#   数据源：backtest/learn_st_pnl.py 生成的 st_pnl_risk.json
+#     - 按真实出场净收益分桶的特征均值
+#     - 各特征与净收益的相关性（判断有无盈利 alpha）
+#     - 大赢 vs 大亏 特征均值差
+#     - 固定仓位(A) vs ATR倒数缩放(B) 的风险调整后收益对比
+#   纯文件读取，不触发训练子进程；重启后端后生效。
+# ──────────────────────────────────────────────────────────────
+@sl2_router.get("/risk")
+async def risk():
+    path = BACKEND_DIR / "backtest" / "st_pnl_risk.json"
+    if not path.exists():
+        return {"ok": False,
+                "error": "尚未生成风控报告，请先运行 python backtest/learn_st_pnl.py"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"风控报告解析失败：{e}"}
+    data.setdefault("ok", True)
+    return data
+
+
+# ──────────────────────────────────────────────────────────────
+# ST 信号「分年份 / regime 稳定性」静态结果接口
+#   数据源：backtest/learn_st_regime.py 生成的 st_regime.json
+#     - 按年 / 按市场状态(震荡/趋势/启动) 拆解：胜率、单笔均净、固定 vs 缩放
+#   纯文件读取，不触发训练子进程；重启后端后生效。
+# ──────────────────────────────────────────────────────────────
+@sl2_router.get("/regime")
+async def regime():
+    path = BACKEND_DIR / "backtest" / "st_regime.json"
+    if not path.exists():
+        return {"ok": False,
+                "error": "尚未生成稳定性报告，请先运行 python backtest/learn_st_regime.py"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"稳定性报告解析失败：{e}"}
+    data.setdefault("ok", True)
+    return data
+
+
+# ──────────────────────────────────────────────────────────────
+# 「避开趋势 + 波动缩放」策略 · 前向验证(walk-forward) 静态结果接口
+#   数据源：backtest/learn_st_walkforward.py 生成的 st_walkforward.json
+#     - 每年仅用此前年份决定「砍哪个 regime + ATR 缩放中枢」，再在当年样本外评估
+#     - 验证样本内 +58.5% 是否过拟合
+#   纯文件读取，不触发训练子进程；重启后端后生效。
+# ──────────────────────────────────────────────────────────────
+@sl2_router.get("/walkforward")
+async def walkforward():
+    path = BACKEND_DIR / "backtest" / "st_walkforward.json"
+    if not path.exists():
+        return {"ok": False,
+                "error": "尚未生成前向验证报告，请先运行 python backtest/learn_st_walkforward.py"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"前向验证报告解析失败：{e}"}
+    data.setdefault("ok", True)
+    return data
+
+
+# ──────────────────────────────────────────────────────────────
+# 前向验证(扩展) 静态结果接口
+#   数据源：backtest/learn_st_walkforward2.py 生成的 st_walkforward2.json
+#     - K=1(砍趋势) / K=2(砍2个最差, 由更早年份选择) 的前向验证
+#     - 固定规则「只交易震荡(state0) + 1/ATR缩放」的 OOS（升级推荐规则）
+#   纯文件读取，不触发训练子进程；重启后端后生效。
+# ──────────────────────────────────────────────────────────────
+@sl2_router.get("/walkforward2")
+async def walkforward2():
+    path = BACKEND_DIR / "backtest" / "st_walkforward2.json"
+    if not path.exists():
+        return {"ok": False,
+                "error": "尚未生成扩展前向验证报告，请先运行 python backtest/learn_st_walkforward2.py"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"扩展前向验证报告解析失败：{e}"}
+    data.setdefault("ok", True)
+    return data

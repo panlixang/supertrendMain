@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "oos_years": [
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "desc": "每年仅用此前年份决定砍哪个regime与缩放中枢；D=砍最差regime+1/ATR缩放[0.25,2.0]",
+    "insample_D_total": 58.5,
+    "insample_D_sharpe": 0.43
+  },
+  "folds": [
+    {
+      "year": 2022,
+      "dropped_state": 1,
+      "dropped_label": "趋势",
+      "n_test": 185,
+      "n_kept": 169,
+      "A": -31.7,
+      "B": -19.5,
+      "B_sharpe": 0.05,
+      "C": -34.0,
+      "D": -31.0,
+      "D_sharpe": -0.25,
+      "D_mdd": -50.7
+    },
+    {
+      "year": 2023,
+      "dropped_state": 1,
+      "dropped_label": "趋势",
+      "n_test": 184,
+      "n_kept": 159,
+      "A": -5.0,
+      "B": 32.9,
+      "B_sharpe": 0.7,
+      "C": -0.6,
+      "D": 67.6,
+      "D_sharpe": 0.99,
+      "D_mdd": -35.0
+    },
+    {
+      "year": 2024,
+      "dropped_state": 1,
+      "dropped_label": "趋势",
+      "n_test": 197,
+      "n_kept": 168,
+      "A": -26.6,
+      "B": -16.3,
+      "B_sharpe": 0.08,
+      "C": -11.7,
+      "D": 4.1,
+      "D_sharpe": 0.4,
+      "D_mdd": -38.1
+    },
+    {
+      "year": 2025,
+      "dropped_state": 1,
+      "dropped_label": "趋势",
+      "n_test": 222,
+      "n_kept": 183,
+      "A": -57.5,
+      "B": -55.6,
+      "B_sharpe": -1.19,
+      "C": -44.1,
+      "D": -38.9,
+      "D_sharpe": -0.74,
+      "D_mdd": -43.3
+    },
+    {
+      "year": 2026,
+      "dropped_state": 1,
+      "dropped_label": "趋势",
+      "n_test": 149,
+      "n_kept": 128,
+      "A": 1.9,
+      "B": 27.2,
+      "B_sharpe": 0.78,
+      "C": 13.8,
+      "D": 36.6,
+      "D_sharpe": 0.99,
+      "D_mdd": -21.5
+    }
+  ],
+  "aggregate_oos": {
+    "A_all_fixed": {
+      "n": 937,
+      "total": -79.4,
+      "sharpe": -0.39,
+      "mdd": -86.0
+    },
+    "B_all_scaled": {
+      "n": 937,
+      "total": -5.1,
+      "sharpe": 0.25,
+      "mdd": -61.0
+    },
+    "C_filter_fixed": {
+      "n": 807,
+      "total": -63.2,
+      "sharpe": -0.21,
+      "mdd": -70.1
+    },
+    "D_filter_scaled": {
+      "n": 807,
+      "total": 69.6,
+      "sharpe": 0.48,
+      "mdd": -44.5
+    }
+  }
+}

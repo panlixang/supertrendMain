@@ -52,37 +52,40 @@ NOTIONAL = 10_000.0
 
 # 4 条过滤规则（趋势形态识别.md）：品种独立开关；此处逐条独立评估，看各规则拦截量。
 
-def _cache_path(sym: str) -> str:
-    """缓存放系统临时目录，避免几 MB 的行情缓存落进仓库。"""
+def _cache_path(sym: str, base_tf: str) -> str:
+    """缓存放系统临时目录，避免几 MB 的行情缓存落进仓库（按周期区分）。"""
     import tempfile
-    return os.path.join(tempfile.gettempdir(), f"bt_pattern_{sym}.json")
+    return os.path.join(tempfile.gettempdir(), f"bt_pattern_{sym}_{base_tf}.json")
 
 
 # ── 数据 ────────────────────────────────────────────────────────
-def load(sym: str, use_cache: bool = True):
-    CACHE = _cache_path(sym)
+def load(sym: str, use_cache: bool = True, base_tf: str = BASE_TF, h4_tf: str = H4_TF):
+    CACHE = _cache_path(sym, base_tf)
     if use_cache and os.path.exists(CACHE):
         try:
             c = json.load(open(CACHE))
-            if c.get("sym") == sym and c.get("base") and c.get("h4"):
+            if c.get("sym") == sym and c.get("base") and c.get("h4") \
+               and c.get("base_tf") == base_tf and c.get("h4_tf") == h4_tf:
                 ts = dt.datetime.fromtimestamp(c["fetched"] / 1000).strftime("%m-%d %H:%M")
                 print(f"（命中缓存 {CACHE}，抓取于 {ts}；加 --refresh 重新拉取）")
                 return c["base"], c["h4"]
         except Exception:
             pass
-    print(f"拉取 {sym} 1h 历史（约 1.7 年）…")
-    base = history.fetch_candles(BASE_TF, limit=15600, symbol=sym)
-    print(f"拉取 {sym} 4h 历史…")
-    h4 = history.fetch_candles(H4_TF, limit=4200, symbol=sym)
+    base_limit = 26000 if base_tf in ("5m", "15m", "30m") else 15600
+    print(f"拉取 {sym} {base_tf} 历史（约 {base_limit} 根）…")
+    base = history.fetch_candles(base_tf, limit=base_limit, symbol=sym)
+    print(f"拉取 {sym} {h4_tf} 历史…")
+    h4 = history.fetch_candles(h4_tf, limit=4200, symbol=sym)
     if not base or not h4:
         print("抓取失败（网络/代理不可达 OKX）")
         return None, None
     rows_b = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol} for c in base]
     rows_h = [{"ts": c.ts, "o": c.o, "h": c.h, "l": c.l, "c": c.c, "vol": c.vol} for c in h4]
     json.dump({"sym": sym, "fetched": int(dt.datetime.now().timestamp() * 1000),
-               "base": rows_b, "h4": rows_h}, open(CACHE, "w"))
-    print(f"抓取完成：1h {len(rows_b)} 根（{fmt(rows_b[0]['ts'])} ~ {fmt(rows_b[-1]['ts'])}）"
-          f"，4h {len(rows_h)} 根")
+               "base": rows_b, "h4": rows_h, "base_tf": base_tf, "h4_tf": h4_tf},
+              open(CACHE, "w"))
+    print(f"抓取完成：{base_tf} {len(rows_b)} 根（{fmt(rows_b[0]['ts'])} ~ {fmt(rows_b[-1]['ts'])}）"
+          f"，{h4_tf} {len(rows_h)} 根")
     return rows_b, rows_h
 
 
@@ -293,6 +296,9 @@ def run(base, h4, start, end, label):
     sigs, opens, highs, lows, closes, up_plot, dn_plot, flip_idx = build_signals(base, h4)
     win = [s for s in sigs if start <= s["ts"] < end]
     print(f"\n===== {label} =====")
+    if not win:
+        print("  该窗口无信号（品种历史不足 / 无数据），跳过")
+        return {}
     print(f"窗口信号数={len(win)}  4h方向分布: " + ", ".join(
         f"{k}={v}" for k, v in sorted(Counter(
             (s["pdir"] if s["pdir"] is not None else "None") for s in win).items(),

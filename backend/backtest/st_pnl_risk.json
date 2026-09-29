@@ -1,0 +1,434 @@
+{
+  "meta": {
+    "n_trades": 1123,
+    "mean_net": -0.102,
+    "win_rate": 0.347,
+    "fee": 0.05,
+    "atr_median": 0.74,
+    "data_from": 1609617600000,
+    "data_to": 1789920000000,
+    "desc": "ST(10,3) 翻向出场(flip-to-flip)，往返费 0.05%；特征来自入场 bar；B 方案 size∝1/ATR% 中位数归一，截断[0.25,2.0]。"
+  },
+  "bucket_features": [
+    "ATR_percent",
+    "range_width_20",
+    "range_width_50",
+    "return_5",
+    "return_10",
+    "distance_high_20",
+    "distance_low_20",
+    "mom5",
+    "momentum_change",
+    "st_distance_ATR",
+    "flip_20",
+    "ADX14"
+  ],
+  "buckets": [
+    {
+      "label": "净≥5% (大赢)",
+      "n": 92,
+      "mean_net": 9.88,
+      "means": {
+        "ATR_percent": 1.026,
+        "range_width_20": 4.411,
+        "range_width_50": 6.38,
+        "return_5": 0.259,
+        "return_10": 0.276,
+        "distance_high_20": 2.04,
+        "distance_low_20": 2.371,
+        "mom5": 0.247,
+        "momentum_change": -0.017,
+        "st_distance_ATR": 0.25,
+        "flip_20": 1.293,
+        "ADX14": 23.256
+      }
+    },
+    {
+      "label": "3~5%",
+      "n": 62,
+      "mean_net": 3.92,
+      "means": {
+        "ATR_percent": 0.807,
+        "range_width_20": 3.642,
+        "range_width_50": 5.426,
+        "return_5": 0.007,
+        "return_10": 0.045,
+        "distance_high_20": 1.831,
+        "distance_low_20": 1.811,
+        "mom5": -0.082,
+        "momentum_change": -0.038,
+        "st_distance_ATR": -0.122,
+        "flip_20": 1.274,
+        "ADX14": 22.637
+      }
+    },
+    {
+      "label": "2~3%",
+      "n": 51,
+      "mean_net": 2.43,
+      "means": {
+        "ATR_percent": 0.886,
+        "range_width_20": 3.906,
+        "range_width_50": 5.615,
+        "return_5": 0.056,
+        "return_10": 0.198,
+        "distance_high_20": 1.856,
+        "distance_low_20": 2.05,
+        "mom5": -0.139,
+        "momentum_change": -0.142,
+        "st_distance_ATR": 0.032,
+        "flip_20": 1.333,
+        "ADX14": 22.079
+      }
+    },
+    {
+      "label": "0~2%",
+      "n": 185,
+      "mean_net": 0.81,
+      "means": {
+        "ATR_percent": 0.782,
+        "range_width_20": 3.651,
+        "range_width_50": 5.166,
+        "return_5": 0.061,
+        "return_10": 0.175,
+        "distance_high_20": 1.652,
+        "distance_low_20": 1.999,
+        "mom5": -0.086,
+        "momentum_change": -0.114,
+        "st_distance_ATR": -0.086,
+        "flip_20": 1.33,
+        "ADX14": 23.682
+      }
+    },
+    {
+      "label": "-2~0%",
+      "n": 412,
+      "mean_net": -1.08,
+      "means": {
+        "ATR_percent": 0.677,
+        "range_width_20": 3.05,
+        "range_width_50": 4.432,
+        "return_5": 0.109,
+        "return_10": 0.116,
+        "distance_high_20": 1.402,
+        "distance_low_20": 1.647,
+        "mom5": 0.087,
+        "momentum_change": -0.007,
+        "st_distance_ATR": 0.167,
+        "flip_20": 1.296,
+        "ADX14": 23.048
+      }
+    },
+    {
+      "label": "-5~-2%",
+      "n": 286,
+      "mean_net": -2.98,
+      "means": {
+        "ATR_percent": 0.984,
+        "range_width_20": 4.306,
+        "range_width_50": 6.293,
+        "return_5": -0.121,
+        "return_10": -0.075,
+        "distance_high_20": 2.228,
+        "distance_low_20": 2.078,
+        "mom5": -0.087,
+        "momentum_change": -0.046,
+        "st_distance_ATR": -0.174,
+        "flip_20": 1.273,
+        "ADX14": 24.677
+      }
+    },
+    {
+      "label": "≤-5% (大亏)",
+      "n": 35,
+      "mean_net": -6.96,
+      "means": {
+        "ATR_percent": 1.875,
+        "range_width_20": 8.235,
+        "range_width_50": 12.707,
+        "return_5": -0.51,
+        "return_10": 0.192,
+        "distance_high_20": 4.057,
+        "distance_low_20": 4.178,
+        "mom5": -0.466,
+        "momentum_change": -0.702,
+        "st_distance_ATR": -0.336,
+        "flip_20": 1.257,
+        "ADX14": 25.857
+      }
+    }
+  ],
+  "corr_with_net": [
+    {
+      "feature": "range_width_50",
+      "corr": -0.125
+    },
+    {
+      "feature": "ATR_percent",
+      "corr": -0.119
+    },
+    {
+      "feature": "range_width_20",
+      "corr": -0.11
+    },
+    {
+      "feature": "distance_high_20",
+      "corr": -0.088
+    },
+    {
+      "feature": "flip_50",
+      "corr": 0.059
+    },
+    {
+      "feature": "mom5",
+      "corr": 0.049
+    },
+    {
+      "feature": "return_5",
+      "corr": 0.048
+    },
+    {
+      "feature": "return_20",
+      "corr": 0.044
+    },
+    {
+      "feature": "ADX14",
+      "corr": -0.042
+    },
+    {
+      "feature": "flip_20",
+      "corr": 0.041
+    },
+    {
+      "feature": "st_distance_ATR",
+      "corr": 0.04
+    },
+    {
+      "feature": "break_strength",
+      "corr": 0.037
+    },
+    {
+      "feature": "distance_low_20",
+      "corr": -0.036
+    },
+    {
+      "feature": "return_10",
+      "corr": 0.035
+    },
+    {
+      "feature": "volume_ratio",
+      "corr": 0.032
+    },
+    {
+      "feature": "flip_100",
+      "corr": 0.031
+    },
+    {
+      "feature": "momentum_change",
+      "corr": 0.026
+    },
+    {
+      "feature": "break_high_20",
+      "corr": 0.025
+    },
+    {
+      "feature": "volume_change_5",
+      "corr": 0.023
+    },
+    {
+      "feature": "break_low_20",
+      "corr": -0.016
+    },
+    {
+      "feature": "ATR_change_5",
+      "corr": -0.013
+    },
+    {
+      "feature": "ATR_percentile_100",
+      "corr": 0.011
+    },
+    {
+      "feature": "ER20",
+      "corr": 0.003
+    }
+  ],
+  "winner_vs_loser": [
+    {
+      "feature": "range_width_20",
+      "win": 4.411,
+      "lose": 8.235,
+      "sep": -1.33
+    },
+    {
+      "feature": "ATR_percent",
+      "win": 1.026,
+      "lose": 1.875,
+      "sep": -1.31
+    },
+    {
+      "feature": "range_width_50",
+      "win": 6.38,
+      "lose": 12.707,
+      "sep": -1.09
+    },
+    {
+      "feature": "distance_high_20",
+      "win": 2.04,
+      "lose": 4.057,
+      "sep": -0.73
+    },
+    {
+      "feature": "distance_low_20",
+      "win": 2.371,
+      "lose": 4.178,
+      "sep": -0.51
+    },
+    {
+      "feature": "momentum_change",
+      "win": -0.017,
+      "lose": -0.702,
+      "sep": 0.49
+    },
+    {
+      "feature": "mom5",
+      "win": 0.247,
+      "lose": -0.466,
+      "sep": 0.33
+    },
+    {
+      "feature": "flip_50",
+      "win": 1.946,
+      "lose": 1.714,
+      "sep": 0.29
+    },
+    {
+      "feature": "ADX14",
+      "win": 23.256,
+      "lose": 25.857,
+      "sep": -0.28
+    },
+    {
+      "feature": "ATR_percentile_100",
+      "win": 0.646,
+      "lose": 0.716,
+      "sep": -0.25
+    },
+    {
+      "feature": "break_strength",
+      "win": -1.929,
+      "lose": -2.349,
+      "sep": 0.24
+    },
+    {
+      "feature": "return_5",
+      "win": 0.259,
+      "lose": -0.51,
+      "sep": 0.23
+    },
+    {
+      "feature": "volume_ratio",
+      "win": 2.66,
+      "lose": 2.23,
+      "sep": 0.23
+    },
+    {
+      "feature": "return_20",
+      "win": 0.16,
+      "lose": -0.54,
+      "sep": 0.22
+    },
+    {
+      "feature": "flip_100",
+      "win": 2.957,
+      "lose": 2.743,
+      "sep": 0.18
+    },
+    {
+      "feature": "st_distance_ATR",
+      "win": 0.25,
+      "lose": -0.336,
+      "sep": 0.17
+    },
+    {
+      "feature": "volume_change_5",
+      "win": 82.333,
+      "lose": 70.345,
+      "sep": 0.14
+    },
+    {
+      "feature": "ATR_change_5",
+      "win": 0.15,
+      "lose": 0.18,
+      "sep": -0.1
+    },
+    {
+      "feature": "flip_20",
+      "win": 1.293,
+      "lose": 1.257,
+      "sep": 0.07
+    },
+    {
+      "feature": "return_10",
+      "win": 0.276,
+      "lose": 0.192,
+      "sep": 0.02
+    },
+    {
+      "feature": "ER20",
+      "win": 0.209,
+      "lose": 0.206,
+      "sep": 0.02
+    },
+    {
+      "feature": "st_same_direction_count",
+      "win": 0.0,
+      "lose": 0.0,
+      "sep": 0.0
+    },
+    {
+      "feature": "break_high_20",
+      "win": 0.0,
+      "lose": 0.0,
+      "sep": 0.0
+    },
+    {
+      "feature": "break_low_20",
+      "win": 0.0,
+      "lose": 0.0,
+      "sep": 0.0
+    }
+  ],
+  "scaling": {
+    "A": {
+      "avg_size": 1.0,
+      "total": -89.7,
+      "cagr": -32.8,
+      "sharpe": -0.43,
+      "mdd": -90.7,
+      "calmar": -0.36,
+      "n": 1126,
+      "tag": "固定仓位 size=1"
+    },
+    "B": {
+      "avg_size": 1.1,
+      "total": -28.4,
+      "cagr": -5.7,
+      "sharpe": 0.18,
+      "mdd": -66.4,
+      "calmar": -0.09,
+      "n": 1126,
+      "tag": "ATR倒数缩放 1/ATR%[0.25,2.0]"
+    },
+    "improve": {
+      "sharpe": 0.61,
+      "mdd_abs": 24.3,
+      "calmar": 0.27
+    }
+  },
+  "conclusions": [
+    "特征能预测“会不会有大摆动”，但几乎预测不了“这笔赚不赚钱”：所有 |corr(特征,净收益)| < 0.13。",
+    "盈利档集中在中等波动(ATR≈0.8~1.0)；最大亏损档 ATR 最高(≈1.87)、区间宽度翻倍以上——极端波动是亏损温床。",
+    "按 ATR 过滤信号会越滤越亏（丢 79% 大赢家、单笔期望恶化）；但按 1/ATR 缩放仓位明显改善风险调整后收益（夏普 -0.43→+0.18、回撤 -90%→-66%）。",
+    "结论落地：这条线不能做信号过滤器，只能做波动仓位管理 / 风控规则（避开极端波动段）。"
+  ]
+}

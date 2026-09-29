@@ -1,0 +1,154 @@
+{
+  "meta": {
+    "n_trades": 1126,
+    "atr_median": 0.74,
+    "desc": "ST(10,3) 翻向出场；A=固定仓位，B=ATR倒数缩放1/ATR%[0.25,2.0](全局中位归一)；每年/状态独立复利，不跨年滚动。",
+    "global_A": {
+      "total": -89.7,
+      "sharpe": -0.43,
+      "mdd": -90.7
+    },
+    "global_B": {
+      "total": -28.4,
+      "sharpe": 0.18,
+      "mdd": -66.4
+    }
+  },
+  "by_year": [
+    {
+      "year": 2021,
+      "n": 189,
+      "total": -50.2,
+      "sharpe": -0.59,
+      "mdd": -55.8,
+      "win_rate": 0.402,
+      "mean_net": -0.229,
+      "B_total": -8.4,
+      "B_sharpe": 0.02,
+      "B_mdd": -29.5,
+      "b_better": true
+    },
+    {
+      "year": 2022,
+      "n": 185,
+      "total": -31.7,
+      "sharpe": -0.33,
+      "mdd": -54.9,
+      "win_rate": 0.335,
+      "mean_net": -0.109,
+      "B_total": -4.4,
+      "B_sharpe": 0.14,
+      "B_mdd": -41.4,
+      "b_better": true
+    },
+    {
+      "year": 2023,
+      "n": 184,
+      "total": -5.0,
+      "sharpe": 0.16,
+      "mdd": -42.1,
+      "win_rate": 0.293,
+      "mean_net": 0.049,
+      "B_total": 48.2,
+      "B_sharpe": 0.82,
+      "B_mdd": -36.6,
+      "b_better": true
+    },
+    {
+      "year": 2024,
+      "n": 197,
+      "total": -26.6,
+      "sharpe": -0.3,
+      "mdd": -36.1,
+      "win_rate": 0.355,
+      "mean_net": -0.085,
+      "B_total": -13.4,
+      "B_sharpe": 0.05,
+      "B_mdd": -34.3,
+      "b_better": true
+    },
+    {
+      "year": 2025,
+      "n": 222,
+      "total": -57.5,
+      "sharpe": -1.89,
+      "mdd": -61.4,
+      "win_rate": 0.297,
+      "mean_net": -0.348,
+      "B_total": -50.5,
+      "B_sharpe": -1.11,
+      "B_mdd": -56.3,
+      "b_better": true
+    },
+    {
+      "year": 2026,
+      "n": 149,
+      "total": 1.9,
+      "sharpe": 0.27,
+      "mdd": -25.6,
+      "win_rate": 0.416,
+      "mean_net": 0.058,
+      "B_total": 28.6,
+      "B_sharpe": 0.8,
+      "B_mdd": -28.3,
+      "b_better": true
+    }
+  ],
+  "by_regime": [
+    {
+      "state": 0,
+      "label": "震荡",
+      "n": 478,
+      "total": -23.3,
+      "sharpe": 0.05,
+      "mdd": -74.4,
+      "win_rate": 0.349,
+      "mean_net": 0.014,
+      "B_total": 85.5,
+      "B_sharpe": 0.68,
+      "B_mdd": -59.1,
+      "b_better": true
+    },
+    {
+      "state": 1,
+      "label": "趋势",
+      "n": 155,
+      "total": -65.5,
+      "sharpe": -2.41,
+      "mdd": -67.3,
+      "win_rate": 0.323,
+      "mean_net": -0.619,
+      "B_total": -54.8,
+      "B_sharpe": -2.28,
+      "B_mdd": -61.4,
+      "b_better": true
+    },
+    {
+      "state": 2,
+      "label": "启动",
+      "n": 490,
+      "total": -49.4,
+      "sharpe": -0.16,
+      "mdd": -69.6,
+      "win_rate": 0.353,
+      "mean_net": -0.051,
+      "B_total": -6.8,
+      "B_sharpe": 0.22,
+      "B_mdd": -55.8,
+      "b_better": true
+    }
+  ],
+  "summary": {
+    "zero_alpha_all_years": false,
+    "years_negative_mean_net": [
+      2021,
+      2022,
+      2024,
+      2025
+    ],
+    "scaling_helps_years": 6,
+    "n_years": 6,
+    "scaling_helps_regimes": 3,
+    "n_regimes": 3
+  }
+}
