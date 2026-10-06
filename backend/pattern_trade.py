@@ -76,6 +76,8 @@ class PatternConfig:
     exchange:     str   = "okx"
     block_4h:     bool  = True     # True = 4h 形态反向则不下单
     confirm_close: bool = True     # True = 只在信号那根 K 收盘后才下单（对齐回测：用收盘数据确认 flip，避免未收盘 K 的 ST 重绘假信号）
+    signal_max_age_sec: int = 300  # 信号过期护栏：翻转那根 K 收盘超过这么久就不再补单（防幽灵仓/掉线后旧信号被当新信号成交）
+    position_recheck_sec: int = 60  # 本地有仓时，每隔这么久去交易所对账一次真实持仓（用于发现手动平仓/幽灵仓）
 
     # ── 过滤策略 ──
     # 品种独立开关 filter_v3，挂在 SymbolTradeConfig（见 state.py），默认关=不过滤；
@@ -153,6 +155,7 @@ class PatternTrader:
         self._keys: dict = {"exchange": "okx", "okx": {}, "bitget": {}}
         self._last_flip: dict[tuple, int] = {}      # (sym, tf) -> 已处理的翻转 ts
         self._last_order_at: dict[tuple, float] = {}
+        self._pos_check: dict[str, float] = {}       # sym -> 上次与交易所对账真实持仓的时间
         self._pat_cache: dict[str, tuple] = {}      # sym -> (最新4h ts, pts, pmap)
         self._running = False
         self._load_rows = 0       # 上一次加载时 json 里的品种行数
@@ -567,17 +570,41 @@ class PatternTrader:
             except Exception as e:
                 logger.error(f"[形态下单] {sym} 处理失败: {e}")
 
+    async def _reconcile_position(self, sym: str) -> bool:
+        """本地有仓时与交易所真实持仓对账 —— 用户可能已手动平仓。
+
+        返回 True  = 本地持仓仍有效（交易所真有仓 / 查不清 / 还没到对账间隔）→ 按有仓处理
+        返回 False = 交易所已无此仓，本地持仓已作废 → 调用方应正常评估新信号
+
+        按 position_recheck_sec 节流，不是每轮都打 API。
+        """
+        ex = self.executors.get(sym)
+        if ex is None or self.cfg.paper:
+            return True
+        now = time.time()
+        if now - self._pos_check.get(sym, 0.0) < self.cfg.position_recheck_sec:
+            return True                      # 未到间隔：本轮仍按有仓处理，不打 API
+        self._pos_check[sym] = now
+        try:
+            return await ex.reconcile_position()
+        except Exception as e:
+            logger.warning(f"[持仓对账失败] {sym} {e}")
+            return True                      # 异常一律按有仓处理，避免误判后重复开仓
+
     async def _tick_symbol(self, sym: str, sc: SymbolTradeConfig):
         store, ex = self.stores[sym], self.executors[sym]
         price = await self._price(sym)
         if price:
             store.ticker.last = price
-        # 1) 有持仓先管出场（TP1 分批 / 保本 / 跟踪止损 / 反向平仓）
-        if store.position and price:
-            await ex.on_price(price)
-            return
+        # 1) 有持仓：先和交易所对账真实持仓。
+        #    用户手动平仓后本地还挂着仓，或本地留着幽灵仓（开仓没真成交），
+        #    这两种情况交易所都已无仓，清掉本地状态后本轮继续往下走信号判定，
+        #    不再让"本地假持仓"一直挡住新信号（SKHYNIX 曾被这样挡了 33 小时）。
         if store.position:
-            return
+            if await self._reconcile_position(sym):
+                if price:
+                    await ex.on_price(price)  # TP1 分批 / 保本 / 跟踪止损 / 反向平仓
+                return
         # 2) 无持仓：找允许周期内最新的 ST 翻转
         for tf in sc.allow_tfs:
             sig = await self._latest_signal(sym, tf)
@@ -590,6 +617,19 @@ class PatternTrader:
                     time.time() * 1000 < sig["ts"] + TF_SEC.get(tf, 3600) * 1000:
                 continue
             key = (sym, tf)
+            # 信号过期护栏：翻转那根 K 收盘太久就作废，只记不补。
+            # 幽灵持仓/掉线期间 _last_flip 长时间不更新（持仓非空时本函数在上面就
+            # return 了，根本不看新信号），等幽灵清掉后，这根几十小时前的旧翻转会被
+            # 当成"新信号"成交 —— 2026-10-06 SKHYNIX 就是这样在 08:49 补了一笔
+            # 10-05 12:00 的旧信号。这里拦掉并标记为已处理，避免每轮重复判定。
+            max_age = self.cfg.signal_max_age_sec
+            if max_age and max_age > 0 and \
+                    time.time() * 1000 - sig["ts"] > (TF_SEC.get(tf, 3600) + max_age) * 1000:
+                self._last_flip[key] = sig["ts"]
+                logger.info(
+                    f"[过期信号] {sym} {tf} {sig['type']} 信号 K 已收盘 "
+                    f"{(time.time() * 1000 - sig['ts']) / 3600000:.1f}h > 上限，不补单")
+                continue
             if self._last_flip.get(key) is None:
                 self._last_flip[key] = sig["ts"]   # 首次仅记录，不给历史信号补单
                 continue

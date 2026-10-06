@@ -52,6 +52,11 @@ _NO_POS_HINTS = (
 # 止盈下单失败后的重试冷却（秒）。止损不冷却 —— 那是风控，必须尽快重试。
 REDUCE_FAIL_COOLDOWN = 60.0
 
+# 开仓后与交易所真实持仓对账：连续查几次都无仓才认定幽灵仓。
+# 只判"交易所到底有没有仓"；查不清一律保留本地持仓（宁可多管，不可错丢真仓）。
+OPEN_VERIFY_TRIES = 2
+OPEN_VERIFY_INTERVAL = 1.5
+
 
 def is_no_position_error(err) -> bool:
     text = str(err or "").lower()
@@ -345,7 +350,95 @@ class Executor:
         logger.info(f"[持仓建立] {symbol} {self.store.position.side} @ {r['price']} "
                     f"保证金 {how} 止损 {stop} 档位 {profile} 成交确认={r.get('fill_confirmed')}")
         await self._push_position()
+        # 开仓后立刻和交易所对账真实持仓：本地记了成交但交易所没仓时当场清掉幽灵，
+        # 别等 tp1 来揭穿 —— 幽灵仓会挡住该品种后续所有新信号。
+        await self._verify_open_fill()
         return order
+
+    async def _verify_open_fill(self) -> bool:
+        """开仓后立刻与交易所真实持仓对账，幽灵仓不再等 tp1 来揭穿。
+
+        本地 place_order 可能返回 fill_confirmed=True 但交易所实际没成交（限价未
+        成交、仓位在别处被平掉等）。这种幽灵仓会一直挂在 store.position 上，而
+        pattern_trade._tick_symbol 在持仓非空时直接 return —— 于是该品种几十小时
+        都不再评估新信号；等幽灵被清掉的同一刻，又把早已过期的旧翻转当成新信号
+        成交（2026-10-06 SKHYNIX 就是这样在 08:49 补了一笔 20 小时前的旧单）。
+
+        这里在开仓后主动查真实持仓，确认无仓就当场清空。连续多次都查到 0 才认定
+        幽灵，避免"刚成交、仓位还没同步"的竞态把真仓误清。
+        查询失败一律保留本地持仓 —— 宁可多管，不可错丢真仓。
+        返回 True 表示清掉了幽灵仓。
+        """
+        pos = self.store.position
+        if not pos or getattr(pos, "qty", 0) <= 0 or self.cfg.paper:
+            return False
+        seen = 0
+        for i in range(OPEN_VERIFY_TRIES):
+            if i:
+                await asyncio.sleep(OPEN_VERIFY_INTERVAL)
+            try:
+                real = await trade.get_positions(
+                    pos.symbol, self.cfg.category, sim=self.cfg.paper)
+            except Exception as e:
+                logger.warning(f"[开仓对账失败] {pos.symbol} {e}")
+                return False
+            if not real.get("ok"):
+                logger.warning(f"[开仓对账失败] {pos.symbol} {real.get('error')}")
+                return False
+            if self._exchange_qty(real.get("data"), pos.symbol) > 0:
+                return False          # 有真仓，正常持仓
+            seen += 1
+        if seen < OPEN_VERIFY_TRIES:
+            return False
+        px = self.store.ticker.last or getattr(pos, "entry", 0)
+        logger.warning(f"[清空幽灵持仓] {pos.symbol} 开仓对账：交易所无仓位，本地持仓作废")
+        await self._record(
+            {"ok": True, "price": px, "qty": 0, "fill_confirmed": False},
+            {"kind": "ghost_clear", "tf": pos.tf,
+             "reason": "开仓对账：交易所无真实仓位，本地持仓作废",
+             "profile": pos.profile, "realized": round(pos.realized, 4)},
+        )
+        self._finalize(pos, px, "幽灵持仓清理（开仓后对账未查到真实仓位）")
+        await self._push_position()
+        return True
+
+    async def reconcile_position(self) -> bool:
+        """与交易所真实持仓对账：本地有仓、交易所没仓时清掉本地状态。
+
+        用户在交易所手动平仓后，本地 store.position 还挂着，于是 pattern_trade
+        一直 return、不再评估新信号。这里主动查一次真实持仓来发现这种情况。
+
+        返回 True  = 本地持仓仍有效（交易所真有仓，或查不清 → 保守保留不动）
+        返回 False = 交易所已无此仓，本地持仓已作废，调用方可正常评估新信号
+
+        注意：手动平仓时本地用的是当前 ticker 价估算盈亏，与交易所实际成交价
+        可能有出入，realized 只是本地记账口径。
+        """
+        pos = self.store.position
+        if not pos or self.cfg.paper:
+            return True
+        try:
+            real = await trade.get_positions(
+                pos.symbol, self.cfg.category, sim=self.cfg.paper)
+        except Exception as e:
+            logger.warning(f"[持仓对账失败] {pos.symbol} {e}")
+            return True                       # 查不清 → 保留，不动
+        if not real.get("ok"):
+            logger.warning(f"[持仓对账失败] {pos.symbol} {real.get('error')}")
+            return True
+        if self._exchange_qty(real.get("data"), pos.symbol) > 0:
+            return True                       # 交易所确实还有仓
+        px = self.store.ticker.last or getattr(pos, "entry", 0)
+        logger.warning(f"[手动平仓/幽灵仓] {pos.symbol} 交易所已无 {pos.side} 仓位，本地持仓作废")
+        await self._record(
+            {"ok": True, "price": px, "qty": 0, "fill_confirmed": False},
+            {"kind": "ghost_clear", "tf": pos.tf,
+             "reason": "持仓对账：交易所已无真实仓位（可能手动平仓），本地持仓作废",
+             "profile": pos.profile, "realized": round(pos.realized, 4)},
+        )
+        self._finalize(pos, px, "持仓对账：交易所已无此仓位，本地持仓作废")
+        await self._push_position()
+        return False
 
     def _calc_atr(self, tf: str) -> float | None:
         """计算当前ATR，用于止损外扩"""

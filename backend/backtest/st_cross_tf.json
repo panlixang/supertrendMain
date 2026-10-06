@@ -1,0 +1,120 @@
+{
+  "15m": {
+    "tf": "15m",
+    "n_total": 3408,
+    "years": [
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "per_year": {
+      "2023": {
+        "n": 810,
+        "n_choppy": 432,
+        "all_fixed": -54.4,
+        "choppy_total": -44.1,
+        "choppy_sharpe": -0.97,
+        "choppy_mdd": -52.9
+      },
+      "2024": {
+        "n": 802,
+        "n_choppy": 465,
+        "all_fixed": -53.6,
+        "choppy_total": -51.4,
+        "choppy_sharpe": -1.74,
+        "choppy_mdd": -54.4
+      },
+      "2025": {
+        "n": 886,
+        "n_choppy": 495,
+        "all_fixed": -66.0,
+        "choppy_total": -48.0,
+        "choppy_sharpe": -1.23,
+        "choppy_mdd": -54.2
+      },
+      "2026": {
+        "n": 621,
+        "n_choppy": 341,
+        "all_fixed": -46.3,
+        "choppy_total": 35.6,
+        "choppy_sharpe": 0.63,
+        "choppy_mdd": -27.2
+      }
+    },
+    "agg": {
+      "choppy": {
+        "n": 1733,
+        "total": -79.2,
+        "sharpe": -0.69,
+        "mdd": -84.5
+      },
+      "all_fixed": {
+        "n": 3119,
+        "total": -96.1,
+        "sharpe": -0.84,
+        "mdd": -96.8
+      }
+    }
+  },
+  "4h": {
+    "tf": "4h",
+    "n_total": 211,
+    "years": [
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "per_year": {
+      "2023": {
+        "n": 48,
+        "n_choppy": 25,
+        "all_fixed": 45.4,
+        "choppy_total": 56.5,
+        "choppy_sharpe": 2.57,
+        "choppy_mdd": -19.3
+      },
+      "2024": {
+        "n": 50,
+        "n_choppy": 24,
+        "all_fixed": 28.1,
+        "choppy_total": -11.2,
+        "choppy_sharpe": -2.17,
+        "choppy_mdd": -16.1
+      },
+      "2025": {
+        "n": 50,
+        "n_choppy": 25,
+        "all_fixed": -11.0,
+        "choppy_total": -28.9,
+        "choppy_sharpe": -4.93,
+        "choppy_mdd": -29.7
+      },
+      "2026": {
+        "n": 42,
+        "n_choppy": 24,
+        "all_fixed": -22.5,
+        "choppy_total": 13.0,
+        "choppy_sharpe": 1.71,
+        "choppy_mdd": -22.5
+      }
+    },
+    "agg": {
+      "choppy": {
+        "n": 98,
+        "total": 11.0,
+        "sharpe": 0.7,
+        "mdd": -45.0
+      },
+      "all_fixed": {
+        "n": 190,
+        "total": 28.4,
+        "sharpe": 0.72,
+        "mdd": -42.6
+      }
+    }
+  }
+}

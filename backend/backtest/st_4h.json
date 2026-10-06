@@ -1,0 +1,106 @@
+{
+  "meta": {
+    "n_total": 211,
+    "years": [
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ]
+  },
+  "by_regime": {
+    "0": {
+      "label": "震荡",
+      "n": 110,
+      "fixed": -41.8,
+      "fixed_sharpe": -0.47,
+      "scaled": -20.8,
+      "scaled_sharpe": 0.05
+    },
+    "1": {
+      "label": "趋势",
+      "n": 88,
+      "fixed": 128.2,
+      "fixed_sharpe": 0.97,
+      "scaled": 253.4,
+      "scaled_sharpe": 1.27
+    },
+    "2": {
+      "label": "启动",
+      "n": 13,
+      "fixed": -15.9,
+      "fixed_sharpe": -2.2,
+      "scaled": -11.2,
+      "scaled_sharpe": -1.49
+    }
+  },
+  "folds": [
+    {
+      "year": 2023,
+      "worst_state": "震荡",
+      "n": 48,
+      "n_choppy": 25,
+      "A": 45.4,
+      "B": 108.3,
+      "C_keep_choppy": 56.5,
+      "D_drop_worst": 33.1
+    },
+    {
+      "year": 2024,
+      "worst_state": "启动",
+      "n": 50,
+      "n_choppy": 24,
+      "A": 28.1,
+      "B": 31.2,
+      "C_keep_choppy": -11.2,
+      "D_drop_worst": 27.1
+    },
+    {
+      "year": 2025,
+      "worst_state": "启动",
+      "n": 50,
+      "n_choppy": 25,
+      "A": -11.0,
+      "B": 2.1,
+      "C_keep_choppy": -28.9,
+      "D_drop_worst": -1.3
+    },
+    {
+      "year": 2026,
+      "worst_state": "启动",
+      "n": 42,
+      "n_choppy": 24,
+      "A": -22.5,
+      "B": -5.5,
+      "C_keep_choppy": 13.0,
+      "D_drop_worst": 2.5
+    }
+  ],
+  "agg": {
+    "A_all_fixed": {
+      "n": 190,
+      "total": 28.4,
+      "sharpe": 0.36,
+      "mdd": -42.6
+    },
+    "B_all_scaled": {
+      "n": 190,
+      "total": 170.4,
+      "sharpe": 0.68,
+      "mdd": -37.1
+    },
+    "C_keep_choppy": {
+      "n": 98,
+      "total": 11.0,
+      "sharpe": 0.35,
+      "mdd": -45.0
+    },
+    "D_drop_worst": {
+      "n": 157,
+      "total": 79.2,
+      "sharpe": 0.58,
+      "mdd": -36.9
+    }
+  }
+}

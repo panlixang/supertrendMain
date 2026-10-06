@@ -125,6 +125,10 @@ export default function StrategyLearningV2Page() {
   const [walkErr, setWalkErr] = useState(null);
   const [walk2, setWalk2] = useState(null);
   const [walk2Err, setWalk2Err] = useState(null);
+  const [ctf, setCtf] = useState(null);
+  const [ctfErr, setCtfErr] = useState(null);
+  const [st4h, setSt4h] = useState(null);
+  const [st4hErr, setSt4hErr] = useState(null);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -181,6 +185,20 @@ export default function StrategyLearningV2Page() {
     } catch (e) { setWalk2Err("加载升级规则验证失败：" + e.message); }
   }, []);
   useEffect(() => { loadWalk2(); }, [loadWalk2]);
+  const loadCtf = useCallback(async () => {
+    try {
+      const j = await api("/api/sl2/crosstf");
+      if (j.ok) setCtf(j); else setCtfErr(j.error);
+    } catch (e) { setCtfErr("加载跨周期验证失败：" + e.message); }
+  }, []);
+  useEffect(() => { loadCtf(); }, [loadCtf]);
+  const loadSt4h = useCallback(async () => {
+    try {
+      const j = await api("/api/sl2/st4h");
+      if (j.ok) setSt4h(j); else setSt4hErr(j.error);
+    } catch (e) { setSt4hErr("加载 4h 学习失败：" + e.message); }
+  }, []);
+  useEffect(() => { loadSt4h(); }, [loadSt4h]);
 
   useEffect(() => {
     (async () => {
@@ -951,10 +969,92 @@ export default function StrategyLearningV2Page() {
           </>
           );
         })()}
-      </div>
-    </div>
-  );
-}
+
+        {/* 跨周期稳健性（初步） */}
+        <div style={{ height: 14 }} />
+        {ctfErr && <div style={{ color: C.bear, fontSize: 12, marginBottom: 8 }}>{ctfErr}</div>}
+        {!ctf && !ctfErr && <div style={{ fontSize: 12, color: C.faint }}>加载跨周期验证…</div>}
+        {ctf && (() => {
+          const pc = (x) => (x >= 0 ? "+" : "") + x;
+          const r15 = ctf["15m"];
+          const ok15 = r15 && !r15.empty && r15.agg && r15.agg.choppy;
+          const v15 = ok15 ? r15.agg.choppy : null;
+          return (
+          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, borderTop: "1px dashed " + C.border, paddingTop: 10 }}>
+            <strong style={{ color: C.amber }}>跨周期稳健性（初步，阈值未重标定）：</strong>
+            {" "}1h 的「只震荡」规则<strong style={{ color: C.bull }}>不能原样套到 15m</strong>
+            {ok15 && <>（15m OOS 累计 <strong style={{ color: C.bear }}>{pc(v15.total)}%</strong> / 夏普 {v15.sharpe}，仅 2026 年正）</>}
+            ；4h 数据为空无法验证。
+            该阈值（ADX&lt;20、区间&lt;3%）是按 1h 调的，15m 波动/ADX 尺度不同会导致分类失真。
+            结论：<strong style={{ color: C.amber }}>edge 的跨周期普适性尚未证明</strong>——上线前必须为每个周期重标定 regime 阈值，并补更多交易对验证。
+          </div>
+          );
+        })()}
+
+        {/* ML 线结论 */}
+        <div style={{ height: 10 }} />
+        <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, borderTop: "1px dashed " + C.border, paddingTop: 10 }}>
+          <strong style={{ color: C.amber }}>ML 线结论（A/B/C 前向验证）：</strong>
+          {" "}ML 波动缩放(C) 累计 -58.4% / 夏普 0.03 / 回撤 -77.7%，全面劣于朴素 1/ATR 缩放(B：-16.3% / +0.19 / -58.5%）。
+          ML 波动模型对仓位管理是<strong style={{ color: C.amber }}>净负贡献，应弃用</strong>；结合此前「方向零 alpha」，ML 在方向与波动两条线均不敌简单规则，
+          项目重心应彻底转向 <strong style={{ color: C.amber }}>regime/vol overlay</strong>。
+          </div>
+
+          {/* 4h 专项学习 */}
+          <div style={{ height: 14 }} />
+          {st4hErr && <div style={{ color: C.bear, fontSize: 12, marginBottom: 8 }}>{st4hErr}</div>}
+          {!st4h && !st4hErr && <div style={{ fontSize: 12, color: C.faint }}>加载 4h 学习…</div>}
+          {st4h && (() => {
+          const pc = (x) => (x >= 0 ? "+" : "") + x;
+          const a = st4h.agg;
+          const reg = Object.values(st4h.by_regime || {}).sort((x, y) => x.n < y.n ? 1 : -1);
+          return (
+          <>
+          <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, margin: "6px 0 6px" }}>
+            4h 专项学习（更优周期）· 数据源 learn_st_4h.py
+          </div>
+          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, marginBottom: 8 }}>
+            4h 裸 ST 信号 OOS 即赚 <strong style={{ color: C.bull }}>+28.4%</strong>（1h 是 -79%）；叠加 1/ATR 缩放 →
+            <strong style={{ color: C.bull }}> +170.4% / 夏普 0.68</strong>。
+            但 regime 逻辑与 1h <strong style={{ color: C.amber }}>完全相反</strong>：4h 上「趋势」暴赚、「震荡」亏损，
+            故把 1h 的「留震荡」照搬过来反而最差（C +11%）。<strong style={{ color: C.amber }}>regime 过滤必须按周期各自 walk-forward 重标定，绝不能跨周期抄。</strong>
+          </div>
+          <div style={{ overflowX: "auto", border: "1px solid " + C.border, borderRadius: 8, marginBottom: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead style={{ background: C.panel }}>
+                <tr style={{ color: C.muted, textAlign: "right" }}>
+                  <th style={{ ...th, textAlign: "left" }}>4h regime</th><th style={th}>n</th>
+                  <th style={th}>固定%</th><th style={th}>固定夏普</th><th style={th}>缩放%</th><th style={th}>缩放夏普</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reg.map((r) => (
+                  <tr key={r.label} style={{ borderTop: "1px solid #1b1e22" }}>
+                    <td style={{ ...td, textAlign: "left", color: C.text }}>{r.label}</td>
+                    <td style={{ ...td, color: C.muted }}>{r.n}</td>
+                    <td style={{ ...td, color: r.fixed >= 0 ? C.bull : C.bear }}>{pc(r.fixed)}</td>
+                    <td style={{ ...td, color: r.fixed_sharpe >= 0 ? C.bull : C.bear }}>{r.fixed_sharpe}</td>
+                    <td style={{ ...td, color: r.scaled >= 0 ? C.bull : C.bear, fontWeight: 700 }}>{pc(r.scaled)}</td>
+                    <td style={{ ...td, color: r.scaled_sharpe >= 0 ? C.bull : C.bear }}>{r.scaled_sharpe}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 6px" }}>4h 前向验证 OOS 聚合</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Stat k="A 全固定" v={pc(a.A_all_fixed.total) + "%"} c={a.A_all_fixed.sharpe >= 0 ? C.bull : C.bear} />
+            <Stat k="B 全缩放" v={pc(a.B_all_scaled.total) + "%"} c={a.B_all_scaled.sharpe >= 0 ? C.bull : C.bear} />
+            <Stat k="C 留震荡" v={pc(a.C_keep_choppy.total) + "%"} c={a.C_keep_choppy.sharpe >= 0 ? C.bull : C.bear} />
+            <Stat k="D 砍最差" v={pc(a.D_drop_worst.total) + "%"} c={a.D_drop_worst.sharpe >= 0 ? C.bull : C.bear} />
+          </div>
+          </>
+          );
+          })()}
+          </div>
+          </div>
+          );
+          }
 
 function Field({ label, children }) {
   return (

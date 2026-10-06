@@ -435,3 +435,45 @@ async def walkforward2():
         return {"ok": False, "error": f"扩展前向验证报告解析失败：{e}"}
     data.setdefault("ok", True)
     return data
+
+
+# ──────────────────────────────────────────────────────────────
+# 跨周期稳健性 静态结果接口
+#   数据源：backtest/learn_st_cross_tf.py 生成的 st_cross_tf.json
+#     - 1h 验证出的「只交易震荡 + 1/ATR缩放」规则套到 15m/4h 是否仍有效
+#       （market_state 阈值沿用 1h 原值，未为其他周期重标定）
+#   纯文件读取，不触发训练子进程；重启后端后生效。
+# ──────────────────────────────────────────────────────────────
+@sl2_router.get("/crosstf")
+async def crosstf():
+    path = BACKEND_DIR / "backtest" / "st_cross_tf.json"
+    if not path.exists():
+        return {"ok": False,
+                "error": "尚未生成跨周期报告，请先运行 python backtest/learn_st_cross_tf.py"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"跨周期报告解析失败：{e}"}
+    data.setdefault("ok", True)
+    return data
+
+
+# ──────────────────────────────────────────────────────────────
+# 4h 专项学习 静态结果接口
+#   数据源：backtest/learn_st_4h.py 生成的 st_4h.json
+#     - 4h 裸信号 OOS / 1/ATR 缩放 / regime 期望 / 前向验证
+#     - 关键发现：4h 上「趋势」盈利、「震荡」亏损，与 1h 相反
+#   纯文件读取，不触发训练子进程；重启后端后生效。
+# ──────────────────────────────────────────────────────────────
+@sl2_router.get("/st4h")
+async def st4h():
+    path = BACKEND_DIR / "backtest" / "st_4h.json"
+    if not path.exists():
+        return {"ok": False,
+                "error": "尚未生成 4h 报告，请先运行 python backtest/learn_st_4h.py"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"4h 报告解析失败：{e}"}
+    data.setdefault("ok", True)
+    return data

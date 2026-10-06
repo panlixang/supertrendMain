@@ -30,6 +30,7 @@ strategy.entry 反向进场会自动平掉原仓，所以这里就是「永远�
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Callable
 
 import position
 import strategy
@@ -111,7 +112,16 @@ def run_backtest(
     max_loss_pct: float | None = None,
     enhanced_stop: bool = False,
     v3_filter: bool = False,
+    v3_min_score: float = 0.0,
+    block_if: Callable[[int], bool] | None = None,
 ) -> dict:
+    """block_if: 传入 bar 的 ts(ms)，返回 True = **禁止在该根开新仓**。
+
+    只拦【开仓】，不拦【平反向仓】—— 与 ER / 评分闸门同一条原则（严格还原
+    executor.on_signal：反向信号先无条件平掉手上的仓，再判闸门要不要开新仓）。
+    否则遇到休市日信号，仓位会被无限期挂住，回测结果失真。
+    典型用法：周末休市不开单 block_if=lambda ts: et_weekday(ts) >= 5。
+    """
     periods = p.get("periods", 15)
     if len(candles) < periods + 5:
         return {"error": "K线不足，无法回测"}
@@ -180,6 +190,7 @@ def run_backtest(
     n_block = n_tp1 = n_tp2 = n_tp3 = n_stop = n_rev = n_liq = n_skip = 0
     n_ml = 0
     n_align_block = 0
+    n_block_rest = 0
 
     def st_line(i: int) -> float | None:
         """该根的超趋线值，同 feed._st_line：多头取 up、空头取 dn。"""
@@ -335,7 +346,7 @@ def run_backtest(
             if not feats:
                 return False, profile, 1.0
             dec = v3_decide(1 if typ == "buy" else -1, feats)
-            if not dec.get("execute"):
+            if not dec.get("execute") or dec.get("score", 0) < v3_min_score:
                 return False, profile, 1.0
             return True, "normal", 1.0
         if live_gate:
@@ -469,7 +480,14 @@ def run_backtest(
         typ = flip_at.get(i)
         if typ:
             price = c["c"]
-            gate_ok, profile, size_mul = eval_open_gate(i, typ)
+            # 休市日/自定义黑名单：在闸门【之前】短路，且根本不进 eval_open_gate，
+            # 这样 n_block（闸门拦）与 n_block_rest（休市拦）天然互斥，可直接相加。
+            rest_hit = block_if is not None and block_if(candles[i]["ts"])
+            if rest_hit:
+                n_block_rest += 1
+                gate_ok, profile, size_mul = False, "normal", 1.0
+            else:
+                gate_ok, profile, size_mul = eval_open_gate(i, typ)
             # 反向持仓先平 —— 第三档 reverse_signal 仅在同周期反向且过闸门时平剩余
             if pos and ((pos.long and typ == "sell") or (not pos.long and typ == "buy")):
                 rules_r = rules_by[pos.profile]
@@ -501,6 +519,8 @@ def run_backtest(
                                         or (d == -1 and typ == "sell"))
                 if gate_ok and aligned:
                     open_pos(i, price, typ, profile, size_mul)
+                elif rest_hit:
+                    pass   # 已被休市日/黑名单拦掉，不计入闸门统计（两者互斥）
                 elif aligned and (live_gate or er_min is not None or v3_filter):
                     n_block += 1
                 elif not aligned:
@@ -560,6 +580,7 @@ def run_backtest(
         # ── 闸门 / 离场统计 ──
         "er_blocked":    n_block,
         "align_blocked": n_align_block,
+        "rest_blocked":  n_block_rest,   # block_if（休市日等）拦掉的开仓次数
         "tp1_count":     n_tp1,
         "tp2_count":     n_tp2,
         "tp3_count":     n_tp3,

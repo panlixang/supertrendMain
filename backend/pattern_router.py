@@ -25,6 +25,8 @@ class CfgIn(BaseModel):
     exchange:      Optional[str]   = None
     block_4h:      Optional[bool]  = None
     confirm_close: Optional[bool]  = None   # True = 只在信号 K 收盘后下单（对齐回测口径）
+    signal_max_age_sec: Optional[int] = None  # 信号过期护栏：翻转那根 K 收盘超过这么久就不再补单
+    position_recheck_sec: Optional[int] = None  # 本地有仓时，每隔这么久对账一次交易所真实持仓
 
     cooldown_sec:  Optional[int]   = None
     poll_sec:      Optional[int]   = None
