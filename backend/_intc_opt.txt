@@ -1,0 +1,81 @@
+d:\个人项目代码\supertrendMain\backend\bt_intc_exit_opt.py:19: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  f"{dt.datetime.utcfromtimestamp(cs[0]['ts']/1000):%Y-%m-%d}~"
+d:\个人项目代码\supertrendMain\backend\bt_intc_exit_opt.py:20: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  f"{dt.datetime.utcfromtimestamp(cs[-1]['ts']/1000):%Y-%m-%d} UTC",
+INTC-USDT 1h 5325 根 2026-02-26~2026-10-06 UTC
+  done p=1.5 r=30.0 m=pct ret=50.55 dd=12.9 cal=3.93
+  done p=1.5 r=30.0 m=st ret=32.49 dd=16.9 cal=1.93
+  done p=1.5 r=50.0 m=pct ret=45.48 dd=12.7 cal=3.59
+  done p=1.5 r=50.0 m=st ret=30.81 dd=15.7 cal=1.96
+  done p=1.5 r=70.0 m=pct ret=40.17 dd=12.7 cal=3.17
+  done p=1.5 r=70.0 m=st ret=28.74 dd=14.7 cal=1.96
+  done p=1.5 r=100.0 m=pct ret=31.80 dd=17.9 cal=1.77
+  done p=1.5 r=100.0 m=st ret=24.92 dd=16.4 cal=1.52
+  done p=2.0 r=30.0 m=pct ret=68.47 dd=15.7 cal=4.37
+  done p=2.0 r=30.0 m=st ret=65.73 dd=16.6 cal=3.96
+  done p=2.0 r=50.0 m=pct ret=58.86 dd=15.2 cal=3.87
+  done p=2.0 r=50.0 m=st ret=51.83 dd=15.3 cal=3.39
+  done p=2.0 r=70.0 m=pct ret=49.26 dd=14.8 cal=3.34
+  done p=2.0 r=70.0 m=st ret=38.42 dd=14.4 cal=2.67
+  done p=2.0 r=100.0 m=pct ret=34.96 dd=20.0 cal=1.75
+  done p=2.0 r=100.0 m=st ret=19.33 dd=20.8 cal=0.93
+  done p=3.0 r=30.0 m=pct ret=50.82 dd=17.4 cal=2.93
+  done p=3.0 r=30.0 m=st ret=60.45 dd=22.2 cal=2.72
+  done p=3.0 r=50.0 m=pct ret=41.00 dd=17.4 cal=2.36
+  done p=3.0 r=50.0 m=st ret=45.82 dd=22.0 cal=2.09
+  done p=3.0 r=70.0 m=pct ret=31.43 dd=17.4 cal=1.81
+  done p=3.0 r=70.0 m=st ret=31.98 dd=23.6 cal=1.36
+  done p=3.0 r=100.0 m=pct ret=17.60 dd=19.6 cal=0.90
+  done p=3.0 r=100.0 m=st ret=12.70 dd=26.0 cal=0.49
+  done p=4.0 r=30.0 m=pct ret=52.49 dd=17.6 cal=2.99
+  done p=4.0 r=30.0 m=st ret=76.60 dd=22.3 cal=3.44
+  done p=4.0 r=50.0 m=pct ret=46.93 dd=17.4 cal=2.70
+  done p=4.0 r=50.0 m=st ret=65.06 dd=22.8 cal=2.86
+  done p=4.0 r=70.0 m=pct ret=41.23 dd=17.4 cal=2.37
+  done p=4.0 r=70.0 m=st ret=53.71 dd=24.0 cal=2.23
+  done p=4.0 r=100.0 m=pct ret=32.46 dd=17.4 cal=1.87
+  done p=4.0 r=100.0 m=st ret=37.14 dd=26.0 cal=1.43
+  done p=5.0 r=30.0 m=pct ret=49.05 dd=17.9 cal=2.74
+  done p=5.0 r=30.0 m=st ret=64.39 dd=23.5 cal=2.74
+  done p=5.0 r=50.0 m=pct ret=44.74 dd=17.4 cal=2.58
+  done p=5.0 r=50.0 m=st ret=54.66 dd=23.7 cal=2.31
+  done p=5.0 r=70.0 m=pct ret=40.29 dd=17.4 cal=2.32
+  done p=5.0 r=70.0 m=st ret=45.08 dd=24.2 cal=1.86
+  done p=5.0 r=100.0 m=pct ret=33.35 dd=17.4 cal=1.92
+  done p=5.0 r=100.0 m=st ret=31.05 dd=25.1 cal=1.24
+  done p=6.0 r=30.0 m=pct ret=51.73 dd=18.7 cal=2.77
+  done p=6.0 r=30.0 m=st ret=70.19 dd=22.4 cal=3.13
+  done p=6.0 r=50.0 m=pct ret=49.17 dd=18.3 cal=2.68
+  done p=6.0 r=50.0 m=st ret=63.94 dd=21.8 cal=2.93
+  done p=6.0 r=70.0 m=pct ret=46.41 dd=17.9 cal=2.59
+  done p=6.0 r=70.0 m=st ret=57.52 dd=21.7 cal=2.65
+  done p=6.0 r=100.0 m=pct ret=41.93 dd=17.9 cal=2.34
+  done p=6.0 r=100.0 m=st ret=47.64 dd=21.5 cal=2.22
+  done p=8.0 r=30.0 m=pct ret=54.71 dd=19.2 cal=2.85
+  done p=8.0 r=30.0 m=st ret=80.70 dd=22.2 cal=3.63
+  done p=8.0 r=50.0 m=pct ret=54.77 dd=19.2 cal=2.85
+  done p=8.0 r=50.0 m=st ret=80.76 dd=21.6 cal=3.74
+  done p=8.0 r=70.0 m=pct ret=54.66 dd=19.2 cal=2.84
+  done p=8.0 r=70.0 m=st ret=80.47 dd=21.1 cal=3.81
+  done p=8.0 r=100.0 m=pct ret=54.16 dd=19.2 cal=2.82
+  done p=8.0 r=100.0 m=st ret=79.40 dd=21.1 cal=3.76
+
+=== INTC 1h 出场寻优 Top15（按 Calmar=收益/回撤）===
+Calmar    ret%    dd%    PF    n  tp1%  ratio  sl
+  4.37   68.47   15.7  1.67  107   2.0   30  pct
+  3.96   65.73   16.6  1.49  107   2.0   30  st
+  3.93   50.55   12.9  1.68  107   1.5   30  pct
+  3.87   58.86   15.2  1.62  107   2.0   50  pct
+  3.81   80.47   21.1  1.38  107   8.0   70  st
+  3.76   79.40   21.1  1.39  107   8.0  100  st
+  3.74   80.76   21.6  1.38  107   8.0   50  st
+  3.63   80.70   22.2  1.37  107   8.0   30  st
+  3.59   45.48   12.7  1.64  107   1.5   50  pct
+  3.44   76.60   22.3  1.38  107   4.0   30  st
+  3.39   51.83   15.3  1.42  107   2.0   50  st
+  3.34   49.26   14.8  1.55  107   2.0   70  pct
+  3.17   40.17   12.7  1.58  107   1.5   70  pct
+  3.13   70.19   22.4  1.34  107   6.0   30  st
+  2.99   52.49   17.6  1.38  107   4.0   30  pct
+
+扫描组合 56 个

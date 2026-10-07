@@ -1,0 +1,174 @@
+d:\个人项目代码\supertrendMain\backend\bt_intc_exit_opt2.py:20: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  f"{dt.datetime.utcfromtimestamp(cs[0]['ts']/1000):%Y-%m-%d}~"
+d:\个人项目代码\supertrendMain\backend\bt_intc_exit_opt2.py:21: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  f"{dt.datetime.utcfromtimestamp(cs[-1]['ts']/1000):%Y-%m-%d} UTC",
+INTC-USDT 1h 5325 根 2026-02-26~2026-10-06 UTC
+  ST p=1.5 r=30.0 pct sl=1.5 tr=True ret=25.62 dd=18.7 cal=1.37
+  ST p=1.5 r=30.0 pct sl=1.5 tr=False ret=24.26 dd=19.6 cal=1.23
+  ST p=1.5 r=30.0 pct sl=2.0 tr=True ret=50.55 dd=12.9 cal=3.93
+  ST p=1.5 r=30.0 pct sl=2.0 tr=False ret=52.54 dd=14.2 cal=3.71
+  ST p=1.5 r=30.0 pct sl=3.0 tr=True ret=48.23 dd=12.9 cal=3.74
+  ST p=1.5 r=30.0 pct sl=3.0 tr=False ret=73.63 dd=16.9 cal=4.36
+  ST p=1.5 r=30.0 st sl=2.0 tr=True ret=32.49 dd=16.9 cal=1.93
+  ST p=1.5 r=50.0 pct sl=1.5 tr=True ret=23.20 dd=15.4 cal=1.51
+  ST p=1.5 r=50.0 pct sl=1.5 tr=False ret=21.78 dd=16.7 cal=1.30
+  ST p=1.5 r=50.0 pct sl=2.0 tr=True ret=45.48 dd=12.7 cal=3.59
+  ST p=1.5 r=50.0 pct sl=2.0 tr=False ret=45.25 dd=12.1 cal=3.75
+  ST p=1.5 r=50.0 pct sl=3.0 tr=True ret=47.78 dd=10.3 cal=4.62
+  ST p=1.5 r=50.0 pct sl=3.0 tr=False ret=68.80 dd=13.9 cal=4.95
+  ST p=1.5 r=50.0 st sl=2.0 tr=True ret=30.81 dd=15.7 cal=1.96
+  ST p=1.5 r=70.0 pct sl=1.5 tr=True ret=20.50 dd=12.9 cal=1.59
+  ST p=1.5 r=70.0 pct sl=1.5 tr=False ret=18.99 dd=13.7 cal=1.39
+  ST p=1.5 r=70.0 pct sl=2.0 tr=True ret=40.17 dd=12.7 cal=3.17
+  ST p=1.5 r=70.0 pct sl=2.0 tr=False ret=37.82 dd=12.6 cal=2.99
+  ST p=1.5 r=70.0 pct sl=3.0 tr=True ret=46.88 dd=8.3 cal=5.62
+  ST p=1.5 r=70.0 pct sl=3.0 tr=False ret=63.44 dd=10.8 cal=5.87
+  ST p=1.5 r=70.0 st sl=2.0 tr=True ret=28.74 dd=14.7 cal=1.96
+  ST p=1.5 r=100.0 pct sl=1.5 tr=True ret=15.95 dd=15.1 cal=1.06
+  ST p=1.5 r=100.0 pct sl=1.5 tr=False ret=14.23 dd=15.2 cal=0.94
+  ST p=1.5 r=100.0 pct sl=2.0 tr=True ret=31.80 dd=17.9 cal=1.77
+  ST p=1.5 r=100.0 pct sl=2.0 tr=False ret=26.50 dd=18.8 cal=1.41
+  ST p=1.5 r=100.0 pct sl=3.0 tr=True ret=44.66 dd=9.2 cal=4.85
+  ST p=1.5 r=100.0 pct sl=3.0 tr=False ret=54.54 dd=10.7 cal=5.08
+  ST p=1.5 r=100.0 st sl=2.0 tr=True ret=24.92 dd=16.4 cal=1.52
+  ST p=2.0 r=30.0 pct sl=1.5 tr=True ret=42.10 dd=17.2 cal=2.44
+  ST p=2.0 r=30.0 pct sl=1.5 tr=False ret=42.95 dd=17.5 cal=2.46
+  ST p=2.0 r=30.0 pct sl=2.0 tr=True ret=68.47 dd=15.7 cal=4.37
+  ST p=2.0 r=30.0 pct sl=2.0 tr=False ret=85.73 dd=17.2 cal=4.97
+  ST p=2.0 r=30.0 pct sl=3.0 tr=True ret=79.12 dd=13.7 cal=5.76
+  ST p=2.0 r=30.0 pct sl=3.0 tr=False ret=152.36 dd=13.6 cal=11.24
+  ST p=2.0 r=30.0 st sl=2.0 tr=True ret=65.73 dd=16.6 cal=3.96
+  ST p=2.0 r=50.0 pct sl=1.5 tr=True ret=35.79 dd=14.0 cal=2.55
+  ST p=2.0 r=50.0 pct sl=1.5 tr=False ret=35.58 dd=15.0 cal=2.37
+  ST p=2.0 r=50.0 pct sl=2.0 tr=True ret=58.86 dd=15.2 cal=3.87
+  ST p=2.0 r=50.0 pct sl=2.0 tr=False ret=68.70 dd=16.8 cal=4.09
+  ST p=2.0 r=50.0 pct sl=3.0 tr=True ret=64.87 dd=11.9 cal=5.45
+  ST p=2.0 r=50.0 pct sl=3.0 tr=False ret=115.47 dd=12.2 cal=9.50
+  ST p=2.0 r=50.0 st sl=2.0 tr=True ret=51.83 dd=15.3 cal=3.39
+  ST p=2.0 r=70.0 pct sl=1.5 tr=True ret=29.31 dd=12.6 cal=2.32
+  ST p=2.0 r=70.0 pct sl=1.5 tr=False ret=28.05 dd=13.3 cal=2.10
+  ST p=2.0 r=70.0 pct sl=2.0 tr=True ret=49.26 dd=14.8 cal=3.34
+  ST p=2.0 r=70.0 pct sl=2.0 tr=False ret=52.49 dd=16.3 cal=3.21
+  ST p=2.0 r=70.0 pct sl=3.0 tr=True ret=51.04 dd=10.9 cal=4.67
+  ST p=2.0 r=70.0 pct sl=3.0 tr=False ret=82.72 dd=10.8 cal=7.65
+  ST p=2.0 r=70.0 st sl=2.0 tr=True ret=38.42 dd=14.4 cal=2.67
+  ST p=2.0 r=100.0 pct sl=1.5 tr=True ret=19.35 dd=17.4 cal=1.12
+  ST p=2.0 r=100.0 pct sl=1.5 tr=False ret=16.59 dd=17.9 cal=0.93
+  ST p=2.0 r=100.0 pct sl=2.0 tr=True ret=34.96 dd=20.0 cal=1.75
+  ST p=2.0 r=100.0 pct sl=2.0 tr=False ret=29.80 dd=22.0 cal=1.36
+  ST p=2.0 r=100.0 pct sl=3.0 tr=True ret=31.19 dd=18.0 cal=1.73
+  ST p=2.0 r=100.0 pct sl=3.0 tr=False ret=40.77 dd=20.4 cal=2.00
+  ST p=2.0 r=100.0 st sl=2.0 tr=True ret=19.33 dd=20.8 cal=0.93
+  ST p=3.0 r=30.0 pct sl=1.5 tr=True ret=31.09 dd=20.8 cal=1.50
+  ST p=3.0 r=30.0 pct sl=1.5 tr=False ret=40.33 dd=18.3 cal=2.21
+  ST p=3.0 r=30.0 pct sl=2.0 tr=True ret=50.82 dd=17.4 cal=2.93
+  ST p=3.0 r=30.0 pct sl=2.0 tr=False ret=76.03 dd=19.6 cal=3.89
+  ST p=3.0 r=30.0 pct sl=3.0 tr=True ret=60.49 dd=15.6 cal=3.89
+  ST p=3.0 r=30.0 pct sl=3.0 tr=False ret=139.56 dd=13.9 cal=10.05
+  ST p=3.0 r=30.0 st sl=2.0 tr=True ret=60.45 dd=22.2 cal=2.72
+  ST p=3.0 r=50.0 pct sl=1.5 tr=True ret=22.27 dd=18.1 cal=1.23
+  ST p=3.0 r=50.0 pct sl=1.5 tr=False ret=28.43 dd=17.5 cal=1.62
+  ST p=3.0 r=50.0 pct sl=2.0 tr=True ret=41.00 dd=17.4 cal=2.36
+  ST p=3.0 r=50.0 pct sl=2.0 tr=False ret=57.02 dd=19.6 cal=2.91
+  ST p=3.0 r=50.0 pct sl=3.0 tr=True ret=47.67 dd=13.7 cal=3.49
+  ST p=3.0 r=50.0 pct sl=3.0 tr=False ret=105.56 dd=14.3 cal=7.39
+  ST p=3.0 r=50.0 st sl=2.0 tr=True ret=45.82 dd=22.0 cal=2.09
+  ST p=3.0 r=70.0 pct sl=1.5 tr=True ret=13.73 dd=16.6 cal=0.83
+  ST p=3.0 r=70.0 pct sl=1.5 tr=False ret=17.12 dd=16.8 cal=1.02
+  ST p=3.0 r=70.0 pct sl=2.0 tr=True ret=31.43 dd=17.4 cal=1.81
+  ST p=3.0 r=70.0 pct sl=2.0 tr=False ret=39.47 dd=19.6 cal=2.02
+  ST p=3.0 r=70.0 pct sl=3.0 tr=True ret=35.33 dd=13.1 cal=2.70
+  ST p=3.0 r=70.0 pct sl=3.0 tr=False ret=75.32 dd=15.6 cal=4.82
+  ST p=3.0 r=70.0 st sl=2.0 tr=True ret=31.98 dd=23.6 cal=1.36
+  ST p=3.0 r=100.0 pct sl=1.5 tr=True ret=1.47 dd=19.8 cal=0.07
+  ST p=3.0 r=100.0 pct sl=1.5 tr=False ret=1.28 dd=20.7 cal=0.06
+  ST p=3.0 r=100.0 pct sl=2.0 tr=True ret=17.60 dd=19.6 cal=0.90
+  ST p=3.0 r=100.0 pct sl=2.0 tr=False ret=15.81 dd=22.2 cal=0.71
+  ST p=3.0 r=100.0 pct sl=3.0 tr=True ret=17.79 dd=15.7 cal=1.13
+  ST p=3.0 r=100.0 pct sl=3.0 tr=False ret=36.49 dd=17.7 cal=2.06
+  ST p=3.0 r=100.0 st sl=2.0 tr=True ret=12.70 dd=26.0 cal=0.49
+  ST p=4.0 r=30.0 pct sl=1.5 tr=True ret=32.61 dd=23.1 cal=1.41
+  ST p=4.0 r=30.0 pct sl=1.5 tr=False ret=41.43 dd=17.9 cal=2.32
+  ST p=4.0 r=30.0 pct sl=2.0 tr=True ret=52.49 dd=17.6 cal=2.99
+  ST p=4.0 r=30.0 pct sl=2.0 tr=False ret=74.57 dd=19.6 cal=3.81
+  ST p=4.0 r=30.0 pct sl=3.0 tr=True ret=64.62 dd=17.2 cal=3.76
+  ST p=4.0 r=30.0 pct sl=3.0 tr=False ret=142.12 dd=15.3 cal=9.26
+  ST p=4.0 r=30.0 st sl=2.0 tr=True ret=76.60 dd=22.3 cal=3.44
+  ST p=4.0 r=50.0 pct sl=1.5 tr=True ret=26.52 dd=21.8 cal=1.22
+  ST p=4.0 r=50.0 pct sl=1.5 tr=False ret=33.58 dd=17.7 cal=1.90
+  ST p=4.0 r=50.0 pct sl=2.0 tr=True ret=46.93 dd=17.4 cal=2.70
+  ST p=4.0 r=50.0 pct sl=2.0 tr=False ret=62.23 dd=19.6 cal=3.18
+  ST p=4.0 r=50.0 pct sl=3.0 tr=True ret=57.62 dd=16.4 cal=3.51
+  ST p=4.0 r=50.0 pct sl=3.0 tr=False ret=120.65 dd=16.1 cal=7.49
+  ST p=4.0 r=50.0 st sl=2.0 tr=True ret=65.06 dd=22.8 cal=2.86
+  ST p=4.0 r=70.0 pct sl=1.5 tr=True ret=20.43 dd=20.8 cal=0.98
+  ST p=4.0 r=70.0 pct sl=1.5 tr=False ret=25.79 dd=17.5 cal=1.47
+  ST p=4.0 r=70.0 pct sl=2.0 tr=True ret=41.23 dd=17.4 cal=2.37
+  ST p=4.0 r=70.0 pct sl=2.0 tr=False ret=50.23 dd=19.6 cal=2.57
+  ST p=4.0 r=70.0 pct sl=3.0 tr=True ret=50.40 dd=15.7 cal=3.22
+  ST p=4.0 r=70.0 pct sl=3.0 tr=False ret=100.04 dd=17.1 cal=5.85
+  ST p=4.0 r=70.0 st sl=2.0 tr=True ret=53.71 dd=24.0 cal=2.23
+  ST p=4.0 r=100.0 pct sl=1.5 tr=True ret=11.33 dd=20.8 cal=0.55
+  ST p=4.0 r=100.0 pct sl=1.5 tr=False ret=14.25 dd=18.8 cal=0.76
+  ST p=4.0 r=100.0 pct sl=2.0 tr=True ret=32.46 dd=17.4 cal=1.87
+  ST p=4.0 r=100.0 pct sl=2.0 tr=False ret=32.96 dd=19.6 cal=1.68
+  ST p=4.0 r=100.0 pct sl=3.0 tr=True ret=39.24 dd=15.7 cal=2.50
+  ST p=4.0 r=100.0 pct sl=3.0 tr=False ret=70.92 dd=18.6 cal=3.80
+  ST p=4.0 r=100.0 st sl=2.0 tr=True ret=37.14 dd=26.0 cal=1.43
+  ST p=8.0 r=30.0 pct sl=1.5 tr=True ret=35.54 dd=23.9 cal=1.48
+  ST p=8.0 r=30.0 pct sl=1.5 tr=False ret=40.65 dd=20.3 cal=2.00
+  ST p=8.0 r=30.0 pct sl=2.0 tr=True ret=54.71 dd=19.2 cal=2.85
+  ST p=8.0 r=30.0 pct sl=2.0 tr=False ret=73.16 dd=19.6 cal=3.74
+  ST p=8.0 r=30.0 pct sl=3.0 tr=True ret=65.18 dd=24.7 cal=2.64
+  ST p=8.0 r=30.0 pct sl=3.0 tr=False ret=137.41 dd=24.4 cal=5.64
+  ST p=8.0 r=30.0 st sl=2.0 tr=True ret=80.70 dd=22.2 cal=3.63
+  ST p=8.0 r=50.0 pct sl=1.5 tr=True ret=33.26 dd=23.2 cal=1.44
+  ST p=8.0 r=50.0 pct sl=1.5 tr=False ret=35.78 dd=20.1 cal=1.78
+  ST p=8.0 r=50.0 pct sl=2.0 tr=True ret=54.77 dd=19.2 cal=2.85
+  ST p=8.0 r=50.0 pct sl=2.0 tr=False ret=66.32 dd=19.6 cal=3.39
+  ST p=8.0 r=50.0 pct sl=3.0 tr=True ret=65.50 dd=22.8 cal=2.88
+  ST p=8.0 r=50.0 pct sl=3.0 tr=False ret=127.13 dd=23.2 cal=5.48
+  ST p=8.0 r=50.0 st sl=2.0 tr=True ret=80.76 dd=21.6 cal=3.74
+  ST p=8.0 r=70.0 pct sl=1.5 tr=True ret=30.88 dd=22.5 cal=1.37
+  ST p=8.0 r=70.0 pct sl=1.5 tr=False ret=30.92 dd=19.9 cal=1.55
+  ST p=8.0 r=70.0 pct sl=2.0 tr=True ret=54.66 dd=19.2 cal=2.84
+  ST p=8.0 r=70.0 pct sl=2.0 tr=False ret=59.56 dd=19.6 cal=3.04
+  ST p=8.0 r=70.0 pct sl=3.0 tr=True ret=65.50 dd=20.8 cal=3.14
+  ST p=8.0 r=70.0 pct sl=3.0 tr=False ret=116.76 dd=22.0 cal=5.30
+  ST p=8.0 r=70.0 st sl=2.0 tr=True ret=80.47 dd=21.1 cal=3.81
+  ST p=8.0 r=100.0 pct sl=1.5 tr=True ret=27.16 dd=22.2 cal=1.22
+  ST p=8.0 r=100.0 pct sl=1.5 tr=False ret=23.67 dd=20.4 cal=1.16
+  ST p=8.0 r=100.0 pct sl=2.0 tr=True ret=54.16 dd=19.2 cal=2.82
+  ST p=8.0 r=100.0 pct sl=2.0 tr=False ret=49.57 dd=19.6 cal=2.53
+  ST p=8.0 r=100.0 pct sl=3.0 tr=True ret=64.93 dd=18.3 cal=3.55
+  ST p=8.0 r=100.0 pct sl=3.0 tr=False ret=101.14 dd=20.2 cal=4.99
+  ST p=8.0 r=100.0 st sl=2.0 tr=True ret=79.40 dd=21.1 cal=3.76
+
+=== 精细寻优 Top15（纯ST, Calmar=收益/回撤）===
+Calmar    ret%    dd%    PF    n  tp1  r   sl   sl%  trail
+ 11.24  152.36   13.6  1.97  107   2.0  30 pct  3.0  False
+ 10.05  139.56   13.9  1.66  107   3.0  30 pct  3.0  False
+  9.50  115.47   12.2  1.84  107   2.0  50 pct  3.0  False
+  9.26  142.12   15.3  1.59  107   4.0  30 pct  3.0  False
+  7.65   82.72   10.8  1.68  107   2.0  70 pct  3.0  False
+  7.49  120.65   16.1  1.53  107   4.0  50 pct  3.0  False
+  7.39  105.56   14.3  1.56  107   3.0  50 pct  3.0  False
+  5.87   63.44   10.8  1.75  107   1.5  70 pct  3.0  False
+  5.85  100.04   17.1  1.48  107   4.0  70 pct  3.0  False
+  5.76   79.12   13.7  1.63  107   2.0  30 pct  3.0  True
+  5.64  137.41   24.4  1.54  107   8.0  30 pct  3.0  False
+  5.62   46.88    8.3  1.64  107   1.5  70 pct  3.0  True
+  5.48  127.13   23.2  1.52  107   8.0  50 pct  3.0  False
+  5.45   64.87   11.9  1.57  107   2.0  50 pct  3.0  True
+  5.30  116.76   22.0  1.50  107   8.0  70 pct  3.0  False
+
+=== 纯ST Top 出场 叠 V3 对比（强趋势市该不该开 V3）===
+ tp1   r  sl  sl% trail |  ST_ret ST_cal |  V3_ret V3_cal  V3笔
+ 2.0  30 pct  3.0 False |  152.36  11.24 |   56.85   3.56   64
+ 3.0  30 pct  3.0 False |  139.56  10.05 |   55.56   1.93   64
+ 2.0  50 pct  3.0 False |  115.47   9.50 |   42.67   3.14   64
+ 4.0  30 pct  3.0 False |  142.12   9.26 |   48.32   1.54   64
+ 2.0  70 pct  3.0 False |   82.72   7.65 |   29.25   2.29   64
+ 4.0  50 pct  3.0 False |  120.65   7.49 |   37.40   1.22   64
+ 3.0  50 pct  3.0 False |  105.56   7.39 |   40.59   1.46   64
+ 1.5  70 pct  3.0 False |   63.44   5.87 |   14.55   0.98   64
