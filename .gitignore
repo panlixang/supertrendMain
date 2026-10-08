@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 .env
 backend/settings.json
+backend/pattern_trade.json
 backend/.okx_credentials.json
 backend/candle_data.db
 backend/candle_data.db-*

@@ -120,7 +120,7 @@
     {
       "symbol": "SKHYNIX-USDT-SWAP",
       "enabled": true,
-      "margin_usdt": 50.0,
+      "margin_usdt": 5.0,
       "leverage": 10,
       "allow_tfs": ["1h"],
       "sizing_mode": "fixed",

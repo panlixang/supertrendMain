@@ -40,6 +40,9 @@ import signal_v3
 logger = logging.getLogger(__name__)
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
+# 出厂默认（git 跟踪）：git pull 更新只动它，绝不碰用户态
+DEFAULT_CONFIG_FILE = os.path.join(_DIR, "pattern_trade.default.json")
+# 用户运行时配置（gitignore）：前端改配置只写它，git pull 不会覆盖
 CONFIG_FILE = os.path.join(_DIR, "pattern_trade.json")
 CRED_FILE = os.path.join(_DIR, "pattern_credentials.json")
 
@@ -163,7 +166,78 @@ class PatternTrader:
         self._load()
 
     # ── 配置持久化（与首页 settings.json 完全分开）─────────────
+    # 分层：DEFAULT_CONFIG_FILE 出厂默认（git 跟踪），CONFIG_FILE 用户运行时配置
+    # （gitignore，前端只写它）。启动 default 为底、用户态覆盖；用户态不存在则从
+    # default 复制生成。git pull 更新 default 永远碰不到用户态 → 线上配置不被覆盖。
+    def _read_json(self, path):
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"[形态下单] 读取配置失败 {path}: {e}")
+            return None
+
+    def _merge_config(self, base, over):
+        """default 为底，user 覆盖；symbols 按 symbol 对齐（并集，user 优先）。"""
+        if not base:
+            return over or {}
+        if not over:
+            return base
+        cfg = {**base.get("cfg", {}), **over.get("cfg", {})}
+        base_syms = {s.get("symbol"): s for s in base.get("symbols", []) if s.get("symbol")}
+        over_syms = {s.get("symbol"): s for s in over.get("symbols", []) if s.get("symbol")}
+        syms = []
+        for sym, s in base_syms.items():
+            syms.append({**s, **over_syms[sym]} if sym in over_syms else s)
+        for sym, s in over_syms.items():
+            if sym not in base_syms:
+                syms.append(s)
+        return {"cfg": cfg, "symbols": syms}
+
+    def _apply_config(self, data):
+        for k, v in (data.get("cfg") or {}).items():
+            if hasattr(self.cfg, k):
+                setattr(self.cfg, k, v)
+        rows = data.get("symbols") or []
+        for row in rows:
+            # 逐行容错：坏行只跳过它自己，绝不牵连其余品种
+            # （历史坑：整段共用一个 try，一行数据异常 → symbols 全丢 →
+            #   后续 save() 把空清单写回磁盘，原配置永久销毁）
+            try:
+                sym = _okx_symbol(row.get("symbol") or "")
+                if not sym:
+                    continue
+                self.symbols[sym] = SymbolTradeConfig(
+                    symbol=sym,
+                    enabled=bool(row.get("enabled")),
+                    margin_usdt=float(row.get("margin_usdt") or 10.0),
+                    leverage=int(float(row.get("leverage") or 3)),
+                    allow_tfs=list(row.get("allow_tfs") or ["1h"]),
+                    sizing_mode=row.get("sizing_mode") or "fixed",
+                    equity_pct=float(row.get("equity_pct") or 10.0),
+                    tp1_pct=row.get("tp1_pct"),
+                    tp1_ratio=row.get("tp1_ratio"),
+                    tp2_pct=row.get("tp2_pct"),
+                    tp2_ratio=row.get("tp2_ratio"),
+                    tp3_pct=row.get("tp3_pct"),
+                    tp3_ratio=row.get("tp3_ratio"),
+                    tp3_mode=row.get("tp3_mode"),
+                    exit_mode=row.get("exit_mode"),
+                    sl_pct=row.get("sl_pct"),
+                    sl_mode=row.get("sl_mode"),
+                    move_sl_to_entry=row.get("move_sl_to_entry"),
+                    trail_with_st=row.get("trail_with_st"),
+                    reverse_close=row.get("reverse_close"),
+                    filter_v3=bool(row.get("filter_v3", True)),
+                )
+            except Exception as e2:
+                self._load_bad_rows += 1
+                logger.warning(f"[形态下单] 品种配置行读取失败已跳过: {row.get('symbol')!r} err={e2!r}")
+
     def _load(self):
+        # 凭据（不变）
         if os.path.exists(CRED_FILE):
             try:
                 with open(CRED_FILE) as f:
@@ -175,54 +249,31 @@ class PatternTrader:
                             self._keys[ex] = dict(data[ex])
             except Exception as e:
                 logger.warning(f"[形态下单] 读取凭据失败: {e}")
-        if os.path.exists(CONFIG_FILE):
+
+        default_data = self._read_json(DEFAULT_CONFIG_FILE)
+        user_data = self._read_json(CONFIG_FILE)
+
+        # 首次启动：用户态不存在则从 default 复制生成
+        if user_data is None and default_data is not None:
             try:
-                with open(CONFIG_FILE) as f:
-                    data = json.load(f)
-                for k, v in (data.get("cfg") or {}).items():
-                    if hasattr(self.cfg, k):
-                        setattr(self.cfg, k, v)
-                rows = data.get("symbols") or []
-                for row in rows:
-                    # 逐行容错：坏行只跳过它自己，绝不牵连其余品种
-                    # （历史坑：整段共用一个 try，一行数据异常 → symbols 全丢 →
-                    #   后续 save() 把空清单写回磁盘，原配置永久销毁）
-                    try:
-                        sym = _okx_symbol(row.get("symbol") or "")
-                        if not sym:
-                            continue
-                        self.symbols[sym] = SymbolTradeConfig(
-                            symbol=sym,
-                            enabled=bool(row.get("enabled")),
-                            margin_usdt=float(row.get("margin_usdt") or 10.0),
-                            leverage=int(float(row.get("leverage") or 3)),
-                            allow_tfs=list(row.get("allow_tfs") or ["1h"]),
-                            sizing_mode=row.get("sizing_mode") or "fixed",
-                            equity_pct=float(row.get("equity_pct") or 10.0),
-                            tp1_pct=row.get("tp1_pct"),
-                            tp1_ratio=row.get("tp1_ratio"),
-                            tp2_pct=row.get("tp2_pct"),
-                            tp2_ratio=row.get("tp2_ratio"),
-                            tp3_pct=row.get("tp3_pct"),
-                            tp3_ratio=row.get("tp3_ratio"),
-                            tp3_mode=row.get("tp3_mode"),
-                            exit_mode=row.get("exit_mode"),
-                            sl_pct=row.get("sl_pct"),
-                            sl_mode=row.get("sl_mode"),
-                            move_sl_to_entry=row.get("move_sl_to_entry"),
-                            trail_with_st=row.get("trail_with_st"),
-                            reverse_close=row.get("reverse_close"),
-                            filter_v3=bool(row.get("filter_v3", True)),
-                        )
-                    except Exception as e2:
-                        self._load_bad_rows += 1
-                        logger.warning(f"[形态下单] 品种配置行读取失败已跳过: {row.get('symbol')!r} err={e2!r}")
-                self._load_rows = len(rows)
-                if rows and not self.symbols:
-                    logger.error(f"[形态下单] json 里 {len(rows)} 个品种全部加载失败，清单已为空；"
-                                 f"已阻止回写，请检查 {CONFIG_FILE}")
+                tmp = CONFIG_FILE + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(default_data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, CONFIG_FILE)
+                user_data = default_data
+                logger.info(f"[形态下单] 已从默认配置生成用户配置 {CONFIG_FILE}")
             except Exception as e:
-                logger.warning(f"[形态下单] 读取配置失败: {e}")
+                logger.warning(f"[形态下单] 生成用户配置失败: {e}")
+
+        if default_data is None and user_data is None:
+            return  # 都没有，保持初始空（与旧行为一致）
+
+        merged = self._merge_config(default_data, user_data)
+        self._apply_config(merged)
+        self._load_rows = len(merged.get("symbols") or [])
+        if merged.get("symbols") and not self.symbols:
+            logger.error(f"[形态下单] json 里 {len(merged['symbols'])} 个品种全部加载失败，清单已为空；"
+                         f"已阻止回写，请检查 {CONFIG_FILE}")
         self._sync()
 
     def save(self):
