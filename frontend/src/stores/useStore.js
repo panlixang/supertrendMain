@@ -97,8 +97,8 @@ export const useStore = create((set) => ({
   // 交易品种配置列表 [{symbol, enabled, margin_usdt, leverage, allow_tfs, params, ...}]
   symbolCfgs: [],
   setSymbolCfgs: (list) => set({ symbolCfgs: list || [] }),
-  maxSymbols: 5,
-  setMaxSymbols: (n) => set({ maxSymbols: n || 5 }),
+  maxSymbols: 10,
+  setMaxSymbols: (n) => set({ maxSymbols: n || 10 }),
 
   closed: [],
   setClosed: (list) => set({ closed: list || [] }),
