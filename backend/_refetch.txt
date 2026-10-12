@@ -1,7 +1,0 @@
-  INTC 1h: 拉到 0 根 (0.1s)
-  INTC 4h: 拉到 0 根 (0.0s)
-  已覆盖保存 INTC_USDT_SWAP.json
-  AMD 1h: 拉到 0 根 (0.0s)
-  AMD 4h: 拉到 0 根 (0.0s)
-  已覆盖保存 AMD_USDT_SWAP.json
-DONE

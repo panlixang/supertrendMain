@@ -62,6 +62,21 @@ TARGET = {
         "exit": dict(tp1_pct=3.0, sl_pct=2.0),
         "note": "IS +28.5 / OOS +40.9~+40.0 / 全样本 +69.4",
     },
+    "TSLA-USDT-SWAP": {
+        "periods": 18, "multiplier": 2.5,
+        "score_engine": "",            # v1 阶梯引擎
+        "threshold": 30.0,
+        "trail": True,                 # 跟 ST（INTC/AMD 为 False，TSLA 必开）
+        "exit": dict(tp1_pct=3.0, sl_pct=3.0),
+        "note": "IS +46.4 / OOS +19.2 / 全样本 +65.6（v1口径；回测缺15m/1d→mtf_bias降级）",
+    },
+    "XAU-USDT-SWAP": {
+        "periods": 9, "multiplier": 3.0,
+        "score_engine": "",            # v1 阶梯引擎（线上原为 'v2'）
+        "threshold": 30.0,
+        "exit": dict(tp1_pct=3.0, sl_pct=4.0),
+        "note": "IS +19.9 / OOS +3.4 / 全样本 +23.3（v1口径；回测缺15m/1d→mtf_bias降级）",
+    },
 }
 
 # 统一的 v1 出场口径（回测 build_sym 里写死的那套）
@@ -106,9 +121,11 @@ def build_payload(cur: dict, tgt: dict, rescan: bool) -> tuple[dict, list]:
 
     def chg_exit(key, val):
         er = cur.get("exit_rules") or {}
-        if val is not None and _norm(er.get(key)) != _norm(val):
-            diff.append((f"exit_rules.{key}", er.get(key), val))
-            payload.setdefault("exit_rules", {})[key] = val
+        pend = payload.setdefault("exit_rules", {})
+        cur_val = pend.get(key, er.get(key))   # 基于已 pending 的值，后者覆盖前者
+        if val is not None and _norm(cur_val) != _norm(val):
+            diff.append((f"exit_rules.{key}", cur_val, val))
+            pend[key] = val
 
     # ── ST 参数 ──
     p = cur.get("params") or {}
@@ -130,6 +147,8 @@ def build_payload(cur: dict, tgt: dict, rescan: bool) -> tuple[dict, list]:
     # ── 出场（v1 口径）──
     for k, v in BASE_EXIT.items():
         chg_exit(k, v)
+    if tgt.get("trail") is not None:          # TSLA 跟 ST，INTC/AMD 不跟
+        chg_exit("trail_with_st", tgt["trail"])
     for k, v in tgt["exit"].items():          # tp1_pct / sl_pct 品种差异
         chg_exit(k, v)
 
@@ -161,6 +180,8 @@ def verify(cur: dict, tgt: dict) -> list:
         if _norm(cur.get(k)) != _norm(tgt["threshold"]):
             bad.append(f"{k}={cur.get(k)} (应 {tgt['threshold']})")
     want = dict(BASE_EXIT, **tgt["exit"])
+    if tgt.get("trail") is not None:
+        want["trail_with_st"] = tgt["trail"]
     er = cur.get("exit_rules") or {}
     for k, v in want.items():
         if _norm(er.get(k)) != _norm(v):

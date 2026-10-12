@@ -12,7 +12,7 @@ import bt_pattern_page as P
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "_bt2026_data")
-SYMS = {"TSLA": "TSLA_USDT_SWAP.json"}
+SYMS = {"INTC": "INTC_USDT_SWAP.json", "AMD": "AMD_USDT_SWAP.json"}
 WIN_START = dt.datetime(2026, 2, 26, tzinfo=dt.timezone.utc)
 WIN_END = dt.datetime(2026, 10, 11, tzinfo=dt.timezone.utc)
 
