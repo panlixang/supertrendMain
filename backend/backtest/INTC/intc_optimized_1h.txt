@@ -1,0 +1,36 @@
+================================================================
+INTC-USDT 首页策略回测（线上真实参数）
+K线: 1h  5325 根  时间窗 1772089200000 ~ 1791255600000
+参数: ST 18x3.0 close chg_atr=True | MTF 20/50 EMA
+交易: 60.0U x10 = 600.0U  入场=信号收盘  冷却=300s
+出场: tp1=2.0%/30.0% 保本  sl=st 2.0%  trail=True
+闸门: use_scoring=True full/half/alert=80.0/80.0/40.0
+----------------------------------------------------------------
+全样本: 笔数=43  收益=+54.31%  PF=3.17 胜率=72.1%  盈亏=+325.86U
+IS(前70%): 笔数=30  收益=+65.09%  PF=7.51 胜率=80.0%
+OOS(后30%): 笔数=13  收益=-10.78%  PF=0.28 胜率=53.8%
+----------------------------------------------------------------
+最大回撤: 18.52%   末净值: 925.86U
+================================================================
+逐笔明细（前20笔）:
+  short entry=44.550 exit=43.659 pnl=+3.60U  tp1
+  short entry=44.550 exit=42.991 pnl=+5.88U  tp2
+  short entry=44.550 exit=44.104 pnl=+2.52U  止损
+  short entry=46.120 exit=45.198 pnl=+3.60U  tp1
+  short entry=46.120 exit=46.120 pnl=+0.00U  止损
+  long  entry=46.170 exit=47.093 pnl=+3.60U  tp1
+  long  entry=46.170 exit=47.786 pnl=+5.88U  tp2
+  long  entry=46.170 exit=46.632 pnl=+2.52U  止损
+  long  entry=45.310 exit=46.216 pnl=+3.60U  tp1
+  long  entry=45.310 exit=46.896 pnl=+5.88U  tp2
+  long  entry=45.310 exit=45.763 pnl=+2.52U  止损
+  short entry=45.430 exit=44.521 pnl=+3.60U  tp1
+  short entry=45.430 exit=43.840 pnl=+5.88U  tp2
+  short entry=45.430 exit=44.976 pnl=+2.52U  止损
+  long  entry=48.850 exit=49.827 pnl=+3.60U  tp1
+  long  entry=48.850 exit=50.560 pnl=+5.88U  tp2
+  long  entry=48.850 exit=104.190 pnl=+285.48U  反向信号平仓
+  short entry=104.190 exit=109.400 pnl=-30.00U  止损
+  short entry=121.930 exit=119.491 pnl=+3.60U  tp1
+  short entry=121.930 exit=121.930 pnl=+0.00U  止损
+  ... 共 43 笔

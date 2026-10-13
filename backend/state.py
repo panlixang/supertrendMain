@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 # 面板参数的持久化文件：改动即写、启动即读，重启不再丢配置
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
-# 同时交易的品种上限（每个品种 1 条 WS + 多周期 K 线轮询，10 个以内低配服务器仍可控；再往上需压测）
-MAX_SYMBOLS = 10
+# 同时交易的品种上限（每个品种 1 条 WS + 多周期 K 线轮询；放宽到 20 以支持两服务品种合并）
+MAX_SYMBOLS = 20
 
 
 @dataclass

@@ -1,0 +1,36 @@
+================================================================
+SNDK-USDT 首页策略回测（线上真实参数）
+K线: 1h  5184 根  时间窗 1772607600000 ~ 1791266400000
+参数: ST 15x2.5 close chg_atr=True | MTF 20/50 EMA
+交易: 50.0U x10 = 500.0U  入场=信号收盘  冷却=300s
+出场: tp1=1.5%/30.0% 保本  sl=st 3.0%  trail=True
+闸门: use_scoring=True full/half/alert=70.0/70.0/55.0
+----------------------------------------------------------------
+全样本: 笔数=118  收益=+54.48%  PF=3.32 胜率=77.1%  盈亏=+272.42U
+IS(前70%): 笔数=82  收益=+51.19%  PF=6.36 胜率=81.7%
+OOS(后30%): 笔数=36  收益=+3.30%  PF=1.24 胜率=66.7%
+----------------------------------------------------------------
+最大回撤: 10.70%   末净值: 772.42U
+================================================================
+逐笔明细（前20笔）:
+  short entry=562.320 exit=553.885 pnl=+2.25U  tp1
+  short entry=562.320 exit=562.320 pnl=+0.00U  止损
+  long  entry=518.050 exit=525.821 pnl=+2.25U  tp1
+  long  entry=518.050 exit=531.001 pnl=+3.50U  tp2
+  long  entry=518.050 exit=523.231 pnl=+2.10U  止损
+  long  entry=637.460 exit=647.022 pnl=+2.25U  tp1
+  long  entry=637.460 exit=653.396 pnl=+3.50U  tp2
+  long  entry=637.460 exit=643.835 pnl=+2.10U  止损
+  long  entry=756.010 exit=699.309 pnl=-37.50U  止损
+  long  entry=749.710 exit=760.956 pnl=+2.25U  tp1
+  long  entry=749.710 exit=768.453 pnl=+3.50U  tp2
+  long  entry=749.710 exit=757.207 pnl=+2.10U  止损
+  short entry=721.320 exit=710.500 pnl=+2.25U  tp1
+  short entry=721.320 exit=703.287 pnl=+3.50U  tp2
+  short entry=721.320 exit=714.107 pnl=+2.10U  止损
+  long  entry=621.690 exit=631.015 pnl=+2.25U  tp1
+  long  entry=621.690 exit=621.690 pnl=+0.00U  止损
+  long  entry=606.810 exit=615.912 pnl=+2.25U  tp1
+  long  entry=606.810 exit=606.810 pnl=+0.00U  止损
+  long  entry=684.590 exit=694.859 pnl=+2.25U  tp1
+  ... 共 118 笔

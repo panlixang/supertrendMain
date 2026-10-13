@@ -1,0 +1,36 @@
+================================================================
+SKHYNIX-USDT 首页策略回测（线上真实参数）
+K线: 1h  2978 根  时间窗 1781067600000 ~ 1791784800000
+参数: ST 9x2.5 close chg_atr=True | MTF 20/50 EMA
+交易: 50.0U x10 = 500.0U  入场=信号收盘  冷却=300s
+出场: tp1=1.5%/30.0% 保本  sl=st 2.5%  trail=True
+闸门: use_scoring=True full/half/alert=70.0/70.0/40.0
+----------------------------------------------------------------
+全样本: 笔数=25  收益=+17.12%  PF=inf 胜率=92.0%  盈亏=+85.59U
+IS(前70%): 笔数=17  收益=+8.75%  PF=inf 胜率=88.2%
+OOS(后30%): 笔数=8  收益=+8.37%  PF=inf 胜率=100.0%
+----------------------------------------------------------------
+最大回撤: 7.11%   末净值: 585.59U
+================================================================
+逐笔明细（前20笔）:
+  short entry=1673.890 exit=1648.782 pnl=+2.25U  tp1
+  short entry=1673.890 exit=1673.890 pnl=+0.00U  止损
+  short entry=1418.100 exit=1396.828 pnl=+2.25U  tp1
+  short entry=1418.100 exit=1375.557 pnl=+5.25U  tp2
+  short entry=1418.100 exit=1403.919 pnl=+1.75U  止损
+  short entry=1426.040 exit=1404.649 pnl=+2.25U  tp1
+  short entry=1426.040 exit=1383.259 pnl=+5.25U  tp2
+  short entry=1426.040 exit=1411.780 pnl=+1.75U  止损
+  short entry=956.880 exit=942.527 pnl=+2.25U  tp1
+  short entry=956.880 exit=928.174 pnl=+5.25U  tp2
+  short entry=956.880 exit=947.311 pnl=+1.75U  止损
+  short entry=1099.540 exit=1083.047 pnl=+2.25U  tp1
+  short entry=1099.540 exit=1066.554 pnl=+5.25U  tp2
+  short entry=1099.540 exit=1088.545 pnl=+1.75U  止损
+  short entry=1352.460 exit=1332.173 pnl=+2.25U  tp1
+  short entry=1352.460 exit=1352.460 pnl=+0.00U  止损
+  short entry=1342.220 exit=1322.087 pnl=+2.25U  tp1
+  short entry=1342.220 exit=1301.953 pnl=+5.25U  tp2
+  short entry=1342.220 exit=1328.798 pnl=+1.75U  止损
+  short entry=1356.400 exit=1336.054 pnl=+2.25U  tp1
+  ... 共 25 笔

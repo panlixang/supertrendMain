@@ -1,0 +1,249 @@
+# -*- coding: utf-8 -*-
+"""SKHYNIX 参数寻优 v4（与 SNDK/NVDA 同框架）: 每笔收益效率(ret/n)优先。
+
+⚠ 重要前提：SKHYNIX 数据极短（2978 根 1h，全样本仅 ~21 笔，OOS 仅 ~7 笔）。
+样本极小，寻优结果统计意义有限、极易过拟合，仅供方向参考，务必纸面跟踪验证。
+
+硬约束 pass_filter: PF_oos>1.0 & OOS笔数>=5 & 最大回撤<=15%
+   （OOS 笔数约束从 SNDK/NVDA 的 >=10 放宽到 >=5，否则全组合不达标；
+    IS>0 不做硬约束，因 IS 段仅 14 笔、波动大不可靠，仅作参考）
+软目标 rank: 达标集合中 优先最大化 每笔收益效率 ret/n，其次 收益/回撤比 ret/dd，OOS tiebreak
+方法：累积式坐标下降 + 邻域笛卡尔积精搜。末尾额外扫"少笔数高质量档"。
+"""
+import os, sys, json, copy
+HERE = os.path.dirname(os.path.abspath(__file__))
+BACKTEST = os.path.dirname(HERE)
+sys.path.insert(0, BACKTEST)
+from engine import run_core, run_backtest, _extract, _load_tf
+
+CONFIG = os.path.join(HERE, "skhynix_config.json")
+DB_SYM = "SKHYNIX-USDT"
+
+with open(CONFIG, encoding="utf-8") as f:
+    BASE = json.load(f)
+BASE_SC, BASE_PR, BASE_ER = _extract(BASE)
+
+try:
+    CANDLES = {"15m": _load_tf(DB_SYM, "15m"),
+               "1h": _load_tf(DB_SYM, "1h"),
+               "4h": _load_tf(DB_SYM, "4h")}
+except Exception as ex:
+    print(f"[警告] 加载多周期K线失败: {ex}；仅用1h")
+    CANDLES = {"1h": _load_tf(DB_SYM, "1h")}
+N1H = len(CANDLES["1h"])
+print(f"[数据] {DB_SYM} 1h {N1H} 根; ⚠ 样本极短(OOS仅~7笔); 硬约束: PF_oos>1 & OOS笔数>=5 & DD<=15%; 目标: 最大化每笔收益效率(ret/n)")
+
+
+def evaluate(pr=None, sc=None, er=None):
+    p = copy.deepcopy(BASE_PR); s = copy.deepcopy(BASE_SC); e = copy.deepcopy(BASE_ER)
+    if pr: p.update(pr)
+    if sc: s.update(sc)
+    if er: e.update(er)
+    try:
+        r = run_core(DB_SYM, s, p, e, tf="1h", candles=CANDLES)
+    except Exception as ex:
+        return {"ok": False, "err": str(ex), "n": 0, "ret": 0, "pf": 0, "wr": 0,
+                "is_ret": 0, "oos_ret": 0, "oos_pf": 0, "oos_n": 0, "dd": 999}
+    a, i, o = r["all"], r["is"], r["oos"]
+    if not a or not o:
+        return {"ok": True, "n": 0, "ret": 0, "pf": 0, "wr": 0,
+                "is_ret": 0, "oos_ret": 0, "oos_pf": 0, "oos_n": 0, "dd": r["max_dd"]}
+    return {"ok": True, "n": a["n"], "ret": a["ret_pct"], "pf": a["pf"], "wr": a["winrate"],
+            "is_ret": i["ret_pct"], "oos_ret": o["ret_pct"], "oos_pf": o["pf"],
+            "oos_n": o["n"], "dd": r["max_dd"]}
+
+
+def pass_filter(m):
+    if not m.get("ok"):
+        return False
+    if m["n"] < 10:
+        return False
+    if m["oos_n"] < 5:
+        return False
+    if m["oos_pf"] <= 1.0:
+        return False
+    if m["dd"] > 15:
+        return False
+    return True
+
+
+def _eff(m):
+    return (m["ret"] / m["n"], m["ret"] / max(m["dd"], 0.1))
+
+
+def rank(scores):
+    good = [x for x in scores if pass_filter(x[1])]
+    pool = good if good else scores
+    pool.sort(key=lambda x: (1 if pass_filter(x[1]) else 0,
+                             _eff(x[1])[0], _eff(x[1])[1], x[1]["oos_ret"]),
+              reverse=True)
+    return pool
+
+
+state = {"pr": {}, "sc": {}, "er": {}}
+
+
+def ev(pr=None, sc=None, er=None):
+    p = {**state["pr"], **(pr or {})}
+    s = {**state["sc"], **(sc or {})}
+    e = {**state["er"], **(er or {})}
+    return evaluate(p, s, e)
+
+
+def scan(label, keys, build):
+    scores = []
+    for k in keys:
+        pr, sc, er = build(k)
+        m = ev(pr, sc, er)
+        scores.append((k, m))
+        flag = "✓" if pass_filter(m) else " "
+        eff = m["ret"] / max(m["n"], 1)
+        print(f"  [{flag}] {label}={k!s:>22}  OOS={m['oos_ret']:+.2f}% PF_oos={m['oos_pf']:.2f} "
+              f"IS={m['is_ret']:+.2f}% 全={m['ret']:+.2f}% DD={m['dd']:.1f}% n={m['n']} 每笔={eff:+.3f}%")
+    ranked = rank(scores)
+    best = ranked[0][0]
+    pr, sc, er = build(best)
+    state["pr"].update(pr); state["sc"].update(sc); state["er"].update(er)
+    e2 = _eff(ev())
+    print(f"  -> 选定 {label}: {best}  (累积基准 每笔={e2[0]:+.3f}% 全={ev()['ret']:+.2f}% DD={ev()['dd']:.1f}% OOS={ev()['oos_ret']:+.2f}%)")
+    return ranked
+
+
+print("\n=== 1) ST 扫描 (periods × multiplier × src)，基准=线上 ===")
+ST_PERIODS = [7, 9, 11, 13, 15, 18]
+ST_MULT = [2.0, 2.5, 3.0, 3.5]
+ST_SRC = ["hl2", "close"]
+def build_st(k):
+    per, mu, src = k
+    return ({"periods": per, "multiplier": mu, "src": src, "change_atr": True}, {}, {})
+st_rank = scan("ST", [(p, m, s) for p in ST_PERIODS for m in ST_MULT for s in ST_SRC], build_st)
+
+print("\n=== 2) 闸门扫描 (full=half × alert)，基准=最优ST ===")
+G_FULL = [40, 50, 60, 70, 80]
+G_ALERT = [40, 50, 55, 60, 70]
+def build_gate(k):
+    f, al = k
+    return ({}, {"scoring_full_threshold": float(f), "scoring_half_threshold": float(f),
+                "scoring_alert_threshold": float(al)}, {})
+gate_rank = scan("gate", [(f, a) for f in G_FULL for a in G_ALERT], build_gate)
+
+print("\n=== 3) 出场 tp 扫描 (tp1_pct × tp1_ratio × tp2_pct × tp2_ratio)，基准=ST+闸门 ===")
+TP1_PCT = [1.0, 1.2, 1.5]
+TP1_R = [30.0, 40.0, 50.0]
+TP2_PCT = [1.5, 2.0, 2.5, 3.0]
+TP2_R = [40.0, 50.0]
+def build_tp(k):
+    t1, t1r, t2, t2r = k
+    return ({}, {}, {"tp1_pct": t1, "tp1_ratio": t1r, "tp2_pct": t2, "tp2_ratio": t2r})
+tp_rank = scan("tp", [(a, b, c, d) for a in TP1_PCT for b in TP1_R for c in TP2_PCT for d in TP2_R], build_tp)
+
+print("\n=== 4) 出场 sl/trail 扫描 (sl_pct × trail_with_st)，基准=ST+闸门+tp ===")
+SL_PCT = [2.0, 2.5, 3.0, 3.5]
+TRAIL = [True, False]
+def build_sl(k):
+    sl, tr = k
+    return ({}, {}, {"sl_pct": sl, "trail_with_st": tr})
+sl_rank = scan("sl", [(s, t) for s in SL_PCT for t in TRAIL], build_sl)
+
+print("\n=== 5) ER 扫描 (er_trend × er_min, er_weak_min 同步)，基准=前四项 ===")
+ER_TREND = [0.2, 0.25, 0.3, 0.35]
+ER_MIN = [0.1, 0.12, 0.15]
+def build_er(k):
+    tr, mn = k
+    return ({}, {"er_trend": tr, "er_min": mn, "er_weak_min": mn}, {})
+er_rank = scan("ER", [(t, m) for t in ER_TREND for m in ER_MIN], build_er)
+
+cd = evaluate(state["pr"], state["sc"], state["er"])
+print(f"\n=== 坐标下降拼合 ===  OOS={cd['oos_ret']:+.2f}% PF_oos={cd['oos_pf']:.2f} "
+      f"IS={cd['is_ret']:+.2f}% 全={cd['ret']:+.2f}% DD={cd['dd']:.1f}% n={cd['n']} 每笔={cd['ret']/max(cd['n'],1):+.3f}% 达标={pass_filter(cd)}")
+
+
+def topk(ranked, k=3):
+    return [x[0] for x in ranked[:k]]
+
+st_top = topk(st_rank, 3)
+gate_top = topk(gate_rank, 2)
+tp_top = topk(tp_rank, 3)
+sl_top = topk(sl_rank, 2)
+er_top = topk(er_rank, 2)
+print(f"\n=== 6) 邻域笛卡尔积精搜 {len(st_top)}×{len(gate_top)}×{len(tp_top)}×{len(sl_top)}×{len(er_top)} "
+      f"= {len(st_top)*len(gate_top)*len(tp_top)*len(sl_top)*len(er_top)} 组合 ===")
+best = None
+best_combo = None
+for per, mu, src in st_top:
+    for gf, gal in gate_top:
+        for t1, t1r, t2, t2r in tp_top:
+            for sl, tr in sl_top:
+                for ert, erm in er_top:
+                    pr = {"periods": per, "multiplier": mu, "src": src, "change_atr": True}
+                    sc = {"scoring_full_threshold": float(gf), "scoring_half_threshold": float(gf),
+                          "scoring_alert_threshold": float(gal),
+                          "er_trend": ert, "er_min": erm, "er_weak_min": erm}
+                    er = {"tp1_pct": t1, "tp1_ratio": t1r, "tp2_pct": t2, "tp2_ratio": t2r,
+                          "sl_pct": sl, "trail_with_st": tr}
+                    m = evaluate(pr, sc, er)
+                    if not pass_filter(m):
+                        continue
+                    score = (_eff(m)[0], _eff(m)[1], m["oos_ret"])
+                    if best is None or score > best[0]:
+                        best = (score, m)
+                        best_combo = (pr, sc, er)
+print("  邻域精搜最优（达标内 每笔收益效率最高）：")
+if best_combo is None:
+    print("  ⚠ 无满足硬约束组合（OOS笔数>=5 & PF_oos>1 & DD<=15%），回退坐标下降。")
+    best_combo = (state["pr"], state["sc"], state["er"])
+    m_best = cd
+else:
+    m_best = evaluate(*best_combo)
+    print(f"  ST {best_combo[0]['periods']}x{best_combo[0]['multiplier']} {best_combo[0]['src']} | "
+          f"gate {best_combo[1]['scoring_full_threshold']}/{best_combo[1]['scoring_alert_threshold']} | "
+          f"tp1 {best_combo[2]['tp1_pct']}/{best_combo[2]['tp1_ratio']} "
+          f"tp2 {best_combo[2]['tp2_pct']}/{best_combo[2]['tp2_ratio']} | "
+          f"sl {best_combo[2]['sl_pct']} trail {best_combo[2]['trail_with_st']} | "
+          f"ER trend {best_combo[1]['er_trend']} min {best_combo[1]['er_min']}")
+    print(f"  OOS={m_best['oos_ret']:+.2f}% PF_oos={m_best['oos_pf']:.2f} IS={m_best['is_ret']:+.2f}% "
+          f"全={m_best['ret']:+.2f}% DD={m_best['dd']:.1f}% n={m_best['n']} 每笔={m_best['ret']/m_best['n']:+.3f}%")
+
+opt_cfg = copy.deepcopy(BASE)
+opt_cfg["params"].update(best_combo[0])
+for k, v in best_combo[1].items():
+    if k in opt_cfg:
+        opt_cfg[k] = v
+opt_cfg["exit_rules"].update(best_combo[2])
+opt_path = os.path.join(HERE, "skhynix_opt_config.json")
+with open(opt_path, "w", encoding="utf-8") as f:
+    json.dump(opt_cfg, f, ensure_ascii=False, indent=2)
+print(f"\n[最优配置已写入] {opt_path}")
+
+# ===== 额外：少笔数高质量档（高闸门，OOS 可能略负但 n 极小、回撤极低）=====
+print("\n=== 额外对照：少笔数高质量档（ST=最优 基准，扫高闸门）===")
+best_st = state["pr"] or {"periods": 9, "multiplier": 3.0, "src": "hl2", "change_atr": True}
+hi_gate_scores = []
+for gf in [60, 70, 80]:
+    for gal in [60, 70]:
+        sc = {"scoring_full_threshold": float(gf), "scoring_half_threshold": float(gf),
+              "scoring_alert_threshold": float(gal)}
+        m = evaluate(best_st, sc, {})
+        hi_gate_scores.append(((gf, gal), m))
+        flag = "✓全正" if m["ret"] > 0 else " "
+        print(f"  [{flag}] gate={gf}/{gal}  OOS={m['oos_ret']:+.2f}% PF_oos={m['oos_pf']:.2f} "
+              f"IS={m['is_ret']:+.2f}% 全={m['ret']:+.2f}% DD={m['dd']:.1f}% n={m['n']} 每笔={m['ret']/max(m['n'],1):+.3f}%")
+cand = [x for x in hi_gate_scores if x[1]["ok"] and x[1]["ret"] > 0]
+cand.sort(key=lambda x: x[1]["n"])
+if cand:
+    (gf, gal), mh = cand[0]
+    print(f"  -> 少笔数档候选: gate {gf}/{gal}  n={mh['n']} 全={mh['ret']:+.2f}% OOS={mh['oos_ret']:+.2f}% DD={mh['dd']:.1f}% 每笔={mh['ret']/mh['n']:+.3f}%")
+
+robust_pr = {"periods": 15, "multiplier": 2.5, "src": "close", "change_atr": True}
+robust_cfg = copy.deepcopy(BASE)
+robust_cfg["params"].update(robust_pr)
+robust_path = os.path.join(HERE, "skhynix_robust_config.json")
+with open(robust_path, "w", encoding="utf-8") as f:
+    json.dump(robust_cfg, f, ensure_ascii=False, indent=2)
+mr = evaluate(robust_pr, {}, {})
+print(f"\n=== 对照：仅换 ST 源为 15x2.5 close（其余=线上原值）===")
+print(f"  全={mr['ret']:+.2f}% OOS={mr['oos_ret']:+.2f}% PF_oos={mr['oos_pf']:.2f} "
+      f"IS={mr['is_ret']:+.2f}% DD={mr['dd']:.1f}% n={mr['n']} 达标={pass_filter(mr)}")
+
+print("\n=== 最优组合(v4)完整回测报告 ===")
+run_backtest(DB_SYM, opt_path, HERE, out_name="skhynix_optimized_1h.txt")

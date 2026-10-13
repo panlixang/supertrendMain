@@ -1,0 +1,42 @@
+[数据] SNDK-USDT 1h K线 5184 根, 时间 1772607600000 ~ 1791266400000
+[参数] ST 15x2.5 src=close change_atr=True | MTF 20/50 EMA
+[交易] margin=50.0U leverage=10x notional=500.0U allow_tfs=['1h']
+[出场] tp1=2.0%/30.0% sl=st 3.5% trail=True tp2/tp3=开
+================================================================
+SNDK-USDT 首页策略回测（线上真实参数）
+K线: 1h  5184 根  时间窗 1772607600000 ~ 1791266400000
+参数: ST 15x2.5 close chg_atr=True | MTF 20/50 EMA
+交易: 50.0U x10 = 500.0U  入场=信号收盘  冷却=300s
+出场: tp1=2.0%/30.0% 保本  sl=st 3.5%  trail=True
+闸门: use_scoring=True full/half/alert=70.0/70.0/40.0
+----------------------------------------------------------------
+全样本: 笔数=130  收益=+82.91%  PF=4.83 胜率=82.3%  盈亏=+414.53U
+IS(前70%): 笔数=91  收益=+76.10%  PF=12.82 胜率=85.7%
+OOS(后30%): 笔数=39  收益=+6.81%  PF=1.45 胜率=74.4%
+----------------------------------------------------------------
+最大回撤: 8.64%   末净值: 914.53U
+================================================================
+逐笔明细（前20笔）:
+  short entry=562.320 exit=551.074 pnl=+3.00U  tp1
+  short entry=562.320 exit=562.320 pnl=+0.00U  止损
+  long  entry=518.050 exit=528.411 pnl=+3.00U  tp1
+  long  entry=518.050 exit=531.001 pnl=+3.50U  tp2
+  long  entry=518.050 exit=523.231 pnl=+2.10U  止损
+  short entry=610.790 exit=637.460 pnl=-21.83U  反向信号平仓
+  long  entry=637.460 exit=650.209 pnl=+3.00U  tp1
+  long  entry=637.460 exit=653.396 pnl=+3.50U  tp2
+  long  entry=637.460 exit=643.835 pnl=+2.10U  止损
+  long  entry=711.230 exit=725.455 pnl=+3.00U  tp1
+  long  entry=711.230 exit=729.011 pnl=+3.50U  tp2
+  long  entry=711.230 exit=718.342 pnl=+2.10U  止损
+  long  entry=756.010 exit=771.130 pnl=+3.00U  tp1
+  long  entry=756.010 exit=774.910 pnl=+3.50U  tp2
+  long  entry=756.010 exit=763.570 pnl=+2.10U  止损
+  short entry=721.320 exit=706.894 pnl=+3.00U  tp1
+  short entry=721.320 exit=703.287 pnl=+3.50U  tp2
+  short entry=721.320 exit=714.107 pnl=+2.10U  止损
+  long  entry=621.690 exit=634.124 pnl=+3.00U  tp1
+  long  entry=621.690 exit=621.690 pnl=+0.00U  止损
+  ... 共 130 笔
+
+[完成] 结果已写入 d:\个人项目代码\supertrendMain\backend\backtest\sndk/sndk_backtest_1h.txt
