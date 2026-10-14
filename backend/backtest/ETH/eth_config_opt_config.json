@@ -11,7 +11,7 @@
   "er_hide_below": 0.1,
   "er_weak_min": 0.1,
   "er_min": 0.1,
-  "er_trend": 0.3,
+  "er_trend": 0.25,
   "quick_enabled": false,
   "allow_grades": [
     "A",
@@ -56,9 +56,9 @@
   "reverse_close": null,
   "filter_v3": true,
   "params": {
-    "periods": 15,
-    "multiplier": 2.0,
-    "src": "hl2",
+    "periods": 13,
+    "multiplier": 2.5,
+    "src": "close",
     "change_atr": true,
     "fast_len": 20,
     "slow_len": 50,
@@ -70,10 +70,10 @@
     "tp1_ratio": 30.0,
     "move_sl_to_entry": true,
     "sl_mode": "st",
-    "sl_pct": 2.5,
+    "sl_pct": 2.0,
     "trail_with_st": true,
     "reverse_close": false,
-    "tp2_pct": 2.5,
+    "tp2_pct": 3.0,
     "tp2_ratio": 40.0,
     "tp3_pct": 3.5,
     "tp3_ratio": 100.0,
@@ -106,7 +106,7 @@
     "max_loss_enabled": false,
     "max_loss_pct": 10.0
   },
-  "last": 2482.37,
+  "last": 2506.09,
   "history_loaded": true,
   "position": null
 }
