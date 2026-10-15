@@ -1,7 +1,6 @@
 {
   "symbol": "AMD-USDT-SWAP",
   "enabled": true,
-  "data_source": "bitget",
   "margin_usdt": 100.0,
   "leverage": 10,
   "allow_tfs": [
