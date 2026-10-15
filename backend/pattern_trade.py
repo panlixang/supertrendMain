@@ -594,6 +594,11 @@ class PatternTrader:
         self._running = True
         logger.info("[形态下单] 后台循环已启动（paper=%s，品种 %d 个）",
                     self.cfg.paper, len(self.symbols))
+        # 启动接管：重建交易所已有持仓的本地状态机（避免重启后幽灵仓）
+        try:
+            await self._adopt_existing_positions()
+        except Exception as e:
+            logger.error(f"[形态接管] 启动接管异常: {e}")
         while self._running:
             try:
                 await self._tick()
@@ -605,6 +610,43 @@ class PatternTrader:
 
     def stop(self):
         self._running = False
+
+    async def _adopt_existing_positions(self):
+        """启动接管：交易所有真实持仓但本地状态机为空时，重建持仓接管管理。
+
+        避免重启后交易所旧仓变幽灵仓（无止损/止盈）。逻辑复用首页的
+        adopt_exchange_position，形态识别页与首页各自独立凭据/状态，互不干扰。
+        仅实盘（非 paper）执行——模拟盘无持久交易所持仓，无需接管。
+        """
+        if self.cfg.paper:
+            return
+        c = self.current_creds()
+        if not c.configured:
+            return
+        from adopt import adopt_exchange_position
+        for sym, st in list(self.stores.items()):
+            ex = self.executors.get(sym)
+            if not ex or not st:
+                continue
+            if st.position and st.position.qty > 0:
+                continue  # 本地已有持仓，无需接管
+            try:
+                with creds.use(c):
+                    # 清掉交易所残留挂单，避免事后成交成没人管的仓
+                    try:
+                        await trade.cancel_pending(sym, self.cfg.category, sim=self.cfg.paper)
+                    except Exception as e:
+                        logger.warning(f"[形态接管] 清理挂单失败 [{sym}]: {e}")
+                    posr = await trade.get_positions(sym, self.cfg.category, sim=self.cfg.paper)
+                if not isinstance(posr, dict) or not posr.get("ok"):
+                    continue
+                for row in (posr.get("data") or []):
+                    try:
+                        await adopt_exchange_position(self.proxy, ex, st, row)
+                    except Exception as e:
+                        logger.warning(f"[形态接管] 接管失败 [{sym}]: {e}")
+            except Exception as e:
+                logger.warning(f"[形态接管] 查询失败 [{sym}]: {e}")
 
     async def _tick(self):
         if not self.cfg.enabled:
