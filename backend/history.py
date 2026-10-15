@@ -113,15 +113,32 @@ def _merge(local: list[Candle], remote: list[Candle], limit: int) -> list[Candle
 async def load_history(store: SymbolStore):
     """按 TF_CONFIG.maxlen 填满该品种各周期 deque；长周期优先本地再补 REST。
 
-    根据品种配置的 data_source 字段选择数据源：
-    - "bitget": 使用 Bitget API
-    - "okx" 或未配置: 使用 OKX API（默认）
+    数据源选择逻辑（优先级从高到低）：
+    1. 品种配置的 data_source 字段（显式指定）
+    2. 全局交易所配置（自动匹配交易所）
+    3. 默认 OKX
     """
     loop = asyncio.get_event_loop()
     symbol = store.symbol
 
-    # 获取数据源配置
-    data_source = getattr(store.cfg, "data_source", "okx").lower()
+    # 获取数据源：优先品种配置，否则根据交易所自动选择
+    data_source = getattr(store.cfg, "data_source", None)
+
+    if not data_source:
+        # 从全局交易所配置自动推断数据源
+        try:
+            import creds
+            c = creds.get()
+            if c and c.exchange:
+                data_source = c.exchange.lower()
+            else:
+                # 如果没有显式凭据，尝试从 trade 模块获取
+                import trade
+                data_source = getattr(trade, "exchange", "okx").lower()
+        except Exception:
+            data_source = "okx"
+
+    data_source = (data_source or "okx").lower()
     fetch_func = fetch_candles_bitget if data_source == "bitget" else fetch_candles
 
     logger.info(f"品种 {symbol} 使用数据源: {data_source.upper()}")
