@@ -1,8 +1,7 @@
 """
-OKX REST 历史 K 线拉取 + 本地合并
+历史 K 线拉取 + 本地合并
 
-/api/v5/market/candles 单次最多 300 根，需要更长历史时用 after 游标翻页
-（history-candles 端点给更久远的数据）。
+支持 OKX 和 Bitget 两个数据源，根据品种配置的 data_source 字段自动选择。
 
 长展示窗口（15m/1h/4h/1d）：启动时本地 SQLite ∪ REST，收盘持续落盘。
 """
@@ -15,6 +14,7 @@ import urllib.request
 
 import candle_store
 from state import Candle, SymbolStore, TF_CONFIG
+from history_bitget import fetch_candles_bitget
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +111,21 @@ def _merge(local: list[Candle], remote: list[Candle], limit: int) -> list[Candle
 
 
 async def load_history(store: SymbolStore):
-    """按 TF_CONFIG.maxlen 填满该品种各周期 deque；长周期优先本地再补 REST。"""
+    """按 TF_CONFIG.maxlen 填满该品种各周期 deque；长周期优先本地再补 REST。
+
+    根据品种配置的 data_source 字段选择数据源：
+    - "bitget": 使用 Bitget API
+    - "okx" 或未配置: 使用 OKX API（默认）
+    """
     loop = asyncio.get_event_loop()
     symbol = store.symbol
+
+    # 获取数据源配置
+    data_source = getattr(store.cfg, "data_source", "okx").lower()
+    fetch_func = fetch_candles_bitget if data_source == "bitget" else fetch_candles
+
+    logger.info(f"品种 {symbol} 使用数据源: {data_source.upper()}")
+
     for tf, cfg in TF_CONFIG.items():
         try:
             limit = cfg["maxlen"]
@@ -129,14 +141,14 @@ async def load_history(store: SymbolStore):
                 need_fetch = min(limit, max(300, limit - len(local) + 400))
 
             remote = await loop.run_in_executor(
-                None, fetch_candles, tf, need_fetch, symbol
+                None, fetch_func, tf, need_fetch, symbol
             )
             merged = _merge(local, remote, limit)
 
             # 本地仍不够展示窗口：再向前翻满
             if len(merged) < limit * 0.9 and len(remote) >= need_fetch:
                 more = await loop.run_in_executor(
-                    None, fetch_candles, tf, limit, symbol
+                    None, fetch_func, tf, limit, symbol
                 )
                 merged = _merge(merged, more, limit)
 
@@ -152,9 +164,9 @@ async def load_history(store: SymbolStore):
                 )
             logger.info(
                 f"历史就绪[{symbol} {tf}] 内存 {len(merged)}/{limit}"
-                f"（本地 {len(local)} + REST {len(remote)}）"
+                f"（本地 {len(local)} + REST {len(remote)}）[{data_source.upper()}]"
             )
         except Exception as e:
             logger.error(f"历史K线[{symbol} {tf}] 异常: {e}")
-        await asyncio.sleep(0.15)   # 轻微限速，避免触发 OKX 频控
+        await asyncio.sleep(0.15)   # 轻微限速，避免触发频控
     store.history_loaded = True
