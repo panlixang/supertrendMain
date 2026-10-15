@@ -143,12 +143,15 @@ class EnhancedExecutorMixin:
                 logger.warning(f"[跳过开仓] {symbol} {how}")
                 return await self._record({"ok": False, "error": how, "price": px}, extra)
 
+            # clientOid 需要包含 profile 和 side，避免同一时刻 normal/quick 或多空信号冲突
+            profile_code = "n" if profile == "normal" else "q"
+            side_code = "b" if side == "buy" else "s"
             r = await self.trade_module.place_order(
                 symbol, side, px,
                 margin_usdt=margin, leverage=cfg.leverage,
                 category=cfg.category, mgn_mode=cfg.margin_mode,
                 order_type="ioc",
-                client_oid=f"o{sig['tf']}{sig['ts']}",
+                client_oid=f"o{sig['tf']}{profile_code}{side_code}{sig['ts']}",
                 sim=cfg.paper, ref_price=last,
                 wait_fill=True, wait_sec=8.0,
             )

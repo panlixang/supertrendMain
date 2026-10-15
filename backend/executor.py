@@ -292,12 +292,15 @@ class Executor:
             logger.info(f"[半仓下单] {symbol} 信号置信度中等，保证金减半至 {margin:.2f}U")
             extra["half_position"] = True
 
+        # clientOid 需要包含 profile 和 side，避免同一时刻 normal/quick 或多空信号冲突
+        profile_code = "n" if profile == "normal" else "q"
+        side_code = "b" if side == "buy" else "s"
         r = await trade.place_order(
             symbol, side, px,
             margin_usdt=margin, leverage=cfg.leverage,
             category=cfg.category, mgn_mode=cfg.margin_mode,
             order_type="ioc",
-            client_oid=f"o{sig['tf']}{sig['ts']}",
+            client_oid=f"o{sig['tf']}{profile_code}{side_code}{sig['ts']}",
             sim=cfg.paper,
             ref_price=last,
             wait_fill=True,
