@@ -1,7 +1,7 @@
 {
   "symbol": "AMD-USDT-SWAP",
   "enabled": true,
-  "margin_usdt": 60.0,
+  "margin_usdt": 100.0,
   "leverage": 10,
   "allow_tfs": [
     "1h"
@@ -69,7 +69,7 @@
     "tp1_pct": 3.0,
     "tp1_ratio": 50.0,
     "move_sl_to_entry": true,
-    "sl_mode": "pct",
+    "sl_mode": "st",
     "sl_pct": 2.0,
     "trail_with_st": true,
     "reverse_close": false,
@@ -90,7 +90,7 @@
     "tp1_pct": 1.3,
     "tp1_ratio": 100.0,
     "move_sl_to_entry": false,
-    "sl_mode": "pct",
+    "sl_mode": "st",
     "sl_pct": 1.5,
     "trail_with_st": false,
     "reverse_close": false,
@@ -106,39 +106,7 @@
     "max_loss_enabled": false,
     "max_loss_pct": 10.0
   },
-  "last": 612.32,
+  "last": 562.28,
   "history_loaded": true,
-  "position": {
-    "symbol": "AMD-USDT-SWAP",
-    "side": "long",
-    "tf": "1h",
-    "entry": 614.24,
-    "qty": 0.98,
-    "init_qty": 0.98,
-    "coin_qty": 0.98,
-    "ct_val": 1.0,
-    "stop": 601.9552,
-    "leverage": 10,
-    "entry_ts": 1791738001444,
-    "order_id": "1493222892433457154",
-    "profile": "normal",
-    "tp1_done": false,
-    "breakeven": false,
-    "realized": 0.0,
-    "state": "open",
-    "events": [
-      {
-        "kind": "open",
-        "msg": "开多 0.98张 @ 614.24（增强版止损 601.9552，保证金 60.0U × 10x，标准档）",
-        "ts": 1791738001444
-      }
-    ],
-    "price": 612.32,
-    "pnl_pct": -0.31,
-    "roe_pct": -3.13,
-    "float_pnl": -1.8816,
-    "max_unrealized_pct": 0.23,
-    "tp2_done": false,
-    "tp3_done": false
-  }
+  "position": null
 }

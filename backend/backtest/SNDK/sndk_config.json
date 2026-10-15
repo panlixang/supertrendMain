@@ -1,6 +1,6 @@
 {
   "symbol": "SNDK-USDT-SWAP",
-  "enabled": true,
+  "enabled": false,
   "margin_usdt": 50.0,
   "leverage": 10,
   "allow_tfs": [
@@ -106,39 +106,7 @@
     "max_loss_enabled": false,
     "max_loss_pct": 10.0
   },
-  "last": 1580.3,
+  "last": 1374.6,
   "history_loaded": true,
-  "position": {
-    "symbol": "SNDK-USDT-SWAP",
-    "side": "short",
-    "tf": "1h",
-    "entry": 1590.0,
-    "qty": 0.315,
-    "init_qty": 0.315,
-    "coin_qty": 0.315,
-    "ct_val": 1.0,
-    "stop": 1637.7,
-    "leverage": 10,
-    "entry_ts": 1791766802059,
-    "order_id": "4001849263836516352",
-    "profile": "normal",
-    "tp1_done": false,
-    "breakeven": false,
-    "realized": 0.0,
-    "state": "open",
-    "events": [
-      {
-        "kind": "open",
-        "msg": "开空 0.315张 @ 1590.0（增强版止损 1637.7，保证金 50.0U × 10x，标准档）",
-        "ts": 1791766802060
-      }
-    ],
-    "price": 1580.3,
-    "pnl_pct": 0.61,
-    "roe_pct": 6.1,
-    "float_pnl": 3.0555,
-    "max_unrealized_pct": 1.19,
-    "tp2_done": false,
-    "tp3_done": false
-  }
+  "position": null
 }
