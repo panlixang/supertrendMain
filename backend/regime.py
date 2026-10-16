@@ -144,6 +144,16 @@ class TradeConfig:
     ma30_dir_enabled: bool = False   # 是否启用 4h MA30 方向门
     ma30_tf:          str  = "4h"    # 方向参考周期
     ma30_period:      int  = 30      # MA 周期
+    # ── 双因子 flow（低相关量能维度补充 SuperTrend）──
+    # flow_enabled=False 时完全不干预原信号链；=True 时按 mode 生效。
+    #  mode="veto"：趋势想开仓但量能因子背离 → 否决（过滤假突破）
+    #  mode="fill"：SuperTrend 已转向但被次级过滤拦掉，量能因子极强同向 → 复活补位
+    flow_enabled:  bool  = False
+    flow_mode:     str   = "veto"    # "veto"=否决 / "fill"=补位
+    flow_theta:    float = 0.30      # 补位阈值（fill 用）
+    flow_veto:     float = 0.50      # 否决阈值（veto 用）
+    flow_lookback: int   = 24        # 量能 z-score 窗口(根)
+    flow_scale:    float = 2.0       # 量能 z 归一
 
 
 def evaluate(sig: dict, candles: list[dict], cfg: TradeConfig,
