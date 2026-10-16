@@ -431,6 +431,13 @@ class AppState:
             ma30_dir_enabled=sc.ma30_dir_enabled,
             ma30_tf=sc.ma30_tf,
             ma30_period=sc.ma30_period,
+            # 双因子 flow（低相关量能维度补充 SuperTrend）
+            flow_enabled=sc.flow_enabled,
+            flow_mode=sc.flow_mode,
+            flow_theta=sc.flow_theta,
+            flow_veto=sc.flow_veto,
+            flow_lookback=sc.flow_lookback,
+            flow_scale=sc.flow_scale,
         )
 
     async def broadcast(self, msg: dict):
