@@ -387,6 +387,17 @@ class OKXFeed:
         full["trade_half"] = gate.get("trade_half", False)
         full["score_detail"] = gate.get("score_detail")
 
+        # ── 双因子 flow（低相关量能维度）：否决 / 补位 ──
+        # 在增强版行情判定结果上叠加量价配合因子（vol proxy），不改动原判定口径。
+        if getattr(cfg, "flow_enabled", False):
+            try:
+                from flow_gate import apply_flow_gate
+                gate = apply_flow_gate(candles, store.params, sig, gate, cfg)
+                full["gate_reasons"] = gate.get("reasons", full.get("gate_reasons"))
+                full["will_trade"] = gate["trade"]
+            except Exception as _e:
+                logger.warning(f"[{store.symbol} {tf}] 双因子 flow 评估失败: {_e}")
+
         # ── 4h MA30 方向门（高周期方向过滤，仅拦新开仓）──
         # 与回测趋势对齐：参考周期收盘站上 MA → 只多；跌破 → 只空；未知方向不拦。
         if getattr(cfg, "ma30_dir_enabled", False):
@@ -519,6 +530,13 @@ class OKXFeed:
                             use_false_filter=True,
                             use_adaptive=True,
                         )
+                        # ── 双因子 flow：历史重扫也叠加量价配合因子 ──
+                        if getattr(cfg, "flow_enabled", False):
+                            try:
+                                from flow_gate import apply_flow_gate
+                                gate = apply_flow_gate(candles_at_signal, st_store.params, s, gate, cfg)
+                            except Exception as _e:
+                                logger.warning(f"[{st_store.symbol}] 双因子 flow 评估失败: {_e}")
                         s["hidden"] = gate.get("hidden", False)
                         s["will_trade"] = gate.get("trade", False)
                         s["gate_reasons"] = gate.get("reasons", [])

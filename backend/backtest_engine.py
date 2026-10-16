@@ -104,6 +104,7 @@ def run_backtest(
     live_gate: TradeConfig | None = None,
     gate_tf: str = "15m",
     candles_by_tf: dict[str, list[dict]] | None = None,
+    gate_fn: Callable | None = None,
     score_only_gate: bool = False,
     min_total_score: float = 60.0,
     block_untradable: bool = False,
@@ -373,12 +374,16 @@ def run_backtest(
                     return False, profile, 1.0
                 return True, sc["regime"].get("profile") or "normal", (
                     0.5 if sc.get("action") == "trade_half" else 1.0)
-            gate = enhanced_signal_handler(
-                full, candles[: i + 1], live_gate,
-                candles_by_tf=_cbtf_at(i), p=p,
-                use_momentum=True, use_false_filter=True,
-                use_adaptive=True,
-            )
+            if gate_fn is not None:
+                gate = gate_fn(full, candles[: i + 1], live_gate,
+                               _cbtf_at(i), p, typ=typ)
+            else:
+                gate = enhanced_signal_handler(
+                    full, candles[: i + 1], live_gate,
+                    candles_by_tf=_cbtf_at(i), p=p,
+                    use_momentum=True, use_false_filter=True,
+                    use_adaptive=True,
+                )
             if gate.get("hidden") or not gate.get("trade"):
                 return False, profile, 1.0
             return True, gate.get("profile") or "normal", (

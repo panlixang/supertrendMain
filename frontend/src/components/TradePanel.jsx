@@ -764,6 +764,13 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
   // Engine Profile：评分引擎 + Shadow 影子引擎
   const [engine, setEngine] = useState(c.score_engine || '');
   const [shadowEngine, setShadowEngine] = useState(c.shadow_engine || '');
+  // 双因子 flow（低相关量能维度补充 SuperTrend）
+  const [flowOn, setFlowOn] = useState(!!c.flow_enabled);
+  const [flowMode, setFlowMode] = useState(c.flow_mode || 'veto');
+  const [flowTheta, setFlowTheta] = useState(c.flow_theta ?? 0.30);
+  const [flowVeto, setFlowVeto] = useState(c.flow_veto ?? 0.50);
+  const [flowLookback, setFlowLookback] = useState(c.flow_lookback ?? 24);
+  const [flowScale, setFlowScale] = useState(c.flow_scale ?? 2.0);
 
   useEffect(() => { setMargin(c.margin_usdt); }, [c.margin_usdt]);
   useEffect(() => { setSizingMode(c.sizing_mode || 'fixed'); }, [c.sizing_mode]);
@@ -833,6 +840,13 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
       c.scoring_alert_threshold, c.use_dynamic_threshold]);
   useEffect(() => { setEngine(c.score_engine || ''); }, [c.score_engine]);
   useEffect(() => { setShadowEngine(c.shadow_engine || ''); }, [c.shadow_engine]);
+  // 双因子 flow 同步
+  useEffect(() => { setFlowOn(!!c.flow_enabled); }, [c.flow_enabled]);
+  useEffect(() => { setFlowMode(c.flow_mode || 'veto'); }, [c.flow_mode]);
+  useEffect(() => { setFlowTheta(c.flow_theta ?? 0.30); }, [c.flow_theta]);
+  useEffect(() => { setFlowVeto(c.flow_veto ?? 0.50); }, [c.flow_veto]);
+  useEffect(() => { setFlowLookback(c.flow_lookback ?? 24); }, [c.flow_lookback]);
+  useEffect(() => { setFlowScale(c.flow_scale ?? 2.0); }, [c.flow_scale]);
 
   return (
     <div style={{ ...sty.card, padding: '7px 9px', gap: 6,
@@ -1059,6 +1073,46 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                 )}
               </div>
 
+              {/* 双因子 flow（低相关量能维度补充 SuperTrend） */}
+              <div style={sty.filterBlock}>
+                <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>
+                  双因子 · 量能维度（flow）
+                </div>
+                <div style={{ fontSize: 8.5, color: '#4a5058', marginBottom: 4 }}>
+                  叠加量价配合因子补充 SuperTrend。否决=veto：趋势想开仓但量能背离则否；补位=fill：趋势已转向被次级过滤拦掉、量能极强同向则复活。关闭则完全不干预原信号。
+                </div>
+                <div style={sty.rowBetween}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#c8ccd4' }}>双因子开关</div>
+                    <div style={{ fontSize: 8.5, color: '#4a5058' }}>默认关：不参与任何判定</div>
+                  </div>
+                  <Toggle on={flowOn} onClick={() => setFlowOn(!flowOn)} color="#00c9a7" />
+                </div>
+                <Row label="模式" hint="veto=否决假突破 / fill=补位复活">
+                  <select value={flowMode} onChange={(e) => setFlowMode(e.target.value)}
+                          style={{ ...sty.input, width: 110, fontSize: 10 }}>
+                    <option value="veto">否决 veto</option>
+                    <option value="fill">补位 fill</option>
+                  </select>
+                </Row>
+                <Row label="补位阈值 θ" hint="fill 模式：量能因子 ≥ θ 复活开仓">
+                  <input type="number" min={0} max={1} step={0.05} value={flowTheta}
+                         onChange={(e) => setFlowTheta(+e.target.value)} style={sty.input} />
+                </Row>
+                <Row label="否决阈值 V" hint="veto 模式：量能背离 ≥ V 否决开仓">
+                  <input type="number" min={0} max={1} step={0.05} value={flowVeto}
+                         onChange={(e) => setFlowVeto(+e.target.value)} style={sty.input} />
+                </Row>
+                <Row label="量能窗口" hint="vol z-score 计算窗口（根）">
+                  <input type="number" min={2} max={200} step={1} value={flowLookback}
+                         onChange={(e) => setFlowLookback(+e.target.value)} style={sty.input} />
+                </Row>
+                <Row label="量能归一" hint="vol z 除以该值再做 tanh 压缩">
+                  <input type="number" min={0.1} max={10} step={0.1} value={flowScale}
+                         onChange={(e) => setFlowScale(+e.target.value)} style={sty.input} />
+                </Row>
+              </div>
+
               {/* Engine Profile：评分引擎 + Shadow Mode */}
               <div style={sty.filterBlock}>
                 <div style={{ fontSize: 10.5, color: '#c8ccd4', fontWeight: 700 }}>评分引擎 / Shadow</div>
@@ -1272,6 +1326,13 @@ function SymbolRow({ c, swap, last, hasPos, onPatch, onRemove }) {
                       max_loss_pct: qMaxLossPct,
                       max_loss_enabled: qMaxLossEnabled,
                     },
+                    // 双因子 flow（低相关量能维度补充 SuperTrend）
+                    flow_enabled: flowOn,
+                    flow_mode: flowMode,
+                    flow_theta: flowTheta,
+                    flow_veto: flowVeto,
+                    flow_lookback: flowLookback,
+                    flow_scale: flowScale,
                   }, `${c.symbol} 配置已更新`)}
                   style={{ ...sty.smallBtn, alignSelf: 'flex-end', borderColor: '#00c9a755', color: '#00c9a7' }}>
             保存所有配置

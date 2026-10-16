@@ -950,6 +950,13 @@ class SymbolCfgIn(BaseModel):
     ma30_dir_enabled: Optional[bool] = None
     ma30_tf:          Optional[str]  = None
     ma30_period:      Optional[int]  = None
+    # 双因子（低相关量能维度补充 SuperTrend）
+    flow_enabled:  Optional[bool]  = None
+    flow_mode:     Optional[str]   = None   # "veto"=否决 / "fill"=补位
+    flow_theta:    Optional[float] = None   # 补位阈值
+    flow_veto:     Optional[float] = None   # 否决阈值
+    flow_lookback: Optional[int]   = None   # 量能 z 窗口
+    flow_scale:    Optional[float] = None   # 量能 z 归一
     # 止盈止损（品种独立）
     exit_rules:            Optional[ExitRulesPatch] = None
     exit_rules_quick:      Optional[ExitRulesPatch] = None
@@ -1110,6 +1117,17 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if body.ma30_tf          is not None: c.ma30_tf          = body.ma30_tf.strip()
     if body.ma30_period      is not None: c.ma30_period      = max(2, min(500, body.ma30_period))
 
+    # 双因子 flow（低相关量能维度补充 SuperTrend）
+    if body.flow_enabled is not None: c.flow_enabled = body.flow_enabled
+    if body.flow_mode    is not None:
+        if body.flow_mode not in ("veto", "fill"):
+            return {"ok": False, "error": "flow_mode 仅支持 veto（否决）/ fill（补位）"}
+        c.flow_mode = body.flow_mode
+    if body.flow_theta    is not None: c.flow_theta    = max(0.0, min(1.0, body.flow_theta))
+    if body.flow_veto     is not None: c.flow_veto     = max(0.0, min(1.0, body.flow_veto))
+    if body.flow_lookback is not None: c.flow_lookback = max(2, min(500, body.flow_lookback))
+    if body.flow_scale    is not None: c.flow_scale    = max(0.1, min(10.0, body.flow_scale))
+
     # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
     if body.multiplier  is not None: st.params.multiplier = max(0.1, body.multiplier)
@@ -1139,6 +1157,8 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
         body.scoring_alert_threshold, body.use_dynamic_threshold,
         body.score_engine,
         body.ma30_dir_enabled, body.ma30_tf, body.ma30_period,
+        body.flow_enabled, body.flow_mode, body.flow_theta, body.flow_veto,
+        body.flow_lookback, body.flow_scale,
     ])
     did_rescan = False
     if (body.rescan or _affects_signals) and state.feed:

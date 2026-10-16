@@ -168,6 +168,18 @@ class SymbolTradeConfig:
                                       # ⚠ 仅形态识别页(pattern_trade)使用。首页回测(/api/backtest)、参数寻优、新模型回测(sl2_*)不得继承此字段；
                                       #    后者如需 V3 请在各自入口显式开启（sl2 用 --v3）。
 
+    # ── 双因子（低相关量能维度补充 SuperTrend）──
+    # flow_enabled=False 时完全不干预原信号链；=True 时按 mode 生效。
+    #  mode="veto"：趋势想开仓但量能因子背离 → 否决（过滤假突破，SKHYNIX 验证有效）
+    #  mode="fill"：SuperTrend 已转向但被次级过滤拦掉，量能因子极强同向 → 复活补位
+    # flow_theta=补位阈值, flow_veto=否决阈值, flow_lookback=量能窗口, flow_scale=量能z归一
+    flow_enabled:  bool  = False
+    flow_mode:     str   = "veto"    # "veto"=否决 / "fill"=补位
+    flow_theta:    float = 0.30      # 补位阈值（fill 用）
+    flow_veto:     float = 0.50      # 否决阈值（veto 用）
+    flow_lookback: int   = 24        # 量能 z-score 窗口(根)
+    flow_scale:    float = 2.0       # 量能 z 归一
+
 
 # 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；
 # 子串匹配（兼容 -USDT / -USDT-SWAP 后缀），未知品种回退 80/60/40。
@@ -558,6 +570,13 @@ class AppState:
                     ma30_dir_enabled=e.get("ma30_dir_enabled", False),
                     ma30_tf=e.get("ma30_tf", "4h"),
                     ma30_period=e.get("ma30_period", 30),
+                    # 双因子 flow（低相关量能维度；旧配置用默认值）
+                    flow_enabled=e.get("flow_enabled", False),
+                    flow_mode=e.get("flow_mode", "veto"),
+                    flow_theta=e.get("flow_theta", 0.30),
+                    flow_veto=e.get("flow_veto", 0.50),
+                    flow_lookback=e.get("flow_lookback", 24),
+                    flow_scale=e.get("flow_scale", 2.0),
                 )
                 # 覆盖其他字段
                 if "enabled" in e:
