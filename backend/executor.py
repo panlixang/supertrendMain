@@ -288,12 +288,7 @@ class Executor:
             logger.warning(f"[跳过开仓] {symbol} {how}")
             return await self._record({"ok": False, "error": how, "price": px}, extra)
 
-        # ===== 平衡型方案：如果是半仓信号，保证金减半 =====
-        trade_half = sig.get("trade_half", False)
-        if trade_half:
-            margin = margin * 0.5
-            logger.info(f"[半仓下单] {symbol} 信号置信度中等，保证金减半至 {margin:.2f}U")
-            extra["half_position"] = True
+        # 半仓减半逻辑已移除 (用户要求所有信号按配置保证金全额开仓, 即 fixed 80U 全仓)
 
         # clientOid 需要包含 profile 和 side，避免同一时刻 normal/quick 或多空信号冲突
         profile_code = "n" if profile == "normal" else "q"
