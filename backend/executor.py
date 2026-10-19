@@ -225,7 +225,10 @@ class Executor:
         sc = self.store.cfg
         mode = getattr(sc, "sizing_mode", None) or "fixed"
         if mode != "equity_pct":
-            m = float(cfg.amount_usdt)
+            # 真正 fixed 模式: 用配置里的 margin_usdt (API 下发的 80U), 不再依赖 cfg.amount_usdt
+            m = float(getattr(sc, "margin_usdt", None) or getattr(cfg, "amount_usdt", 0) or 0)
+            if m <= 0:
+                return None, f"fixed 模式但 margin_usdt 未设置 (sc.margin_usdt={getattr(sc, 'margin_usdt', None)})"
             return m, f"{m}U × {cfg.leverage}x"
 
         info = await trade.ping(sim=cfg.paper)
