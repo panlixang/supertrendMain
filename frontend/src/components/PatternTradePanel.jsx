@@ -167,9 +167,9 @@ export default function PatternTradePanel({ currentSymbol }) {
   };
 
   // 品种独立数值输入：失焦即下发。留空=回落全局默认（后端 None 语义）。
-  const tpInput = (sym, row, key, fallback, step = 0.1, width = 60) => (
+  const tpInput = (sym, row, key, fallback, step = 0.1, width = 60, flex = "1") => (
     <input
-      style={{ ...SZ.inp, width }}
+      style={{ ...SZ.inp, width, flex }}
       type="number"
       step={step}
       defaultValue={row?.[key] ?? fallback}
@@ -503,9 +503,9 @@ export default function PatternTradePanel({ currentSymbol }) {
                   onChange={(e) => updateSymbol(s.symbol, { churn_gate: e.target.checked })}
                 />
                 <span style={{ fontSize: 11 }}>宽幅震荡闸门：ER&lt;</span>
-                {tpInput(s.symbol, s, "churn_er_cap", 0.22, 0.01, 76)}
+                {tpInput(s.symbol, s, "churn_er_cap", 0.22, 0.01, 96, "0 0 auto")}
                 <span style={{ fontSize: 11 }}>且 ATR波动≥</span>
-                {tpInput(s.symbol, s, "churn_vol_floor", 1.0, 0.1, 76)}
+                {tpInput(s.symbol, s, "churn_vol_floor", 1.0, 0.1, 96, "0 0 auto")}
                 <span style={{ fontSize: 11 }}>→ 禁止开仓</span>
               </div>
               <div style={{ fontSize: 10, color: C.neutral, marginTop: 2, lineHeight: 1.5 }}>
