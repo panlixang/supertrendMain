@@ -33,7 +33,7 @@ from indicators import ma, super_trend, ta_adx, ta_atr, ta_ema, ta_sma
 from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
 from position_enhanced import EnhancedExitRules
-from regime import TradeConfig
+from regime import TradeConfig, efficiency_ratio, atr_volatility
 from state import SymbolStore, SymbolTradeConfig
 import signal_v3
 
@@ -231,6 +231,10 @@ class PatternTrader:
                     trail_with_st=row.get("trail_with_st"),
                     reverse_close=row.get("reverse_close"),
                     filter_v3=bool(row.get("filter_v3", True)),
+                    churn_gate=bool(row.get("churn_gate", False)),
+                    churn_er_cap=float(row.get("churn_er_cap", 0.22) or 0.22),
+                    churn_vol_floor=float(row.get("churn_vol_floor", 1.0) or 1.0),
+                    churn_tf=str(row.get("churn_tf") or ""),
                 )
             except Exception as e2:
                 self._load_bad_rows += 1
@@ -348,6 +352,10 @@ class PatternTrader:
             trail_with_st=kw.get("trail_with_st"),
             reverse_close=kw.get("reverse_close"),
             filter_v3=bool(kw.get("filter_v3", True)),
+            churn_gate=bool(kw.get("churn_gate", False)),
+            churn_er_cap=float(kw.get("churn_er_cap", 0.22) or 0.22),
+            churn_vol_floor=float(kw.get("churn_vol_floor", 1.0) or 1.0),
+            churn_tf=str(kw.get("churn_tf") or ""),
         )
         self._sync()
         self.save()
@@ -373,7 +381,8 @@ class PatternTrader:
                    "tp3_pct", "tp3_ratio", "tp3_mode", "exit_mode",
                    "sl_pct", "sl_mode",
                    "move_sl_to_entry", "trail_with_st", "reverse_close",
-                   "filter_v3")
+                   "filter_v3",
+                   "churn_gate", "churn_er_cap", "churn_vol_floor", "churn_tf")
         for k in xr_keys:
             if k in kw and kw[k] is not None:
                 v = kw[k]
@@ -382,7 +391,8 @@ class PatternTrader:
                 # 抛错 → 整个品种清单加载失败（该事故形态见 _load 里的逐行容错说明）。
                 if k == "leverage":
                     v = int(float(v))
-                elif k in ("margin_usdt", "equity_pct"):
+                elif k in ("margin_usdt", "equity_pct",
+                           "churn_er_cap", "churn_vol_floor"):
                     v = float(v)
                 setattr(sc, k, v)
         self.save()
@@ -738,6 +748,8 @@ class PatternTrader:
                 continue
             if not await self._allow_by_filter(sym, sc, sig):
                 continue
+            if not await self._allow_by_churn(sym, sc, sig):
+                continue
             self._last_order_at[key] = time.time()
             await ex.on_signal(sig, {"trade": True, "profile": "normal"})
 
@@ -822,6 +834,46 @@ class PatternTrader:
         if not ok:
             logger.info("[形态下单] %s %s V3拦截: %s", sym, sig.get("tf") or "1h", why)
         return ok
+
+    async def _allow_by_churn(self, sym: str, sc: "SymbolTradeConfig", sig: dict) -> bool:
+        """True=放行。宽幅震荡闸门（2026-10-20 BTC-1h 研究成果），品种独立开关，默认关=放行。
+
+        规则：信号出现时 ER < churn_er_cap 且 ATR波动率 >= churn_vol_floor
+              → 「方向性未确立 + 波动已放大」= 宽幅来回磨的坟墓象限，禁止开仓。
+
+        ⚠ 强特化，勿盲开：仅在 BTC-1h 验证有效（8年 76361 根：基线 -47.8%/DD92%
+          → 闸门 +157%/DD44%，4 个 2 年段全改善）。4h 周期轻微有害；对个股
+          (INTC/AMD/NVDA/CL) 明显有害 —— 低 ER + 高波动对个股是「趋势蓄势放量」
+          = 机会不是风险，砍掉等于掐死启动点。开前务必按该品种+周期回测验证。
+
+        计算用信号所在周期的 K 线，与回测口径一致（window 末尾即信号根本身）。
+        取数失败 / 数据不足 / 指标算不出 → 一律放行（不因缺数据误杀）。
+        """
+        if not getattr(sc, "churn_gate", False):
+            return True
+        tf = (getattr(sc, "churn_tf", "") or "").strip() or sig.get("tf") or "1h"
+        try:
+            cs = await self._kline(sym, tf, 500)
+        except Exception as e:
+            logger.warning("[形态下单] %s 闸门取K线失败，放行: %s", sym, e)
+            return True
+        if len(cs) < 60:
+            return True
+        try:
+            er = efficiency_ratio(cs)
+            av = atr_volatility(cs)
+        except Exception as e:
+            logger.warning("[形态下单] %s 闸门指标计算失败，放行: %s", sym, e)
+            return True
+        if er is None or av is None:
+            return True
+        er_cap = float(getattr(sc, "churn_er_cap", 0.22) or 0.22)
+        vol_floor = float(getattr(sc, "churn_vol_floor", 1.0) or 1.0)
+        if er < er_cap and av >= vol_floor:
+            logger.info("[形态下单] %s %s 宽幅震荡闸门拦截: ER=%.3f<%g 且 ATR波动=%.2f>=%g",
+                        sym, tf, er, er_cap, av, vol_floor)
+            return False
+        return True
 
     async def _v3_allow(self, sym: str, sc, sig: dict):
         """V3 趋势过滤：Trend Score 通过（成熟趋势 / 早期启动）才放行。

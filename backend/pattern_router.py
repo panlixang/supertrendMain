@@ -75,6 +75,11 @@ class SymbolIn(BaseModel):
     filter_v3:        Optional[bool]  = None
     exit_mode:        Optional[str]   = None   # 档位：multi=三挡 | single=单档
     sl_mode:          Optional[str]   = None   # st=超趋线 | pct=固定百分比真实硬止损
+    # 宽幅震荡闸门（2026-10-20 BTC-1h 研究成果；形态识别页专用，默认关）
+    churn_gate:        Optional[bool]  = None
+    churn_er_cap:      Optional[float] = None
+    churn_vol_floor:   Optional[float] = None
+    churn_tf:          Optional[str]   = None
 
 
 def _symbols_view() -> list[dict]:
@@ -97,6 +102,10 @@ def _symbols_view() -> list[dict]:
             "move_sl_to_entry": sc.move_sl_to_entry,
             "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
             "filter_v3": sc.filter_v3,
+            "churn_gate": sc.churn_gate,
+            "churn_er_cap": sc.churn_er_cap,
+            "churn_vol_floor": sc.churn_vol_floor,
+            "churn_tf": sc.churn_tf,
             "position": None,
         }
         if st and st.position:

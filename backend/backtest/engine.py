@@ -82,7 +82,7 @@ def _load_tf(db_symbol, t):
     return [{"ts": r[0], "o": r[1], "h": r[2], "l": r[3], "c": r[4], "vol": r[5]} for r in rs]
 
 
-def run_core(db_symbol, sc, pr, er, tf="1h", limit=0, candles=None):
+def run_core(db_symbol, sc, pr, er, tf="1h", limit=0, candles=None, extra_gate=None):
     """纯回测核心：接受已解析的 sc/pr/er（dict），返回指标 dict，不写任何文件。
 
     candles: 可选预加载的 {tf: [...]}（寻优时复用，避免重复读 db）。
@@ -188,7 +188,10 @@ def run_core(db_symbol, sc, pr, er, tf="1h", limit=0, candles=None):
             full = strategy.evaluate(all_candles, vars(params), sig)
             gate = enhanced_signal_handler(full, window, cfg,
                                           candles_by_tf=all_candles, p=_as_p(params))
-            if gate.get("trade"):
+            trade_ok = bool(gate.get("trade"))
+            if trade_ok and extra_gate is not None and not extra_gate(window, sig):
+                trade_ok = False
+            if trade_ok:
                 last = last_order_ts.get(tf, 0)
                 if (cur["ts"] - last) / 1000 >= cfg.cooldown_sec:
                     if pos is not None and pos.qty > 0:

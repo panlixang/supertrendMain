@@ -412,6 +412,7 @@ export default function PatternTradePanel({ currentSymbol }) {
           <div key={s.symbol + "#" + JSON.stringify([
                   s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
                   s.allow_tfs, s.filter_v3,
+                  s.churn_gate, s.churn_er_cap, s.churn_vol_floor,
                 ])}
                style={{ borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 6 }}>
             <div style={SZ.row}>
@@ -494,6 +495,23 @@ export default function PatternTradePanel({ currentSymbol }) {
                 <span style={{ fontSize: 11 }}>
                   V3 趋势过滤（Trend Score：成熟趋势 / 早期启动 / 慢热接住 才放行，含两级Fuse）
                 </span>
+              </div>
+              <div style={SZ.row}>
+                <input
+                  type="checkbox"
+                  checked={!!s.churn_gate}
+                  onChange={(e) => updateSymbol(s.symbol, { churn_gate: e.target.checked })}
+                />
+                <span style={{ fontSize: 11 }}>宽幅震荡闸门：ER&lt;</span>
+                {tpInput(s.symbol, s, "churn_er_cap", 0.22, 0.01, 52)}
+                <span style={{ fontSize: 11 }}>且 ATR波动≥</span>
+                {tpInput(s.symbol, s, "churn_vol_floor", 1.0, 0.1, 52)}
+                <span style={{ fontSize: 11 }}>→ 禁止开仓</span>
+              </div>
+              <div style={{ fontSize: 10, color: C.neutral, marginTop: 2, lineHeight: 1.5 }}>
+                BTC-1h 8年验证：-47.8%→+157%，回撤 92%→44%（4 个 2 年段全改善）。
+                ⚠ 强特化：4h 有害、个股有害（低 ER+高波动对个股是「趋势蓄势」=机会），
+                开启前请先按该品种+周期回测验证。计算周期取信号所在周期。
               </div>
             </div>
             {/* 该品种独立止盈止损 */}
