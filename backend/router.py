@@ -957,6 +957,11 @@ class SymbolCfgIn(BaseModel):
     flow_veto:     Optional[float] = None   # 否决阈值
     flow_lookback: Optional[int]   = None   # 量能 z 窗口
     flow_scale:    Optional[float] = None   # 量能 z 归一
+    # 宽幅震荡闸门（2026-10-20 BTC-1h 研究成果；品种独立开关，默认关）
+    churn_gate:        Optional[bool]  = None
+    churn_er_cap:      Optional[float] = None
+    churn_vol_floor:   Optional[float] = None
+    churn_tf:          Optional[str]   = None
     # 止盈止损（品种独立）
     exit_rules:            Optional[ExitRulesPatch] = None
     exit_rules_quick:      Optional[ExitRulesPatch] = None
@@ -1127,6 +1132,12 @@ async def upsert_trade_symbol(body: SymbolCfgIn):
     if body.flow_veto     is not None: c.flow_veto     = max(0.0, min(1.0, body.flow_veto))
     if body.flow_lookback is not None: c.flow_lookback = max(2, min(500, body.flow_lookback))
     if body.flow_scale    is not None: c.flow_scale    = max(0.1, min(10.0, body.flow_scale))
+
+    # 宽幅震荡闸门（ER × ATR 坟墓象限过滤；默认关=放行，须按品种+周期验证后开）
+    if body.churn_gate      is not None: c.churn_gate      = body.churn_gate
+    if body.churn_er_cap    is not None: c.churn_er_cap    = float(body.churn_er_cap)
+    if body.churn_vol_floor is not None: c.churn_vol_floor = float(body.churn_vol_floor)
+    if body.churn_tf        is not None: c.churn_tf        = body.churn_tf.strip()
 
     # 指标参数
     if body.periods     is not None: st.params.periods    = max(1, body.periods)
