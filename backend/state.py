@@ -163,6 +163,10 @@ class SymbolTradeConfig:
     trail_with_st:     Optional[bool]  = None
     reverse_close:     Optional[bool]  = None   # 反向平仓（None=用 PatternConfig 全局）；True=只按反向信号平仓，TP1/止损全失效
     # ── 形态识别页 过滤策略（形态识别页专用；首页/通用回测不得继承）──
+    block_4h:          bool = False   # 4h 方向拦截：4h 形态(ST)方向与信号反向则拦截（True=开启）
+                                      # 品种独立开关（2026-10-30 由全局 PatternConfig.block_4h 下放到每品种）；
+                                      # 默认关=不拦截，保持改造前线上行为（当时全局 block_4h=false），逐品种按需开启
+                                      # ⚠ 仅形态识别页(pattern_trade)使用；全局 PatternConfig.block_4h 仅为兼容保留，已不参与过滤
     filter_v3:         bool = True    # V3趋势过滤：Trend Score 未通过（非「成熟趋势/早期启动」）拦截；含两级Fuse
                                       # 默认开=走「形态页+V3」回测档（出场参数保持 tp1 1.5%/70% 默认）；V3 在 1h+4h 上拟合，非 1h 周期请在面板单独关闭
                                       # ⚠ 仅形态识别页(pattern_trade)使用。首页回测(/api/backtest)、参数寻优、新模型回测(sl2_*)不得继承此字段；

@@ -77,14 +77,16 @@ class PatternConfig:
     margin_mode:  str   = "cross"
     price_offset: float = 0.05
     exchange:     str   = "okx"
-    block_4h:     bool  = True     # True = 4h 形态反向则不下单
+    block_4h:     bool  = True     # 已废弃：4h 方向拦截 2026-10-30 下放为品种独立开关 SymbolTradeConfig.block_4h（见 state.py）
+                                   # 此全局字段仅为兼容保留，过滤逻辑不再读取它（实际开关见每品种 block_4h）
     confirm_close: bool = True     # True = 只在信号那根 K 收盘后才下单（对齐回测：用收盘数据确认 flip，避免未收盘 K 的 ST 重绘假信号）
     signal_max_age_sec: int = 300  # 信号过期护栏：翻转那根 K 收盘超过这么久就不再补单（防幽灵仓/掉线后旧信号被当新信号成交）
     position_recheck_sec: int = 60  # 本地有仓时，每隔这么久去交易所对账一次真实持仓（用于发现手动平仓/幽灵仓）
 
     # ── 过滤策略 ──
-    # 品种独立开关 filter_v3，挂在 SymbolTradeConfig（见 state.py），默认关=不过滤；
-    # 本全局档只保留 block_4h 硬门槛。过滤实现见 _allow_by_filter / _v3_allow（signal_v3 打分体系）。
+    # 品种独立开关 block_4h（4h 方向拦截）与 filter_v3（V3 打分），均挂在 SymbolTradeConfig（见 state.py）。
+    # 判断顺序：block_4h 在 filter_v3 之前（4h 硬门槛优先于 V3 打分）。
+    # 实现见 _allow_by_4h / _allow_by_filter（_v3_allow，signal_v3 打分体系）。
 
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
@@ -230,6 +232,7 @@ class PatternTrader:
                     move_sl_to_entry=row.get("move_sl_to_entry"),
                     trail_with_st=row.get("trail_with_st"),
                     reverse_close=row.get("reverse_close"),
+                    block_4h=bool(row.get("block_4h", False)),
                     filter_v3=bool(row.get("filter_v3", True)),
                     churn_gate=bool(row.get("churn_gate", False)),
                     churn_er_cap=float(row.get("churn_er_cap", 0.22) or 0.22),
@@ -351,6 +354,7 @@ class PatternTrader:
             move_sl_to_entry=kw.get("move_sl_to_entry"),
             trail_with_st=kw.get("trail_with_st"),
             reverse_close=kw.get("reverse_close"),
+            block_4h=bool(kw.get("block_4h", False)),
             filter_v3=bool(kw.get("filter_v3", True)),
             churn_gate=bool(kw.get("churn_gate", False)),
             churn_er_cap=float(kw.get("churn_er_cap", 0.22) or 0.22),
@@ -381,6 +385,7 @@ class PatternTrader:
                    "tp3_pct", "tp3_ratio", "tp3_mode", "exit_mode",
                    "sl_pct", "sl_mode",
                    "move_sl_to_entry", "trail_with_st", "reverse_close",
+                   "block_4h",
                    "filter_v3",
                    "churn_gate", "churn_er_cap", "churn_vol_floor", "churn_tf")
         for k in xr_keys:
@@ -744,7 +749,9 @@ class PatternTrader:
                 if time.time() - last < self.cfg.cooldown_sec:
                     continue
             # 3) 过滤器：4h 方向 + 4 条规则过滤（趋势形态识别.md，品种独立开关）
-            if self.cfg.block_4h and not await self._allow_by_4h(sym, sig):
+            # block_4h 已下放为品种独立开关（sc.block_4h），全局 cfg.block_4h 不再参与；
+            # 顺序保持在 V3 之前（4h 硬门槛优先于 V3 打分）
+            if getattr(sc, "block_4h", False) and not await self._allow_by_4h(sym, sig):
                 continue
             if not await self._allow_by_filter(sym, sc, sig):
                 continue
