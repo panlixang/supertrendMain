@@ -411,7 +411,7 @@ export default function PatternTradePanel({ currentSymbol }) {
           // 表现为「点了预设数字没变」。服务端值一变就重挂，立即反映真实配置。
           <div key={s.symbol + "#" + JSON.stringify([
                   s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
-                  s.allow_tfs, s.filter_v3,
+                  s.allow_tfs, s.block_4h, s.filter_v3,
                   s.churn_gate, s.churn_er_cap, s.churn_vol_floor,
                 ])}
                style={{ borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 6 }}>
@@ -485,6 +485,16 @@ export default function PatternTradePanel({ currentSymbol }) {
             <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 6 }}>
               <div style={{ fontSize: 11, color: C.neutral, marginBottom: 4 }}>
                 过滤策略（勾选即启用）
+              </div>
+              <div style={SZ.row}>
+                <input
+                  type="checkbox"
+                  checked={!!s.block_4h}
+                  onChange={(e) => updateSymbol(s.symbol, { block_4h: e.target.checked })}
+                />
+                <span style={{ fontSize: 11 }}>
+                  4h 方向过滤（4h SuperTrend 方向与信号反向 → 拦截开仓；数据不足放行）
+                </span>
               </div>
               <div style={SZ.row}>
                 <input

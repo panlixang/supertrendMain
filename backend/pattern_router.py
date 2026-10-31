@@ -72,6 +72,7 @@ class SymbolIn(BaseModel):
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
     reverse_close:    Optional[bool]  = None
+    block_4h:         Optional[bool]  = None   # 4h 方向拦截（品种独立；True=4h ST 方向与信号反向则不开仓）
     filter_v3:        Optional[bool]  = None
     exit_mode:        Optional[str]   = None   # 档位：multi=三挡 | single=单档
     sl_mode:          Optional[str]   = None   # st=超趋线 | pct=固定百分比真实硬止损
@@ -101,6 +102,7 @@ def _symbols_view() -> list[dict]:
             "sl_mode": sc.sl_mode,
             "move_sl_to_entry": sc.move_sl_to_entry,
             "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
+            "block_4h": sc.block_4h,
             "filter_v3": sc.filter_v3,
             "churn_gate": sc.churn_gate,
             "churn_er_cap": sc.churn_er_cap,
