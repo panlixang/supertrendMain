@@ -1,0 +1,131 @@
+"""
+超级趋势监控台 — 后端入口
+启动: uvicorn main:app --port 8000
+"""
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from executor import Executor
+from feed import OKXFeed
+from history import load_history
+from router import router
+from state import state
+from integration import create_enhanced_executor
+from adopt import adopt_exchange_position
+import trade
+import pattern_trade
+from pattern_router import router as pattern_router
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+# 导入机器学习 API（在 logger 定义之后）
+try:
+    from ml_api import ml_router
+    ML_AVAILABLE = True
+except ImportError as e:
+    ML_AVAILABLE = False
+    logger.warning(f"机器学习模块未安装，相关功能将不可用: {e}")
+
+# 策略学习模块（LightGBM / 聚类 / SHAP，依赖缺失时自动降级到 sklearn）
+try:
+    from strategy_learning import sl_router
+    SL_AVAILABLE = True
+except ImportError as e:
+    SL_AVAILABLE = False
+    logger.warning(f"策略学习模块未加载: {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 图表品种优先加载，其余交易品种随后 —— 全部就绪后才起实时行情，
+    # 保证每个品种的信号判定一开始就有完整历史
+    order = [state.current_symbol] + [s for s in state.stores if s != state.current_symbol]
+    for sym in order:
+        store = state.stores.get(sym) or state.view
+        logger.info(f"拉取历史K线 [{sym}] …")
+        await load_history(store)
+
+    feed = OKXFeed(state)
+    state.feed = feed
+    for sym, st in state.stores.items():
+        # 使用增强版执行器（支持三级止盈、智能止损、盈利保护）
+        state.executors[sym] = create_enhanced_executor(state, st)
+    # 重启会丢掉内存持仓，但交易所上的旧限价单还在。不撤的话事后成交就变成没人管的仓。
+    # 交易所有真实持仓而本地状态机为空时，自动接管重建本地持仓（止损/止盈立即生效）。
+    if trade.configured:
+        for sym in list(state.stores):
+            try:
+                r = await trade.cancel_pending(
+                    sym, state.trade_cfg.category, sim=state.trade_cfg.paper)
+                n = len(r.get("cancelled") or [])
+                if n:
+                    logger.warning(f"启动清理：撤销 {sym} 未成交挂单 {n} 笔 {r.get('cancelled')}")
+                elif not r.get("ok"):
+                    logger.warning(f"启动清理挂单失败 [{sym}]: {r.get('error')}")
+                posr = await trade.get_positions(sym, state.trade_cfg.category, sim=state.trade_cfg.paper)
+                if posr.get("ok"):
+                    st = state.stores.get(sym)
+                    ex = state.executors.get(sym)
+                    for row in posr.get("data") or []:
+                        try:
+                            q = abs(float(row.get("pos") or 0))
+                        except (TypeError, ValueError):
+                            q = 0
+                        if q <= 0:
+                            continue
+                        adopted = False
+                        if st and ex:
+                            try:
+                                adopted = await adopt_exchange_position(state, ex, st, row)
+                            except Exception as e:
+                                logger.warning(f"[启动接管失败] {sym}: {e}")
+                        if not adopted:
+                            logger.warning(
+                                f"启动时交易所仍有仓 {row.get('instId')} "
+                                f"pos={row.get('pos')} avgPx={row.get('avgPx')} "
+                                f"— 本地持仓已空，请到交易所手动处理或点对账"
+                            )
+            except Exception as e:
+                logger.warning(f"启动清理挂单失败 [{sym}]: {e}")
+    feed.rescan_signals()      # 用历史K线先把信号表填好，前端一连上就有内容
+    logger.info(f"历史加载完成（{len(order)} 个品种），启动实时行情")
+    task = asyncio.create_task(feed.run())
+    # 形态识别页的自动下单：独立 Task、独立凭据（与首页行情/交易互不干扰）
+    ptask = asyncio.create_task(pattern_trade.trader.run())
+    yield
+    task.cancel()
+    pattern_trade.trader.stop()
+    ptask.cancel()
+    logger.info("行情采集已停止")
+
+
+app = FastAPI(title="SuperTrend Monitor", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(router)
+app.include_router(pattern_router)
+
+# 集成机器学习 API
+if ML_AVAILABLE:
+    app.include_router(ml_router)
+    logger.info("机器学习 API 已启用")
+else:
+    logger.warning("机器学习 API 未启用（缺少依赖）")
+
+# 策略学习 API
+if SL_AVAILABLE:
+    app.include_router(sl_router)
+    logger.info("策略学习 API 已启用")
+else:
+    logger.warning("策略学习 API 未启用")

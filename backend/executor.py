@@ -1,0 +1,701 @@
+"""
+交易执行器：把信号 / 价格变动翻译成实际下单动作
+
+三个入口：
+    on_signal(sig)      新信号 → 反向信号先平仓，再按闸门决定是否开新仓
+    on_price(price)     每次 ticker 推送 → 检查止盈止损（秒级，不等 K 线收盘）
+    on_st_line(line)    超趋线更新 → 移动跟踪止损
+
+持仓只在内存，重启会丢。真实持仓以交易所为准，面板上有「对账」按钮可查。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+
+import position
+import regime
+import trade
+import trade_log
+
+# 尝试导入增强版，失败则用原版
+try:
+    from position_enhanced import (
+        EnhancedExitRules, EnhancedPosition,
+        enhanced_initial_stop, check_enhanced,
+        apply_tp_enhanced, trail_enhanced
+    )
+    USE_ENHANCED = True
+except ImportError:
+    USE_ENHANCED = False
+    EnhancedExitRules = None
+    EnhancedPosition = None
+
+logger = logging.getLogger(__name__)
+
+# 交易所返回的「没仓可平」提示。命中就说明本地持仓是幽灵，必须清掉，
+# 否则每根 K 线都会重试一次平仓 —— 9/3 CL 曾在 9 分钟内刷出 167 条失败单。
+_NO_POS_HINTS = (
+    "51169",                        # OKX：该方向没有可平的持仓
+    "22002",                        # Bitget：暂无仓位可平
+    "don't have any positions",
+    "do not have any positions",
+    "no position",
+    "position does not exist",
+    "暂无仓位可平",
+    "无仓位可平",
+    "没有持仓",
+)
+
+# 止盈下单失败后的重试冷却（秒）。止损不冷却 —— 那是风控，必须尽快重试。
+REDUCE_FAIL_COOLDOWN = 60.0
+
+# 开仓后与交易所真实持仓对账：连续查几次都无仓才认定幽灵仓。
+# 只判"交易所到底有没有仓"；查不清一律保留本地持仓（宁可多管，不可错丢真仓）。
+OPEN_VERIFY_TRIES = 2
+OPEN_VERIFY_INTERVAL = 1.5
+
+
+def is_no_position_error(err) -> bool:
+    text = str(err or "").lower()
+    return any(h.lower() in text for h in _NO_POS_HINTS)
+
+
+def _spot_key(sym: str) -> str:
+    return (sym or "").upper().replace("-SWAP", "")
+
+
+def should_close_on_reverse(pos, sig: dict) -> bool:
+    """反向平仓只认开仓周期。1m/5m/1h 的翻转即使过闸门也不能平 15m 仓。"""
+    if not pos or getattr(pos, "qty", 0) <= 0:
+        return False
+    want = "long" if sig.get("type") == "buy" else "short"
+    return pos.side != want and sig.get("tf") == pos.tf
+
+
+def tf_allowed(cfg, tf: str) -> bool:
+    """品种配置的允许周期。闸门/执行器共用，避免某一层漏检。"""
+    return bool(tf) and tf in list(getattr(cfg, "allow_tfs", None) or [])
+
+
+class Executor:
+    """一个品种一个实例。store 是该品种的 SymbolStore，持仓/价格/冷却都在里面 ——
+    品种之间互不串行（各自有锁），品种内 on_price 与 on_signal 互斥。"""
+
+    def __init__(self, state, store):
+        self.state = state
+        self.store = store
+        # 同一时刻只允许一个下单流程，避免 ticker 与信号并发重复平仓
+        self._lock = asyncio.Lock()
+        self._lev_set: set = set()      # 已设置过杠杆的 (symbol, leverage)
+        self._tp_fail_until: float = 0.0    # 止盈下单失败后的冷却截止时刻
+
+    # ── 工具 ────────────────────────────────────────────────────
+    @property
+    def cfg(self):
+        # 全局闸门 + 本品种下单参数的合并视图（enabled = 总开关 AND 品种开关）
+        return self.state.cfg_for(self.store.symbol)
+
+    @property
+    def rules(self):
+        """标准档规则，品种独立。"""
+        return self.store.exit_rules
+
+    def rules_of(self, pos):
+        """该持仓开仓时定下的那档规则。持仓期间不随行情改档。"""
+        return self.state.rules_for(getattr(pos, "profile", "normal"), self.store.symbol)
+
+    async def _spec_of(self, pos) -> dict:
+        """取该持仓对应的合约规格。instId 必须是交易品类对应的形式。"""
+        swap = self.cfg.category == "SWAP"
+        iid = trade.to_swap(pos.symbol) if swap else trade.to_spot(pos.symbol)
+        return await trade.get_spec(iid, "SWAP" if swap else "SPOT")
+
+    async def _record(self, order: dict, extra: dict):
+        # sym 一律用现货形式（store 键），order 里交易所返回的 symbol 是合约形式
+        o = {**order, **extra, "sym": self.store.symbol,
+             "ts": order.get("ts") or int(time.time() * 1000)}
+        self.state.add_order(o)
+        await self.state.broadcast({"type": "order", "symbol": self.store.symbol, "data": o})
+        return o
+
+    async def _push_position(self):
+        pos = self.store.position
+        await self.state.broadcast({
+            "type": "position",
+            "symbol": self.store.symbol,
+            "data": pos.to_dict(self.store.ticker.last) if pos else None,
+        })
+
+    async def _ensure_leverage(self, symbol: str) -> None:
+        """开仓前确保杠杆已设置。同一 (symbol, leverage) 只设一次。"""
+        if self.cfg.category == "SPOT":
+            return
+        key = (symbol, self.cfg.leverage, self.cfg.paper)
+        if key in self._lev_set:
+            return
+        r = await trade.set_leverage(symbol, self.cfg.leverage,
+                                     self.cfg.margin_mode, sim=self.cfg.paper)
+        if r.get("ok"):
+            self._lev_set.add(key)
+        else:
+            # 设置失败不阻断下单：可能账户已是该杠杆，或该品种不支持
+            logger.warning(f"设置杠杆未成功（继续下单）: {r.get('error')}")
+
+    def _tf_ok(self, tf: str | None) -> bool:
+        return tf_allowed(self.cfg, tf or "")
+
+    # ── 信号入口 ────────────────────────────────────────────────
+    async def on_signal(self, sig: dict, gate: dict) -> dict | None:
+        """返回本次产生的开仓单（没下单则 None）。平仓单单独广播。"""
+        async with self._lock:
+            return await self._handle_signal(sig, gate, self._open)
+
+    async def _handle_signal(self, sig: dict, gate: dict, opener) -> dict | None:
+        """开仓/反向平仓只走品种 allow_tfs。闸门被绕过时这里仍硬拦。
+
+        opener: 真正下开仓单的协程（原版 _open / 增强 _open_enhanced）。
+        """
+        # 防御：信号品种对不上这个执行器，直接丢（品种间互不干扰）
+        if sig.get("symbol") and _spot_key(sig["symbol"]) != _spot_key(self.store.symbol):
+            logger.warning(f"[忽略串品种信号] store={self.store.symbol} sig={sig.get('symbol')}")
+            return None
+
+        tf = sig.get("tf")
+        allowed = self._tf_ok(tf)
+        pos = self.store.position
+        want = "long" if sig["type"] == "buy" else "short"
+
+        # 反向平仓：必须同周期。第三档 reverse_signal 模式仅在同周期反向且过闸门时全平剩余。
+        if should_close_on_reverse(pos, sig):
+            rules = self.rules_of(pos)
+            tp2_done = getattr(pos, "tp2_done", False)
+            tp3_done = getattr(pos, "tp3_done", False)
+            signal_tp3 = (
+                USE_ENHANCED and isinstance(rules, EnhancedExitRules)
+                and getattr(rules, "tp3_mode", "pct") == "reverse_signal"
+                and tp2_done and not tp3_done
+            )
+            if signal_tp3:
+                if allowed and gate.get("trade"):
+                    await self._take_profit(pos, sig.get("price"), {
+                        "action": "tp3",
+                        "ratio": 100.0,
+                        "reason": f"{tf} 反向可下单信号，第三档剩余全平",
+                    })
+                else:
+                    logger.info(
+                        f"[第三档等待] {self.store.symbol} {tf} 反向信号未过闸门，"
+                        f"继续持有剩余仓位"
+                    )
+                    return None
+            else:
+                leftover = pos and not self._tf_ok(pos.tf)
+                if allowed or leftover:
+                    await self._close(pos, f"{tf} 出现反向信号", sig.get("price"))
+                else:
+                    logger.info(f"[忽略非允许周期反向] {self.store.symbol} {tf} 不在 {self.cfg.allow_tfs}")
+                    return None
+        elif pos and pos.qty > 0 and pos.side != want and sig.get("tf") != pos.tf:
+            logger.info(
+                f"[忽略异周期反向] {self.store.symbol} 持仓 {pos.tf} {pos.side}，"
+                f"忽略 {tf} {want}（不平仓、不开新仓）"
+            )
+            return None
+
+        pos = self.store.position
+        if pos and pos.qty > 0 and pos.side == want:
+            logger.info(f"[跳过开仓] {self.store.symbol} 已持有同向 {want} 仓位")
+            return None
+        if pos and pos.qty > 0:
+            return None
+
+        if not allowed:
+            logger.info(f"[拒绝开仓] {self.store.symbol} 周期 {tf} 不在允许范围 {self.cfg.allow_tfs}")
+            return None
+        if not gate.get("trade"):
+            return None
+        return await opener(sig, gate.get("profile") or "normal")
+
+    async def _resolve_margin(self) -> tuple[float | None, str]:
+        """开仓保证金。fixed=固定金额；equity_pct=账户净值的 X%，且不超过 USDT 可用。"""
+        cfg = self.cfg
+        sc = self.store.cfg
+        mode = getattr(sc, "sizing_mode", None) or "fixed"
+        if mode != "equity_pct":
+            # 真正 fixed 模式: 用配置里的 margin_usdt (API 下发的 80U), 不再依赖 cfg.amount_usdt
+            m = float(getattr(sc, "margin_usdt", None) or getattr(cfg, "amount_usdt", 0) or 0)
+            if m <= 0:
+                return None, f"fixed 模式但 margin_usdt 未设置 (sc.margin_usdt={getattr(sc, 'margin_usdt', None)})"
+            return m, f"{m}U × {cfg.leverage}x"
+
+        info = await trade.ping(sim=cfg.paper)
+        if not info.get("ok"):
+            return None, info.get("error") or "查询账户净值失败"
+        eq = float(info.get("equity") or 0)
+        avail = float(info.get("usdt_avail") or 0)
+        pct = max(1.0, min(100.0, float(getattr(sc, "equity_pct", 10) or 10)))
+        want = eq * pct / 100.0
+        cap = avail if avail > 0 else want
+        margin = round(min(want, cap), 4)
+        if margin < 1:
+            return None, (
+                f"按净值 {pct:.0f}% 算出 {margin}U，不足 1U"
+                f"（净值 {eq:.2f} / 可用 {avail:.2f}）"
+            )
+        note = f"净值 {eq:.2f}U × {pct:.0f}% = {margin}U × {cfg.leverage}x"
+        if avail > 0 and want > avail + 1e-6:
+            note += f"（可用 {avail:.2f}U 封顶）"
+        return margin, note
+
+    async def _open(self, sig: dict, profile: str = "normal") -> dict | None:
+        cfg, symbol = self.cfg, self.store.symbol
+        extra = {
+            "kind": "open", "tf": sig["tf"], "sig_ts": sig["ts"],
+            "sig_type": sig["type"], "grade": sig.get("grade"), "trigger": sig["price"],
+            "profile": profile,
+        }
+        if not tf_allowed(cfg, sig.get("tf")):
+            err = f"周期 {sig.get('tf')} 不在允许范围 {cfg.allow_tfs}"
+            logger.warning(f"[拒绝开仓] {symbol} {err}")
+            return await self._record({"ok": False, "error": err, "price": sig.get("price")}, extra)
+
+        rules = self.state.rules_for(profile, self.store.symbol)
+        await self._ensure_leverage(symbol)
+
+        # 先清掉该品种残留挂单，避免旧限价事后成交叠成两笔
+        try:
+            stale = await trade.cancel_pending(symbol, cfg.category, sim=cfg.paper)
+            if stale.get("cancelled"):
+                logger.warning(f"[开仓前清挂单] {symbol} {stale['cancelled']}")
+        except Exception as e:
+            logger.warning(f"[开仓前清挂单失败] {symbol}: {e}")
+
+        last = self.store.ticker.last or sig["price"]
+        if getattr(trade, "exchange", "okx") == "bitget":
+            market_px = await trade.get_market_price(symbol, cfg.category, sim=cfg.paper)
+            if not market_px:
+                err = f"Bitget 实时价格获取失败，未使用图表价下单"
+                logger.warning(f"[{symbol}] {err}")
+                return await self._record({"ok": False, "error": err, "price": sig.get("price")}, extra)
+            last = market_px
+        px = regime.limit_price(sig, cfg, last)
+        side = "buy" if sig["type"] == "buy" else "sell"
+        margin, how = await self._resolve_margin()
+        if margin is None:
+            logger.warning(f"[跳过开仓] {symbol} {how}")
+            return await self._record({"ok": False, "error": how, "price": px}, extra)
+
+        # 半仓减半逻辑已移除 (用户要求所有信号按配置保证金全额开仓, 即 fixed 80U 全仓)
+
+        # clientOid 需要包含 profile 和 side，避免同一时刻 normal/quick 或多空信号冲突
+        profile_code = "n" if profile == "normal" else "q"
+        side_code = "b" if side == "buy" else "s"
+        r = await trade.place_order(
+            symbol, side, px,
+            margin_usdt=margin, leverage=cfg.leverage,
+            category=cfg.category, mgn_mode=cfg.margin_mode,
+            order_type="ioc",
+            client_oid=f"o{sig['tf']}{profile_code}{side_code}{sig['ts']}",
+            sim=cfg.paper,
+            ref_price=last,
+            wait_fill=True,
+            wait_sec=8.0,
+        )
+        order = await self._record(r, extra)
+        if not r.get("ok") or not r.get("qty"):
+            return order
+
+        # 止损按真实成交价算，避免追价后用信号价把止损放错边
+        filled = {**sig, "price": r["price"]}
+
+        # 使用增强版止损计算（带ATR外扩和最小距离保护，根据杠杆自适应）
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            # 计算ATR用于止损外扩
+            atr = self._calc_atr(sig.get("tf", "15m"))
+            stop = enhanced_initial_stop(filled, rules, atr, cfg.leverage)
+            atr_s = f"{atr:.2f}" if atr else "None"
+            dist = abs(r["price"] - stop) / r["price"] * 100
+            logger.info(f"[止损计算] 杠杆{cfg.leverage}x，ATR={atr_s}，止损距离={dist:.2f}%")
+        else:
+            stop = position.initial_stop(filled, rules)
+
+        # 使用增强版持仓类（跟踪最高盈利）
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            self.store.position = EnhancedPosition(
+                symbol=r.get("symbol") or symbol, side="long" if side == "buy" else "short",
+                tf=sig["tf"], entry=r["price"], qty=r["qty"], init_qty=r["qty"],
+                stop=stop, leverage=cfg.leverage, entry_ts=r["ts"], order_id=r.get("orderId", ""),
+                ct_val=r.get("ct_val", 1), profile=profile,
+            )
+        else:
+            self.store.position = position.Position(
+                symbol=r.get("symbol") or symbol, side="long" if side == "buy" else "short",
+                tf=sig["tf"], entry=r["price"], qty=r["qty"], init_qty=r["qty"],
+                stop=stop, leverage=cfg.leverage, entry_ts=r["ts"], order_id=r.get("orderId", ""),
+                ct_val=r.get("ct_val", 1), profile=profile,
+            )
+
+        unit = "张" if cfg.category == "SWAP" else ""
+        tag = "快进快出档" if profile == "quick" else "标准档"
+        tp_desc = f"止盈 {rules.tp1_pct}%"
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            tp_desc = f"三级止盈 {rules.tp1_pct}%/{rules.tp2_pct}%/{rules.tp3_pct}%"
+        self.store.position.log(
+            "open",
+            f"开{'多' if side == 'buy' else '空'} {r['qty']}{unit} @ {r['price']}"
+            f"（保证金 {how}，止损 {stop}，{tag} {tp_desc}）",
+        )
+        logger.info(f"[持仓建立] {symbol} {self.store.position.side} @ {r['price']} "
+                    f"保证金 {how} 止损 {stop} 档位 {profile} 成交确认={r.get('fill_confirmed')}")
+        await self._push_position()
+        # 开仓后立刻和交易所对账真实持仓：本地记了成交但交易所没仓时当场清掉幽灵，
+        # 别等 tp1 来揭穿 —— 幽灵仓会挡住该品种后续所有新信号。
+        await self._verify_open_fill()
+        return order
+
+    async def _verify_open_fill(self) -> bool:
+        """开仓后立刻与交易所真实持仓对账，幽灵仓不再等 tp1 来揭穿。
+
+        本地 place_order 可能返回 fill_confirmed=True 但交易所实际没成交（限价未
+        成交、仓位在别处被平掉等）。这种幽灵仓会一直挂在 store.position 上，而
+        pattern_trade._tick_symbol 在持仓非空时直接 return —— 于是该品种几十小时
+        都不再评估新信号；等幽灵被清掉的同一刻，又把早已过期的旧翻转当成新信号
+        成交（2026-10-06 SKHYNIX 就是这样在 08:49 补了一笔 20 小时前的旧单）。
+
+        这里在开仓后主动查真实持仓，确认无仓就当场清空。连续多次都查到 0 才认定
+        幽灵，避免"刚成交、仓位还没同步"的竞态把真仓误清。
+        查询失败一律保留本地持仓 —— 宁可多管，不可错丢真仓。
+        返回 True 表示清掉了幽灵仓。
+        """
+        pos = self.store.position
+        if not pos or getattr(pos, "qty", 0) <= 0 or self.cfg.paper:
+            return False
+        seen = 0
+        for i in range(OPEN_VERIFY_TRIES):
+            if i:
+                await asyncio.sleep(OPEN_VERIFY_INTERVAL)
+            try:
+                real = await trade.get_positions(
+                    pos.symbol, self.cfg.category, sim=self.cfg.paper)
+            except Exception as e:
+                logger.warning(f"[开仓对账失败] {pos.symbol} {e}")
+                return False
+            if not real.get("ok"):
+                logger.warning(f"[开仓对账失败] {pos.symbol} {real.get('error')}")
+                return False
+            if self._exchange_qty(real.get("data"), pos.symbol) > 0:
+                return False          # 有真仓，正常持仓
+            seen += 1
+        if seen < OPEN_VERIFY_TRIES:
+            return False
+        px = self.store.ticker.last or getattr(pos, "entry", 0)
+        logger.warning(f"[清空幽灵持仓] {pos.symbol} 开仓对账：交易所无仓位，本地持仓作废")
+        await self._record(
+            {"ok": True, "price": px, "qty": 0, "fill_confirmed": False},
+            {"kind": "ghost_clear", "tf": pos.tf,
+             "reason": "开仓对账：交易所无真实仓位，本地持仓作废",
+             "profile": pos.profile, "realized": round(pos.realized, 4)},
+        )
+        self._finalize(pos, px, "幽灵持仓清理（开仓后对账未查到真实仓位）")
+        await self._push_position()
+        return True
+
+    async def reconcile_position(self) -> bool:
+        """与交易所真实持仓对账：本地有仓、交易所没仓时清掉本地状态。
+
+        用户在交易所手动平仓后，本地 store.position 还挂着，于是 pattern_trade
+        一直 return、不再评估新信号。这里主动查一次真实持仓来发现这种情况。
+
+        返回 True  = 本地持仓仍有效（交易所真有仓，或查不清 → 保守保留不动）
+        返回 False = 交易所已无此仓，本地持仓已作废，调用方可正常评估新信号
+
+        注意：手动平仓时本地用的是当前 ticker 价估算盈亏，与交易所实际成交价
+        可能有出入，realized 只是本地记账口径。
+        """
+        pos = self.store.position
+        if not pos or self.cfg.paper:
+            return True
+        try:
+            real = await trade.get_positions(
+                pos.symbol, self.cfg.category, sim=self.cfg.paper)
+        except Exception as e:
+            logger.warning(f"[持仓对账失败] {pos.symbol} {e}")
+            return True                       # 查不清 → 保留，不动
+        if not real.get("ok"):
+            logger.warning(f"[持仓对账失败] {pos.symbol} {real.get('error')}")
+            return True
+        if self._exchange_qty(real.get("data"), pos.symbol) > 0:
+            return True                       # 交易所确实还有仓
+        px = self.store.ticker.last or getattr(pos, "entry", 0)
+        logger.warning(f"[手动平仓/幽灵仓] {pos.symbol} 交易所已无 {pos.side} 仓位，本地持仓作废")
+        await self._record(
+            {"ok": True, "price": px, "qty": 0, "fill_confirmed": False},
+            {"kind": "ghost_clear", "tf": pos.tf,
+             "reason": "持仓对账：交易所已无真实仓位（可能手动平仓），本地持仓作废",
+             "profile": pos.profile, "realized": round(pos.realized, 4)},
+        )
+        self._finalize(pos, px, "持仓对账：交易所已无此仓位，本地持仓作废")
+        await self._push_position()
+        return False
+
+    def _calc_atr(self, tf: str) -> float | None:
+        """计算当前ATR，用于止损外扩"""
+        try:
+            candles = list(self.store.candles.get(tf, []))
+            if len(candles) < 15:
+                return None
+            # 简单TR平均（最近14根）
+            trs = []
+            for i in range(1, min(15, len(candles))):
+                c = candles[-i]
+                prev = candles[-i-1]
+                tr = max(
+                    c.h - c.l,
+                    abs(c.h - prev.c),
+                    abs(c.l - prev.c)
+                )
+                trs.append(tr)
+            return sum(trs) / len(trs) if trs else None
+        except Exception as e:
+            logger.warning(f"计算ATR失败: {e}")
+            return None
+
+    def _exit_action(self, pos, price: float, rules):
+        """三档止盈按 EnhancedExitRules 检查；普通 Position 也能跑（不要求 EnhancedPosition）。"""
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            if isinstance(pos, EnhancedPosition):
+                pos.update_max_unrealized(price)
+            max_unreal = getattr(pos, "max_unrealized_pct", None)
+            return check_enhanced(pos, price, rules, max_unreal)
+        return position.check(pos, price, rules)
+
+    # ── 价格入口（止盈止损） ────────────────────────────────────
+    async def on_price(self, price: float):
+        pos = self.store.position
+        if not pos or pos.qty <= 0 or not price:
+            return
+
+        rules = self.rules_of(pos)
+        # 反向平仓模式：TP1 / 保本 / 跟踪止损 / 硬止损 一律不作数，
+        # 只等同周期反向信号平仓（见 _handle_signal → should_close_on_reverse）。
+        if getattr(rules, "reverse_close", False):
+            return
+        act = self._exit_action(pos, price, rules)
+
+        if not rules.enabled and act and act.get("action") in ("stop", "max_stop"):
+            logger.debug("[止损忽略] 价格触及止损线但规则已禁用，等待反向信号")
+            return
+
+        if not act:
+            return
+        async with self._lock:
+            # 抢到锁后重新确认，避免与 on_signal 的平仓重复执行
+            pos = self.store.position
+            if not pos or pos.qty <= 0:
+                return
+
+            # 再次检查
+            rules = self.rules_of(pos)
+            act = self._exit_action(pos, price, rules)
+            if not rules.enabled and act and act.get("action") in ("stop", "max_stop"):
+                return
+
+            if not act:
+                return
+            # 止盈刚失败过：冷却期内不再重试（止损不冷却，那是风控必须尽快重试）
+            if act.get("action") in ("tp1", "tp2", "tp3") and time.time() < self._tp_fail_until:
+                return
+
+            # 处理三级止盈和极端保护止损
+            if act["action"] in ("tp1", "tp2", "tp3"):
+                await self._take_profit(pos, price, act)
+            elif act["action"] == "max_stop":
+                # 极端保护止损
+                await self._close(pos, act["reason"], price)
+            else:
+                await self._close(pos, act["reason"], price)
+
+    async def _take_profit(self, pos, price: float, act: dict):
+        # 按交易所的 lotSz 吸附，否则会带着浮点残渣（0.11200000000000002）去下单。
+        # 注意 instId 要用合约form（BTC-USDT-SWAP），拿现货 form 会查不到规格、
+        # 退回默认 lot_sz=1，把止盈量吸附成 0 —— 表现为止盈静默不执行。
+        spec = await self._spec_of(pos)
+        # 比例按开仓数量算：1%平30% → 2%平40% → 3.5%平30%，三档合计 100%
+        # 第三档直接平剩余，避免手数吸附后留残仓。
+        if act["action"] == "tp3":
+            qty = pos.qty
+        else:
+            base = pos.init_qty if getattr(pos, "init_qty", 0) else pos.qty
+            qty = trade._snap(base * act["ratio"] / 100, spec["lot_sz"])
+            qty = min(qty, pos.qty)
+            leftover = round(pos.qty - qty, 10) if qty > 0 else pos.qty
+            if leftover > 0 and leftover < spec["lot_sz"]:
+                qty = pos.qty
+        if qty <= 0:
+            logger.info(f"[跳过止盈] 应平 {act['ratio']:.0f}% 不足最小变动单位 {spec['lot_sz']}")
+            return
+        r = await self._reduce(pos, qty, price, f"止盈 {act['ratio']:.0f}%")
+        if not r.get("ok"):
+            logger.warning(f"[止盈失败] {r.get('error')}")
+            kind = act["action"] if act["action"] in ("tp1", "tp2", "tp3") else "tp1"
+            # 交易所已经没仓了 —— 本地是幽灵持仓，清掉，别每根 K 线重试一次
+            if is_no_position_error(r.get("error")) and await self._ghost_clear(pos, kind):
+                return
+            # 其他失败：冷却后再试，避免把订单记录刷爆
+            self._tp_fail_until = time.time() + REDUCE_FAIL_COOLDOWN
+            await self._record(r, {"kind": kind, "tf": pos.tf, "reason": act["reason"]})
+            return
+
+        # 使用增强版止盈处理（支持三级止盈）
+        rules = self.rules_of(pos)
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            stage = {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)
+            apply_tp_enhanced(pos, r["price"], r["qty"], rules, stage)
+            logger.info(f"[第{stage}档止盈] {pos.symbol} 平 {r['qty']} @ {r['price']}，止损→{pos.stop}")
+        else:
+            position.apply_tp1(pos, r["price"], r["qty"], rules)
+            logger.info(f"[止盈] {pos.symbol} 平 {r['qty']} @ {r['price']}，止损→{pos.stop}")
+
+        kind = act["action"] if act["action"] in ("tp1", "tp2", "tp3") else "tp1"
+        await self._record(r, {"kind": kind, "tf": pos.tf, "reason": act["reason"],
+                               "profile": pos.profile, "stage": {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)})
+
+        # 止盈比例 100%（弱档就是）会把仓位一次平光。不在这里收尾的话，
+        # state.position 会挂着一个 qty=0 的空壳、这笔也不会进 closed 历史。
+        if pos.qty <= 0:
+            stage_n = {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)
+            self._finalize(pos, r["price"], f"第{stage_n}档止盈全平")
+        await self._push_position()
+
+    def _finalize(self, pos, price: float, reason: str):
+        """仓位归零后的统一收尾：落进历史、清空当前持仓。"""
+        logger.info(f"[持仓结束] {pos.symbol} {reason}，本笔已实现 {pos.realized:+.4f} USDT")
+        row = {**pos.to_dict(price), "sym": self.store.symbol,
+               "close_reason": reason, "exit_ts": int(time.time() * 1000)}
+        self.store.closed.append(row)
+        self.store.closed = self.store.closed[-50:]
+        trade_log.log_closed(row)
+        self.store.position = None
+
+    async def _ghost_clear(self, pos, kind: str = "tp1") -> bool:
+        """交易所已无仓、本地却还有持仓（幽灵持仓）时清账。返回 True 表示已清理。
+
+        不清理的后果：每根 K 线都会再下一次减仓单并失败，
+        9/3 的 CL 就是这样在 9 分钟里刷出 167 条失败单，还把订单记录挤没了。
+        """
+        real = {"ok": False, "data": []}
+        try:
+            real = await trade.get_positions(pos.symbol, self.cfg.category, sim=self.cfg.paper)
+        except Exception as e:
+            logger.warning(f"[幽灵仓对账失败] {pos.symbol} {e}")
+            return False
+        if not real.get("ok") or self._exchange_qty(real.get("data"), pos.symbol) > 0:
+            return False
+        px = self.store.ticker.last or getattr(pos, "entry", 0)
+        logger.warning(f"[清空幽灵持仓] {pos.symbol} 交易所已无仓，本地持仓作废（{kind} 失败）")
+        await self._record(
+            {"ok": True, "price": px, "qty": 0, "fill_confirmed": False},
+            {"kind": "ghost_clear", "tf": pos.tf,
+             "reason": f"{kind} 失败：交易所无仓位，本地持仓作废",
+             "profile": pos.profile, "realized": round(pos.realized, 4)},
+        )
+        self._finalize(pos, px, f"幽灵持仓清理（{kind} 失败）")
+        await self._push_position()
+        return True
+
+    def _exchange_qty(self, rows, inst_id: str) -> float:
+        tot = 0.0
+        want = (inst_id or "").upper()
+        for row in rows or []:
+            if (row.get("instId") or "").upper() != want:
+                continue
+            try:
+                tot += abs(float(row.get("pos") or 0))
+            except (TypeError, ValueError):
+                pass
+        return tot
+
+    async def _close(self, pos, reason: str, price: float | None = None):
+        if not pos or pos.qty <= 0:
+            return
+        r = await self._reduce(pos, pos.qty, price or self.store.ticker.last, "平仓")
+        if not r.get("ok"):
+            # 可能是开仓限价根本没成交：本地有仓、交易所没有。
+            # 撤掉残留挂单，再对一下真仓；没有真仓就丢掉假持仓，不要记成止损。
+            try:
+                if pos.order_id:
+                    await trade.cancel(pos.symbol, pos.order_id,
+                                       self.cfg.category, sim=self.cfg.paper)
+                await trade.cancel_pending(pos.symbol, self.cfg.category, sim=self.cfg.paper)
+            except Exception as e:
+                logger.warning(f"[平仓时撤挂单失败] {e}")
+            real = {"ok": False, "data": []}
+            try:
+                real = await trade.get_positions(pos.symbol, self.cfg.category, sim=self.cfg.paper)
+            except Exception as e:
+                logger.warning(f"[平仓时查仓失败] {e}")
+            if real.get("ok") and self._exchange_qty(real.get("data"), pos.symbol) > 0:
+                r = await self._reduce(pos, pos.qty, price or self.store.ticker.last, "平仓")
+            if not r.get("ok"):
+                if real.get("ok") and self._exchange_qty(real.get("data"), pos.symbol) <= 0:
+                    logger.warning(f"[清空空仓] {pos.symbol} 交易所无仓，本地持仓作废（{reason}）")
+                    await self._record(
+                        {"ok": True, "price": price, "qty": 0, "fill_confirmed": False},
+                        {"kind": "close", "tf": pos.tf, "reason": "开仓未成交，已撤挂单并清空",
+                         "profile": pos.profile, "realized": 0},
+                    )
+                    self.store.position = None
+                    await self._push_position()
+                    return
+                logger.warning(f"[平仓失败] {r.get('error')} — 请到交易所手动处理")
+                await self._record(r, {"kind": "close", "tf": pos.tf, "reason": reason})
+                return
+        position.apply_close(pos, r["price"], r["qty"], reason)
+        await self._record(r, {"kind": "close", "tf": pos.tf, "reason": reason,
+                               "profile": pos.profile, "realized": round(pos.realized, 4)})
+        self._finalize(pos, r["price"], reason)
+        await self._push_position()
+
+    async def _reduce(self, pos, qty: float, price: float | None, tag: str) -> dict:
+        """减仓/平仓统一走市价 reduceOnly —— 止损止盈必须确保成交，
+        限价挂上去不成交等于没止损。"""
+        side = "sell" if pos.long else "buy"
+        return await trade.place_order(
+            pos.symbol, side, None, sz=qty,
+            category=self.cfg.category, mgn_mode=self.cfg.margin_mode,
+            order_type="market", reduce_only=True,
+            client_oid=f"c{int(time.time()*1000)}",
+            sim=self.cfg.paper,
+            ref_price=price or self.store.ticker.last,
+        )
+
+    # ── 超趋线更新 → 移动止损 ───────────────────────────────────
+    async def on_st_line(self, tf: str, line: float | None):
+        pos = self.store.position
+        # 只跟随开仓周期的超趋线。1m/5m 的轨再贴也不能去改 15m 仓的止损。
+        if not pos or pos.qty <= 0 or pos.tf != tf or line is None:
+            return
+        # 已保本的仓位不再下调止损（trail 内部只朝有利方向移，这里是双保险）。
+        # 弱档 trail_with_st=False，trail() 会直接返回 False，不用额外分支。
+        rules = self.rules_of(pos)
+        # 反向平仓模式：不跟随超趋线移动止损（根本没有止损在生效）
+        if getattr(rules, "reverse_close", False):
+            return
+        if USE_ENHANCED and isinstance(rules, EnhancedExitRules):
+            changed = trail_enhanced(pos, line, rules, self.store.ticker.last)
+        else:
+            changed = position.trail(pos, line, rules)
+
+        if changed:
+            await self._push_position()
+
+    async def close_manual(self, reason: str = "手动平仓") -> dict:
+        async with self._lock:
+            pos = self.store.position
+            if not pos or pos.qty <= 0:
+                return {"ok": False, "error": "当前无持仓"}
+            await self._close(pos, reason)
+            return {"ok": True}

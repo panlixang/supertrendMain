@@ -1,0 +1,706 @@
+"""
+全局共享状态
+
+多品种并行架构：
+    stores[symbol] = SymbolStore   交易品种，K线/持仓/信号/参数各自独立
+    view_store                     仅看图的品种（不在交易列表里时临时加载）
+    current_symbol                 图表当前显示哪个品种（view 指针，不影响交易）
+
+AppState 上保留一组「视图委托」属性（ticker / params / signals / candles_by_tf…），
+全部指向 current_symbol 对应的 store —— 图表 / 回测 / 参数页的代码不用感知多品种。
+
+周期集合与 Pine 脚本 «Signal Engine Quantum Edge» 的 MTF Bias 表对齐：
+5m / 15m / 30m / 1H / 4H / 1D / 1W / 1M，另加 1m 供短线看盘。
+"""
+
+from collections import deque
+from dataclasses import dataclass, field, replace
+import json
+import logging
+import os
+from typing import Optional
+
+from fastapi import WebSocket
+
+import trade_log
+
+logger = logging.getLogger(__name__)
+
+# 面板参数的持久化文件：改动即写、启动即读，重启不再丢配置
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+
+# 同时交易的品种上限（每个品种 1 条 WS + 多周期 K 线轮询；放宽到 20 以支持两服务品种合并）
+MAX_SYMBOLS = 20
+
+
+@dataclass
+class Ticker:
+    symbol: str = "BTC-USDT"
+    last: float = 0.0
+    open24h: float = 0.0
+    high24h: float = 0.0
+    low24h: float = 0.0
+    vol24h: float = 0.0
+    change24h: float = 0.0
+    ts: int = 0
+
+
+@dataclass
+class Candle:
+    ts: int          # 毫秒
+    o: float
+    h: float
+    l: float
+    c: float
+    vol: float
+    confirm: bool = False   # 该 K 线是否已收盘
+
+
+# maxlen / OKX bar / OKX WS channel / 前端显示名
+# 展示窗口：15m≈3个月，1h/4h/1d≈6个月；更短周期仍用较短缓存控内存
+TF_CONFIG = {
+    "1m":  {"maxlen": 600,  "okx_bar": "1m",  "okx_channel": "candle1m",  "label": "1m"},
+    "5m":  {"maxlen": 600,  "okx_bar": "5m",  "okx_channel": "candle5m",  "label": "5m"},
+    "15m": {"maxlen": 9000, "okx_bar": "15m", "okx_channel": "candle15m", "label": "15m"},  # ~3个月
+    "30m": {"maxlen": 800,  "okx_bar": "30m", "okx_channel": "candle30m", "label": "30m"},
+    "1h":  {"maxlen": 4500, "okx_bar": "1H",  "okx_channel": "candle1H",  "label": "1H"},   # ~6个月
+    "4h":  {"maxlen": 1200, "okx_bar": "4H",  "okx_channel": "candle4H",  "label": "4H"},   # ~6个月
+    "1d":  {"maxlen": 220,  "okx_bar": "1D",  "okx_channel": "candle1D",  "label": "1D"},   # ~6个月
+    "1w":  {"maxlen": 300,  "okx_bar": "1W",  "okx_channel": "candle1W",  "label": "1W"},
+    "1M":  {"maxlen": 200,  "okx_bar": "1M",  "okx_channel": "candle1M",  "label": "1M"},
+}
+
+TFS = list(TF_CONFIG.keys())
+
+# MTF Bias 表的行（对应 Pine 里的 bias_5m … bias_1mo）
+BIAS_TFS = ["5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"]
+
+
+@dataclass
+class Params:
+    """对应 Pine 的 input 区块，前端可调，改动后全部重算。每个品种一份。"""
+    # ▸ Supertrend Settings
+    periods:    int   = 15        # ATR Period
+    multiplier: float = 9.1       # ATR Multiplier
+    src:        str   = "hl2"     # Source
+    change_atr: bool  = True      # Change ATR Calculation Method (True=ta.atr/RMA)
+    # ▸ MTF Bias Table
+    fast_len:   int   = 20        # Fast MA Length
+    slow_len:   int   = 50        # Slow MA Length
+    ma_type:    str   = "EMA"     # EMA / SMA
+
+
+@dataclass
+class SymbolTradeConfig:
+    """单个品种的下单参数。现在所有自动下单参数都品种独立（含 ER / 止盈止损）。
+
+    生效开关 = 全局总开关 AND 这里的 enabled（见 AppState.cfg_for）。
+    """
+    symbol:      str
+    enabled:     bool  = False
+    margin_usdt: float = 10.0
+    leverage:    int   = 3
+    allow_tfs:   list  = field(default_factory=lambda: ["15m", "30m", "1h", "4h", "1d"])
+    # ── 仓位计算模式 ──
+    sizing_mode: str   = "fixed"    # "fixed"=固定金额 / "equity_pct"=净值百分比
+    equity_pct:  float = 10.0       # 净值百分比模式：每次开仓用净值的 X% 作保证金（1-100）
+    # ── ER 闸门（品种独立）──
+    er_hide_below: float = 0.10
+    er_weak_min:   float = 0.12
+    er_min:        float = 0.15
+    er_trend:      float = 0.30
+    quick_enabled: bool  = False
+    allow_grades:  list  = field(default_factory=lambda: ["A", "B"])
+    min_score:     int   = 2
+    cooldown_sec:  int   = 300
+    # ── 组合过滤器（品种独立配置）──
+    atr_filter_enabled:    bool  = False   # 是否启用ATR波动率过滤
+    atr_vol_min:           float = 0.7     # ATR波动率最小值（当前ATR/近期均值）
+    range_filter_enabled:  bool  = False   # 是否启用区间震荡过滤
+    range_size_max:        float = 0.15    # 区间大小上限（高低点差/低点）
+    range_touches_min:     int   = 3       # 触边次数下限（近期触碰上下轨次数）
+    mtf_filter_enabled:    bool  = False   # 是否启用MTF一致性过滤
+    mtf_consistency_min:   float = 0.6     # MTF一致性最小值（0~1）
+    mtf_flip_max:          int   = 5       # 大周期翻转次数上限（4h+1d近期翻转）
+    adx_filter_enabled:    bool  = False   # 是否启用ADX过滤
+    adx_min:               float = 20.0    # ADX最小值（低于此值视为无趋势）
+    adx_period:            int   = 14      # ADX计算周期
+    # ── 信号打分制（平衡型方案）──
+    use_scoring:           bool  = True    # 是否启用打分制（推荐开启）
+    scoring_full_threshold: float = 80.0   # 全仓阈值：≥此分数全仓下单
+    scoring_half_threshold: float = 60.0   # 半仓阈值：≥此分数半仓下单
+    scoring_alert_threshold: float = 40.0  # 提醒阈值：≥此分数仅提醒不下单
+    # ── 动态ER阈值（平衡型方案）──
+    use_dynamic_threshold:  bool  = True   # 是否启用动态阈值（推荐开启）
+    # ── 评分引擎（Engine Profile，阶段2）──
+    # 空 = 沿用旧二元开关口径（score_v2 由服务器全局默认提供，现均为 v1）；
+    # "v2"/"quality_filter_v2" = 连续软分引擎（快噪声品种）；
+    # "v1"/"trend_follow_v1" = 阶梯引擎（长趋势品种）。
+    score_engine:           str   = ""
+    # ── Shadow Mode（阶段3，默认关）──
+    # 非空 = 每次判单用该引擎再算一遍并落盘（backend/logs/shadow_<SYM>.jsonl），
+    # 用于验证回测引擎优势是否转移到实时（主引擎不变，只做对照采集）。
+    # 取值同 score_engine："" / "v1" / "v2" / "trend_follow_v1" / "quality_filter_v2"。
+    shadow_engine:          str   = ""
+    # ── 4h MA30 方向门（高周期方向过滤，回测验证可降回撤/提胜率）──
+    ma30_dir_enabled: bool  = False   # 是否启用 4h MA30 方向门
+    ma30_tf:          str   = "4h"    # 方向参考周期
+    ma30_period:      int   = 30      # MA 周期
+    # ── 形态识别页出场（品种独立；None=用 PatternConfig 全局默认）──
+    # 三档止盈：TP1 平一部分并把止损移到开仓价（保本）→ TP2 再平一部分（锁1%利润）
+    #         → TP3 剩余全平。tp3_pct=0 表示「反向信号平仓」：所有价格止盈止损失效。
+    tp1_pct:           Optional[float] = None
+    tp1_ratio:         Optional[float] = None
+    tp2_pct:           Optional[float] = None
+    tp2_ratio:         Optional[float] = None
+    tp3_pct:           Optional[float] = None
+    tp3_ratio:         Optional[float] = None
+    tp3_mode:          Optional[str]   = None   # pct=按幅度 | reverse_signal=同周期反向可下单信号全平剩余
+    exit_mode:         Optional[str]   = None   # 出场档位：multi=三挡(EnhancedExitRules) | single=单档(ExitRules，TP1 平一部分后剩余靠保本/跟踪/反向信号平)（None=用全局）
+    sl_pct:            Optional[float] = None
+    sl_mode:           Optional[str]   = None   # 止损方式：st=超趋线（sl_pct 仅轨道无效时兜底）| pct=固定百分比「真实硬止损」（None=用 PatternConfig 全局）
+    move_sl_to_entry:  Optional[bool]  = None
+    trail_with_st:     Optional[bool]  = None
+    reverse_close:     Optional[bool]  = None   # 反向平仓（None=用 PatternConfig 全局）；True=只按反向信号平仓，TP1/止损全失效
+    # ── 形态识别页 过滤策略（形态识别页专用；首页/通用回测不得继承）──
+    block_4h:          bool = False   # 4h 方向拦截：4h 形态(ST)方向与信号反向则拦截（True=开启）
+                                      # 品种独立开关（2026-10-30 由全局 PatternConfig.block_4h 下放到每品种）；
+                                      # 默认关=不拦截，保持改造前线上行为（当时全局 block_4h=false），逐品种按需开启
+                                      # ⚠ 仅形态识别页(pattern_trade)使用；全局 PatternConfig.block_4h 仅为兼容保留，已不参与过滤
+    filter_v3:         bool = True    # V3趋势过滤：Trend Score 未通过（非「成熟趋势/早期启动」）拦截；含两级Fuse
+                                      # 默认开=走「形态页+V3」回测档（出场参数保持 tp1 1.5%/70% 默认）；V3 在 1h+4h 上拟合，非 1h 周期请在面板单独关闭
+                                      # ⚠ 仅形态识别页(pattern_trade)使用。首页回测(/api/backtest)、参数寻优、新模型回测(sl2_*)不得继承此字段；
+                                      #    后者如需 V3 请在各自入口显式开启（sl2 用 --v3）。
+    # ── 形态识别页 指标区间闸门（品种独立；形态识别页专用）──
+    # 规则：开启后，信号出现时当前 ATR14/ATR50 与 ER20 必须同时落在配置区间内才下单；
+    #       任一指标在区间外 → 拦截（仅提醒）。默认关=不启用该闸门。
+    # 口径：ATR = RMA(TR, N)，ER20 = |末-首| / 逐段路径长度（最近 20 段，即 21 根收盘）；
+    #       K 线取信号所在周期，窗口末尾即最新/信号根。
+    range_gate:      bool  = False   # 区间闸门开关（默认关）
+    atr_ratio_min:   float = 1.10    # ATR14/ATR50 下限（含）
+    atr_ratio_max:   float = 1.30    # ATR14/ATR50 上限（含）
+    er20_min:        float = 0.08    # ER20 下限（含）
+    er20_max:        float = 0.30    # ER20 上限（含）
+
+    # ── 双因子（低相关量能维度补充 SuperTrend）──
+    # flow_enabled=False 时完全不干预原信号链；=True 时按 mode 生效。
+    #  mode="veto"：趋势想开仓但量能因子背离 → 否决（过滤假突破，SKHYNIX 验证有效）
+    #  mode="fill"：SuperTrend 已转向但被次级过滤拦掉，量能因子极强同向 → 复活补位
+    # flow_theta=补位阈值, flow_veto=否决阈值, flow_lookback=量能窗口, flow_scale=量能z归一
+    flow_enabled:  bool  = False
+    flow_mode:     str   = "veto"    # "veto"=否决 / "fill"=补位
+    flow_theta:    float = 0.30      # 补位阈值（fill 用）
+    flow_veto:     float = 0.50      # 否决阈值（veto 用）
+    flow_lookback: int   = 24        # 量能 z-score 窗口(根)
+    flow_scale:    float = 2.0       # 量能 z 归一
+
+
+# 寻优后的品种默认评分档位 (full, half, alert)。存档未保存评分字段时使用；
+# 子串匹配（兼容 -USDT / -USDT-SWAP 后缀），未知品种回退 80/60/40。
+_SCORE_DEFAULTS: dict[str, tuple[float, float, float]] = {
+    "ETH":  (35.0, 35.0, 30.0),
+    "MU":   (40.0, 40.0, 30.0),
+    "SNDK": (65.0, 65.0, 55.0),
+    "SPCX": (50.0, 50.0, 40.0),
+}
+
+
+def _score_defaults_for(symbol: str) -> tuple[float, float, float]:
+    s = (symbol or "").upper()
+    for key, val in _SCORE_DEFAULTS.items():
+        if key in s:
+            return val
+    return (80.0, 60.0, 40.0)
+
+
+class SymbolStore:
+    """一个品种的全部运行时数据。cfg=None 表示「仅看图」，结构上不可能下单。"""
+
+    def __init__(self, symbol: str, cfg: Optional[SymbolTradeConfig] = None,
+                 params: Optional[Params] = None, exit_rules = None, exit_rules_quick = None):
+        self.symbol = symbol                 # 现货形式（BTC-USDT），全程作为字典键
+        self.cfg = cfg
+        self.params = params or Params()
+        # 止盈止损规则（品种独立）- 使用增强版
+        try:
+            from position_enhanced import EnhancedExitRules
+            self.exit_rules = exit_rules or EnhancedExitRules(
+                # 三级止盈
+                tp1_pct=1.0, tp1_ratio=30.0,
+                tp2_pct=2.0, tp2_ratio=40.0,
+                tp3_pct=3.5, tp3_ratio=100.0,
+                # 禁用价格止损（只用信号止损）
+                enabled=False,  # ← 关闭价格驱动的止损
+                sl_mode="st", sl_pct=2.0,
+                sl_buffer_atr=0.5, sl_min_pct=1.2,
+                move_sl_to_entry=True, trail_with_st=True,
+                # 盈利保护
+                protect_profit_at=1.5, protect_trail_pct=0.8,
+            )
+            self.exit_rules_quick = exit_rules_quick or EnhancedExitRules(
+                # 快进快出档
+                tp1_pct=0.8, tp1_ratio=100.0,   # 0.8%全平
+                tp2_pct=999, tp2_ratio=0,       # 不使用
+                tp3_pct=999, tp3_ratio=0,       # 不使用
+                sl_mode="pct", sl_pct=1.0,
+                sl_buffer_atr=0.3, sl_min_pct=1.0,
+                move_sl_to_entry=False, trail_with_st=False,
+                protect_profit_at=999, protect_trail_pct=0,
+            )
+        except ImportError:
+            # 如果增强版不存在，回退到原版
+            from position import ExitRules
+            self.exit_rules = exit_rules or ExitRules()
+            self.exit_rules_quick = exit_rules_quick or ExitRules(
+                tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+                sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+            )
+        self.candles: dict[str, deque] = {
+            tf: deque(maxlen=c["maxlen"]) for tf, c in TF_CONFIG.items()
+        }
+        self.ticker = Ticker(symbol=symbol)
+        self.signals: list[dict] = []
+        # 当前持仓（每品种最多一笔）+ 已平仓历史
+        self.position = None
+        self.closed: list[dict] = []
+        # {tf: 上次下单时间戳秒}，冷却按品种隔离
+        self.last_order_at: dict[str, float] = {}
+        self.history_loaded = False
+
+    def candles_by_tf(self, tf: str) -> list[dict]:
+        return [vars(c) for c in self.candles.get(tf, deque())]
+
+    def all_candles(self) -> dict[str, list[dict]]:
+        return {tf: self.candles_by_tf(tf) for tf in TF_CONFIG}
+
+    def add_signal(self, sig: dict):
+        key = (sig["tf"], sig["ts"])
+        self.signals = [s for s in self.signals if (s["tf"], s["ts"]) != key]
+        self.signals.append(sig)
+        self.signals.sort(key=lambda s: s["ts"])
+        self.signals = self.signals[-300:]
+
+
+class AppState:
+    def __init__(self):
+        self.clients: set[WebSocket] = set()
+        self.current_symbol: str = "BTC-USDT"
+        # 自动挂单全局配置 + 已下单记录（记录带 symbol）
+        from regime import TradeConfig
+        self.trade_cfg = TradeConfig()
+        # 两套出场规则，开仓时按 ER 落在哪档选一套（见 regime.classify 的 profile）
+        # 使用增强版规则
+        try:
+            from position_enhanced import EnhancedExitRules
+            self.exit_rules = EnhancedExitRules(
+                # 标准档：三级止盈
+                tp1_pct=1.0, tp1_ratio=30.0,
+                tp2_pct=2.0, tp2_ratio=40.0,
+                tp3_pct=3.5, tp3_ratio=100.0,
+                # 禁用价格止损（只用信号止损）
+                enabled=False,  # ← 关闭价格驱动的止损
+                sl_mode="st", sl_pct=2.0,
+                sl_buffer_atr=0.5, sl_min_pct=1.2,
+                move_sl_to_entry=True, trail_with_st=True,
+                # 盈利保护
+                protect_profit_at=1.5, protect_trail_pct=0.8,
+                # 极端保护止损（2026-09-05 起全线关闭）
+                max_loss_enabled=False,
+                max_loss_pct=10.0,
+            )
+            self.exit_rules_quick = EnhancedExitRules(
+                # 弱档：快进快出
+                tp1_pct=0.8, tp1_ratio=100.0,   # 0.8%一到就全平
+                tp2_pct=999, tp2_ratio=0,       # 不使用
+                tp3_pct=999, tp3_ratio=0,       # 不使用
+                # 禁用价格止损（只用信号止损）
+                enabled=False,  # ← 关闭价格驱动的止损
+                sl_mode="pct", sl_pct=1.0,
+                sl_buffer_atr=0.3, sl_min_pct=1.0,
+                move_sl_to_entry=False, trail_with_st=False,
+                protect_profit_at=999, protect_trail_pct=0,
+                # 极端保护止损（2026-09-05 起全线关闭）
+                max_loss_enabled=False,
+                max_loss_pct=8.0,
+            )
+        except ImportError:
+            # 回退到原版
+            from position import ExitRules
+            self.exit_rules = ExitRules()
+            self.exit_rules_quick = ExitRules(
+                tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+                sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+            )
+        self.orders: list[dict] = []
+        # 多品种：交易 store + 仅看图 store + 每品种一个执行器
+        self.stores: dict[str, SymbolStore] = {}
+        self.view_store: Optional[SymbolStore] = None
+        self.executors: dict = {}            # {symbol: Executor}，main/router 装配
+        self.feed = None                     # 运行时由 main 注入
+        self._load_settings()
+        if not self.stores:
+            # 全新启动：给默认品种建一个 store，enabled=False 等用户手动开
+            _def_full, _def_half, _def_alert = _score_defaults_for(self.current_symbol)
+            self.stores[self.current_symbol] = SymbolStore(
+                self.current_symbol, cfg=SymbolTradeConfig(
+                    symbol=self.current_symbol,
+                    scoring_full_threshold=_def_full,
+                    scoring_half_threshold=_def_half,
+                    scoring_alert_threshold=_def_alert,
+                ),
+            )
+
+    # ── 视图委托：图表 / 回测 / 参数页只关心 current_symbol ─────────
+    @property
+    def view(self) -> SymbolStore:
+        s = self.stores.get(self.current_symbol)
+        if s:
+            return s
+        if self.view_store is None or self.view_store.symbol != self.current_symbol:
+            self.view_store = SymbolStore(self.current_symbol)
+        return self.view_store
+
+    @property
+    def ticker(self) -> Ticker:
+        return self.view.ticker
+
+    @property
+    def params(self) -> Params:
+        return self.view.params
+
+    @params.setter
+    def params(self, value: Params):
+        self.view.params = value
+
+    @property
+    def signals(self) -> list:
+        return self.view.signals
+
+    @signals.setter
+    def signals(self, value: list):
+        self.view.signals = value
+
+    @property
+    def position(self):
+        return self.view.position
+
+    @property
+    def closed(self) -> list:
+        return self.view.closed
+
+    def candles_by_tf(self, tf: str) -> list[dict]:
+        return self.view.candles_by_tf(tf)
+
+    def all_candles(self) -> dict[str, list[dict]]:
+        return self.view.all_candles()
+
+    def add_signal(self, sig: dict):
+        self.view.add_signal(sig)
+
+    # ── 多品种工具 ──────────────────────────────────────────────
+    def cfg_for(self, symbol: str):
+        """全局配置 + 品种配置的合并视图。regime.evaluate / Executor 拿到的
+        就是一份普通 TradeConfig，ER闸门/等级/周期来自品种配置。"""
+        store = self.stores.get(symbol)
+        sc = store.cfg if store else None
+        if sc is None:
+            return replace(self.trade_cfg, enabled=False)   # 仅看图/未知品种：永不下单
+        return replace(
+            self.trade_cfg,
+            enabled=self.trade_cfg.enabled and sc.enabled,
+            leverage=sc.leverage,
+            amount_usdt=sc.margin_usdt,
+            allow_tfs=list(sc.allow_tfs),
+            # ER 闸门品种独立
+            er_hide_below=sc.er_hide_below,
+            er_weak_min=sc.er_weak_min,
+            er_min=sc.er_min,
+            er_trend=sc.er_trend,
+            quick_enabled=sc.quick_enabled,
+            allow_grades=list(sc.allow_grades),
+            min_score=sc.min_score,
+            cooldown_sec=sc.cooldown_sec,
+            # 组合过滤器品种独立
+            atr_filter_enabled=sc.atr_filter_enabled,
+            atr_vol_min=sc.atr_vol_min,
+            range_filter_enabled=sc.range_filter_enabled,
+            range_size_max=sc.range_size_max,
+            range_touches_min=sc.range_touches_min,
+            mtf_filter_enabled=sc.mtf_filter_enabled,
+            mtf_consistency_min=sc.mtf_consistency_min,
+            mtf_flip_max=sc.mtf_flip_max,
+            adx_filter_enabled=sc.adx_filter_enabled,
+            adx_min=sc.adx_min,
+            adx_period=sc.adx_period,
+            # 信号打分制品种独立
+            use_scoring=sc.use_scoring,
+            scoring_full_threshold=sc.scoring_full_threshold,
+            scoring_half_threshold=sc.scoring_half_threshold,
+            scoring_alert_threshold=sc.scoring_alert_threshold,
+            use_dynamic_threshold=sc.use_dynamic_threshold,
+            # 评分引擎（Engine Profile）+ Shadow Mode（阶段3）
+            score_engine=sc.score_engine,
+            shadow_engine=sc.shadow_engine,
+            # 4h MA30 方向门
+            ma30_dir_enabled=sc.ma30_dir_enabled,
+            ma30_tf=sc.ma30_tf,
+            ma30_period=sc.ma30_period,
+            # 双因子 flow（低相关量能维度补充 SuperTrend）
+            flow_enabled=sc.flow_enabled,
+            flow_mode=sc.flow_mode,
+            flow_theta=sc.flow_theta,
+            flow_veto=sc.flow_veto,
+            flow_lookback=sc.flow_lookback,
+            flow_scale=sc.flow_scale,
+        )
+
+    async def broadcast(self, msg: dict):
+        dead = set()
+        for ws in self.clients:
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                dead.add(ws)
+        self.clients -= dead
+
+    def rules_for(self, profile: Optional[str], symbol: Optional[str] = None):
+        """取该档的出场规则。symbol 指定则用品种独立规则，否则用全局规则。"""
+        if symbol:
+            store = self.stores.get(symbol)
+            if store:
+                return store.exit_rules_quick if profile == "quick" else store.exit_rules
+        return self.exit_rules_quick if profile == "quick" else self.exit_rules
+
+    def add_order(self, order: dict):
+        self.orders.append(order)
+        self.orders = self.orders[-200:]
+        # 内存只留 200 条、重启即丢，这里同步落盘，事后才能按品种对账
+        trade_log.log_order(order)
+
+    # ── 持久化 ──────────────────────────────────────────────────
+    def save_settings(self):
+        """把面板可调的配置落盘。任何一处改完调用即可，失败只警告不中断。"""
+        try:
+            data = {
+                "trade_cfg": vars(self.trade_cfg),
+                "exit_rules": vars(self.exit_rules),
+                "exit_rules_quick": vars(self.exit_rules_quick),
+                "current_symbol": self.current_symbol,
+                "symbols": [
+                    {
+                        **vars(st.cfg),
+                        "params": vars(st.params),
+                        "exit_rules": vars(st.exit_rules),
+                        "exit_rules_quick": vars(st.exit_rules_quick),
+                    }
+                    for st in self.stores.values() if st.cfg
+                ],
+                # 旧版字段：图表品种的指标参数，兼容旧代码读取
+                "params": vars(self.view.params),
+            }
+            tmp = SETTINGS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, SETTINGS_FILE)   # 原子替换，避免写一半断电留下残破文件
+        except Exception as e:
+            logger.warning(f"配置保存失败: {e}")
+
+    def _load_settings(self):
+        """启动时恢复上次的面板配置。只认识的字段才写回，代码升级加减字段不受影响。
+
+        总开关 enabled 故意不恢复 —— 重启后必须人工确认再开，
+        避免服务器重启后在没人盯的情况下自动继续下真金白银的单。
+        品种级 enabled 可以恢复（被总开关压着，单独恢复无害）。
+        """
+        if not os.path.exists(SETTINGS_FILE):
+            return
+        try:
+            with open(SETTINGS_FILE) as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning(f"配置读取失败（忽略，用默认值）: {e}")
+            return
+
+        for key, obj in (("trade_cfg", self.trade_cfg),
+                         ("exit_rules", self.exit_rules),
+                         ("exit_rules_quick", self.exit_rules_quick)):
+            saved = data.get(key)
+            if not isinstance(saved, dict):
+                continue
+            for k, v in saved.items():
+                if hasattr(obj, k):
+                    setattr(obj, k, v)
+        self.trade_cfg.enabled = False
+
+        sym = data.get("current_symbol")
+        if isinstance(sym, str) and sym:
+            self.current_symbol = sym
+
+        entries = data.get("symbols")
+        if isinstance(entries, list) and entries:
+            # 使用增强版规则
+            try:
+                from position_enhanced import EnhancedExitRules
+                use_enhanced = True
+            except ImportError:
+                from position import ExitRules
+                use_enhanced = False
+
+            for e in entries[:MAX_SYMBOLS]:
+                if not isinstance(e, dict) or not e.get("symbol"):
+                    continue
+                symbol = str(e["symbol"]).upper()
+                # 从全局配置作为默认值，再用品种配置覆盖
+                _def_full, _def_half, _def_alert = _score_defaults_for(symbol)
+                cfg = SymbolTradeConfig(
+                    symbol=symbol,
+                    margin_usdt=e.get("margin_usdt", self.trade_cfg.amount_usdt),
+                    leverage=e.get("leverage", self.trade_cfg.leverage),
+                    allow_tfs=e.get("allow_tfs", list(self.trade_cfg.allow_tfs)),
+                    sizing_mode=e.get("sizing_mode", "fixed"),
+                    equity_pct=e.get("equity_pct", 10.0),
+                    er_hide_below=e.get("er_hide_below", self.trade_cfg.er_hide_below),
+                    er_weak_min=e.get("er_weak_min", self.trade_cfg.er_weak_min),
+                    er_min=e.get("er_min", self.trade_cfg.er_min),
+                    er_trend=e.get("er_trend", self.trade_cfg.er_trend),
+                    quick_enabled=e.get("quick_enabled", self.trade_cfg.quick_enabled),
+                    allow_grades=e.get("allow_grades", list(self.trade_cfg.allow_grades)),
+                    min_score=e.get("min_score", self.trade_cfg.min_score),
+                    cooldown_sec=e.get("cooldown_sec", self.trade_cfg.cooldown_sec),
+                    # 组合过滤器（新字段，旧配置没有时用 dataclass 默认值）
+                    atr_filter_enabled=e.get("atr_filter_enabled", False),
+                    atr_vol_min=e.get("atr_vol_min", 0.7),
+                    range_filter_enabled=e.get("range_filter_enabled", False),
+                    range_size_max=e.get("range_size_max", 0.15),
+                    range_touches_min=e.get("range_touches_min", 3),
+                    mtf_filter_enabled=e.get("mtf_filter_enabled", False),
+                    mtf_consistency_min=e.get("mtf_consistency_min", 0.6),
+                    mtf_flip_max=e.get("mtf_flip_max", 5),
+                    adx_filter_enabled=e.get("adx_filter_enabled", False),
+                    adx_min=e.get("adx_min", 20.0),
+                    adx_period=e.get("adx_period", 14),
+                    # 信号打分制（平衡型方案；存档无评分字段时用寻优默认值）
+                    use_scoring=e.get("use_scoring", True),
+                    scoring_full_threshold=e.get("scoring_full_threshold", _def_full),
+                    scoring_half_threshold=e.get("scoring_half_threshold", _def_half),
+                    scoring_alert_threshold=e.get("scoring_alert_threshold", _def_alert),
+                    use_dynamic_threshold=e.get("use_dynamic_threshold", True),
+                    score_engine=e.get("score_engine", ""),
+                    shadow_engine=e.get("shadow_engine", ""),
+                    # 4h MA30 方向门（新字段，旧配置没有时用默认值）
+                    ma30_dir_enabled=e.get("ma30_dir_enabled", False),
+                    ma30_tf=e.get("ma30_tf", "4h"),
+                    ma30_period=e.get("ma30_period", 30),
+                    # 双因子 flow（低相关量能维度；旧配置用默认值）
+                    flow_enabled=e.get("flow_enabled", False),
+                    flow_mode=e.get("flow_mode", "veto"),
+                    flow_theta=e.get("flow_theta", 0.30),
+                    flow_veto=e.get("flow_veto", 0.50),
+                    flow_lookback=e.get("flow_lookback", 24),
+                    flow_scale=e.get("flow_scale", 2.0),
+                )
+                # 覆盖其他字段
+                if "enabled" in e:
+                    cfg.enabled = e["enabled"]
+
+                params = Params()
+                for k, v in (e.get("params") or {}).items():
+                    if hasattr(params, k):
+                        setattr(params, k, v)
+
+                # 品种独立止盈止损规则（旧配置没有则用全局默认）
+                if use_enhanced:
+                    exit_rules = EnhancedExitRules(
+                        # 从配置读取或使用默认值
+                        tp1_pct=1.0, tp1_ratio=30.0,
+                        tp2_pct=2.0, tp2_ratio=40.0,
+                        tp3_pct=3.5, tp3_ratio=100.0,
+                        sl_mode="st", sl_pct=2.0,
+                        sl_buffer_atr=0.5, sl_min_pct=1.2,
+                        move_sl_to_entry=True, trail_with_st=True,
+                        protect_profit_at=1.5, protect_trail_pct=0.8,
+                    )
+                    # 从保存的配置中覆盖
+                    for k, v in (e.get("exit_rules") or {}).items():
+                        if hasattr(exit_rules, k):
+                            setattr(exit_rules, k, v)
+
+                    exit_rules_quick = EnhancedExitRules(
+                        tp1_pct=0.8, tp1_ratio=100.0,
+                        tp2_pct=999, tp2_ratio=0,
+                        tp3_pct=999, tp3_ratio=0,
+                        sl_mode="pct", sl_pct=1.0,
+                        sl_buffer_atr=0.3, sl_min_pct=1.0,
+                        move_sl_to_entry=False, trail_with_st=False,
+                        protect_profit_at=999, protect_trail_pct=0,
+                    )
+                    for k, v in (e.get("exit_rules_quick") or {}).items():
+                        if hasattr(exit_rules_quick, k):
+                            setattr(exit_rules_quick, k, v)
+                else:
+                    # 原版
+                    exit_rules = ExitRules()
+                    for k, v in (e.get("exit_rules") or vars(self.exit_rules)).items():
+                        if hasattr(exit_rules, k):
+                            setattr(exit_rules, k, v)
+                    exit_rules_quick = ExitRules(
+                        tp1_pct=0.8, tp1_ratio=100.0, move_sl_to_entry=False,
+                        sl_mode="pct", sl_pct=1.0, trail_with_st=False,
+                    )
+                    for k, v in (e.get("exit_rules_quick") or vars(self.exit_rules_quick)).items():
+                        if hasattr(exit_rules_quick, k):
+                            setattr(exit_rules_quick, k, v)
+
+                self.stores[symbol] = SymbolStore(
+                    symbol, cfg=cfg, params=params,
+                    exit_rules=exit_rules, exit_rules_quick=exit_rules_quick
+                )
+        else:
+            # 旧版单品种配置文件：从全局字段合成一条品种配置（enabled 保持 False）
+            try:
+                from position_enhanced import EnhancedExitRules
+                use_enhanced = True
+            except ImportError:
+                from position import ExitRules
+                use_enhanced = False
+
+            symbol = self.current_symbol
+            _def_full, _def_half, _def_alert = _score_defaults_for(symbol)
+            cfg = SymbolTradeConfig(
+                symbol=symbol,
+                margin_usdt=self.trade_cfg.amount_usdt,
+                leverage=self.trade_cfg.leverage,
+                allow_tfs=list(self.trade_cfg.allow_tfs),
+                # 旧版的 ER 阈值在 trade_cfg 里，迁移到品种级
+                er_hide_below=self.trade_cfg.er_hide_below,
+                er_weak_min=self.trade_cfg.er_weak_min,
+                er_min=self.trade_cfg.er_min,
+                er_trend=self.trade_cfg.er_trend,
+                quick_enabled=self.trade_cfg.quick_enabled,
+                allow_grades=list(self.trade_cfg.allow_grades),
+                min_score=self.trade_cfg.min_score,
+                cooldown_sec=self.trade_cfg.cooldown_sec,
+                # 信号打分制（寻优默认值）
+                use_scoring=True,
+                scoring_full_threshold=_def_full,
+                scoring_half_threshold=_def_half,
+                scoring_alert_threshold=_def_alert,
+                use_dynamic_threshold=True,
+                score_engine="",
+            )
+            params = Params()
+            for k, v in (data.get("params") or {}).items():
+                if hasattr(params, k):
+                    setattr(params, k, v)
+            # 旧版止盈止损在全局 exit_rules，迁移到品种级
+            self.stores[symbol] = SymbolStore(
+                symbol, cfg=cfg, params=params,
+                exit_rules=self.exit_rules, exit_rules_quick=self.exit_rules_quick
+            )
+            logger.info(f"旧版配置已迁移为品种条目: {symbol}")
+
+        logger.info(f"已从 {SETTINGS_FILE} 恢复配置，交易品种: "
+                    f"{list(self.stores)}（总开关重置为关，需手动开启）")
+
+
+state = AppState()

@@ -1,0 +1,1408 @@
+"""HTTP / WebSocket 路由"""
+
+import asyncio
+import json
+import logging
+import math
+import os
+import time
+from dataclasses import replace
+from functools import partial
+from typing import Optional
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+
+import backtest_engine as bt
+import candle_store
+import instruments
+import notify
+import pattern_trade
+import regime
+import strategy
+import trade
+import trade_log
+from history import fetch_candles, load_history
+from indicators import compute, super_trend, ta_sma, ta_adx
+from pattern_recog import recognize as recognize_pattern
+from backtest.signal_filter import SignalFilter
+from state import BIAS_TFS, MAX_SYMBOLS, TF_CONFIG, TFS, state
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+# ─── 基础数据 ────────────────────────────────────────────────────
+
+@router.get("/api/ticker")
+async def get_ticker():
+    return vars(state.ticker)
+
+
+@router.get("/api/tfs")
+async def get_tfs():
+    return [{"tf": tf, "label": cfg["label"]} for tf, cfg in TF_CONFIG.items()]
+
+
+@router.get("/api/candles")
+async def get_candles(tf: str = "15m"):
+    return state.candles_by_tf(tf)
+
+
+@router.get("/api/indicators")
+async def get_indicators(tf: str = "15m"):
+    """单周期 SuperTrend 全量：轨道 / 趋势 / 信号 / 状态。"""
+    candles = state.candles_by_tf(tf)
+    if not candles:
+        return {}
+    result = compute(candles, tf, vars(state.params))
+    if result and result.get("signals"):
+        # 把 state.signals 里的 hidden / will_trade / gate_reasons 注入
+        # state.signals 由 rescan_signals() 维护，含当前过滤器评估结果
+        meta = {
+            (s["tf"], s["ts"]): {
+                "hidden":      s.get("hidden", False),
+                "will_trade":  s.get("will_trade"),
+                "gate_reasons": s.get("gate_reasons", []),
+            }
+            for s in state.signals
+        }
+        for sig in result["signals"]:
+            m = meta.get((sig.get("tf", tf), sig["ts"]), {})
+            sig["hidden"]      = m.get("hidden", False)
+            sig["will_trade"]  = m.get("will_trade")
+            sig["gate_reasons"] = m.get("gate_reasons", [])
+    return result
+
+
+@router.get("/api/overview")
+async def get_overview():
+    """MTF Bias 表（对应 Pine 右上角表格）+ 各周期 SuperTrend 方向。"""
+    return strategy.overview(state.all_candles(), vars(state.params))
+
+
+@router.get("/api/signals")
+async def get_signals(tf: Optional[str] = None, limit: int = 100):
+    sigs = state.signals
+    if tf:
+        sigs = [s for s in sigs if s["tf"] == tf]
+    return sigs[-limit:]
+
+
+def _finite(v):
+    """JSON 标准里没有 NaN / Infinity，Python 序列化出来前端 JSON.parse 会直接抛错。
+
+    指标在极端行情（除零、全平 K 线）下可能算出非有限值，这里统一转成 None，
+    前端按断线处理，避免整个形态页因一次解析失败而空白。
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+async def _pattern_candles(symbol: str, tf: str, limit: int) -> list:
+    """形态页取数：本地 SQLite → 内存（已加载的品种）→ OKX REST 现拉一次。
+
+    只读本地库时，冷启动还没落盘 / 该周期从未持久化 的情况下会取到空数组，
+    页面就一直空白。补上后两级兜底，保证只要行情源正常就能出图。
+    """
+    if tf not in TF_CONFIG:
+        return []
+    cs = candle_store.load_candles(symbol, tf, limit)
+    if cs:
+        return cs
+    st = state.stores.get(symbol)
+    if st is None and state.view_store and state.view_store.symbol == symbol:
+        st = state.view_store
+    if st:
+        dq = st.candles.get(tf)
+        if dq:
+            return list(dq)[-limit:]
+    loop = asyncio.get_event_loop()
+    try:
+        got = await loop.run_in_executor(None, fetch_candles, tf, limit, symbol)
+    except Exception as e:      # REST 不可达（无网/被限频）时不拖垮整页
+        logger.warning(f"形态页 REST 取数失败 [{symbol} {tf}]: {e}")
+        return []
+    return got or []
+
+
+async def _pattern_impl(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
+                       filter_by_regime: bool = False, candles: Optional[list] = None):
+    """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转信号 + 六大市场状态判定。
+
+    策略：
+      - 信号：基础周期原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
+      - 行情分类：趋势启动期、趋势运行期、趋势衰减期、震荡吸收期、假突破期、恐慌释放期。
+
+    说明：本接口只产出「信号 + 行情诊断」，不含出场/盈亏模拟。实盘出场由 executor
+      按 ExitRules 执行（tp1 1.5% 平 70% → 保本 → 反向信号/超趋线离场），故不再计算
+      v4-exit，避免页面展示与真实下单口径不一致。
+
+    filter_by_regime=True 时只保留可交易状态（趋势启动期/运行期/恐慌释放期）的信号。
+    candles 可选：直接传入已构造好的 K 线列表（[{ts,o,h,l,c,vol}]），跳过本地库/REST 取数，
+      用于「策略学习」等需要超长历史（如 5 年 1h）的场景。
+    返回每笔信号的完整行情诊断（regime, confidence, tradeable, metrics）。
+    """
+    symbol = (symbol or "BTCUSDT").strip().upper()
+    if candles:
+        base = [{"ts": int(c["ts"]), "o": float(c["o"]), "h": float(c["h"]),
+                "l": float(c["l"]), "c": float(c["c"]), "vol": float(c["vol"])}
+               for c in candles]
+    else:
+        base = await _pattern_candles(symbol, base_tf, limit)
+    if not base:
+        return {"symbol": symbol, "base_tf": base_tf, "error": "no_base_candles",
+                "base": None}
+
+    bcandles = base
+    opens = [c["o"] for c in bcandles]
+    highs = [c["h"] for c in bcandles]
+    lows = [c["l"] for c in bcandles]
+    closes = [c["c"] for c in bcandles]
+    vols = [c["vol"] for c in bcandles]
+    # 当前策略信号：原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
+    st = super_trend(opens, highs, lows, closes, periods=10, multiplier=3.0, change_atr=True)
+    st["up_plot"] = [_finite(v) for v in st["up_plot"]]
+    st["dn_plot"] = [_finite(v) for v in st["dn_plot"]]
+
+    atr = st["atr"]
+    flips = st["flips"]
+    flip_idx = [f["i"] for f in flips]
+
+    # 计算行情分类所需指标
+    from market_regime import classify_market_regime
+    adx14_values = ta_adx(highs, lows, closes, 14)
+
+    signals = []
+    regime_stats = {}  # 统计各状态的信号数量
+
+    for f in flips:
+        i = f["i"]
+        if i >= len(bcandles):
+            continue
+        sd = 1 if f["type"] == "buy" else -1
+        if atr[i] is None or (isinstance(atr[i], float) and math.isnan(atr[i])):
+            continue
+        entry = closes[i]
+
+        # ========== 行情趋势分类 ==========
+        regime_info = classify_market_regime(
+            closes=closes[:i+1],
+            highs=highs[:i+1],
+            lows=lows[:i+1],
+            atr_values=atr[:i+1],
+            adx_values=adx14_values[:i+1],
+            flip_indices=flip_idx,
+            current_idx=i,
+            signal_direction=sd,
+        )
+
+        # 统计各状态数量
+        regime_key = regime_info["regime"]
+        regime_stats[regime_key] = regime_stats.get(regime_key, 0) + 1
+
+        # 按行情状态过滤
+        if filter_by_regime and not regime_info["tradeable"]:
+            continue
+
+        signals.append({
+            "ts": bcandles[i]["ts"], "type": f["type"], "dir": sd,
+            "price": round(entry, 6),
+            # 行情状态诊断
+            "regime": regime_info["regime"],
+            "regime_cn": regime_info["regime_cn"],
+            "confidence": round(regime_info["confidence"], 1),
+            "tradeable": regime_info["tradeable"],
+            "metrics": regime_info["metrics"],
+        })
+
+    return {
+        "symbol": symbol,
+        "base_tf": base_tf,
+        "base": {
+            "tf": base_tf,
+            "candles": bcandles,
+            "st": {
+                "up_plot": st["up_plot"],
+                "dn_plot": st["dn_plot"],
+                "trend": st["trend"],
+            },
+            "signals": signals,
+        },
+        "regime_stats": regime_stats,  # 各状态信号数量统计
+    }
+
+
+@router.get("/api/pattern")
+async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
+                     filter_by_regime: bool = False):
+    """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转信号 + 六大市场状态判定。
+
+    策略：
+      - 信号：基础周期原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
+      - 行情分类：趋势启动期、趋势运行期、趋势衰减期、震荡吸收期、假突破期、恐慌释放期。
+
+    说明：本接口只产出「信号 + 行情诊断」，不含出场/盈亏模拟（实盘出场由 executor
+      按 ExitRules 执行）。
+
+    filter_by_regime=True 时只保留可交易状态（趋势启动期/运行期/恐慌释放期）的信号。
+    返回每笔信号的完整行情诊断（regime, confidence, tradeable, metrics）。
+    """
+    return await _pattern_impl(symbol=symbol, base_tf=base_tf, limit=limit,
+                              filter_by_regime=filter_by_regime)
+
+
+# ─── 参数（对应 Pine 的 input 面板） ─────────────────────────────
+
+class ParamsIn(BaseModel):
+    periods:    Optional[int]   = None
+    multiplier: Optional[float] = None
+    src:        Optional[str]   = None
+    change_atr: Optional[bool]  = None
+    fast_len:   Optional[int]   = None
+    slow_len:   Optional[int]   = None
+    ma_type:    Optional[str]   = None
+
+
+@router.get("/api/params")
+async def get_params():
+    return vars(state.params)
+
+
+@router.post("/api/params")
+async def set_params(body: ParamsIn):
+    p = state.params
+    if body.periods    is not None: p.periods    = max(1, body.periods)
+    if body.multiplier is not None: p.multiplier = max(0.1, body.multiplier)
+    if body.src        is not None: p.src        = body.src
+    if body.change_atr is not None: p.change_atr = body.change_atr
+    if body.fast_len   is not None: p.fast_len   = max(1, body.fast_len)
+    if body.slow_len   is not None: p.slow_len   = max(1, body.slow_len)
+    if body.ma_type    is not None: p.ma_type    = body.ma_type.upper()
+
+    if state.feed:
+        await state.feed.apply_params()
+    state.save_settings()
+    return {"ok": True, "params": vars(p)}
+
+
+@router.post("/api/params/reset")
+async def reset_params():
+    """恢复 Pine 脚本的默认值：15 / 9.1 / hl2 / changeATR / EMA 20-50。"""
+    from state import Params
+    state.params = Params()
+    if state.feed:
+        await state.feed.apply_params()
+    state.save_settings()
+    return {"ok": True, "params": vars(state.params)}
+
+
+# ─── 品种 ────────────────────────────────────────────────────────
+
+@router.get("/api/symbol")
+async def get_symbol():
+    return {"symbol": state.current_symbol}
+
+
+class SymbolIn(BaseModel):
+    instId: str
+
+
+@router.post("/api/symbol")
+async def set_symbol(body: SymbolIn):
+    inst = body.instId.strip().upper()
+    # 多品种架构下切图安全：每个持仓由自己品种的 ticker 驱动止盈止损，
+    # 图表看哪个品种与交易互不影响，无需再禁止切换。
+    if not await instruments.is_valid(inst):
+        return {"ok": False, "error": f"未知品种: {inst}"}
+    if state.feed is None:
+        return {"ok": False, "error": "feed 未初始化"}
+    r = await state.feed.switch_symbol(inst)
+    if r.get("ok"):
+        state.save_settings()
+    return r
+
+
+@router.get("/api/instruments")
+async def list_instruments(q: str = "", limit: int = 40):
+    return await instruments.search(q, limit=limit)
+
+
+# ─── 回测 ────────────────────────────────────────────────────────
+
+class BacktestIn(BaseModel):
+    tf:          str   = "1h"
+    bars:        int   = 800
+    init_cash:   float = 10000.0
+    fee_rate:    float = 0.0005
+    allow_short: bool  = True
+    bias_filter: bool  = False
+    # 不传则用当前全局参数
+    periods:     Optional[int]   = None
+    multiplier:  Optional[float] = None
+    # ── 闸门 / 止盈止损 / 仓位规模（默认全关，等价于原来的「翻转即反手」）──
+    er_min:          Optional[float] = None   # None = 不启用震荡闸门
+    use_exit_rules:  bool  = False            # 用实盘那套止盈止损跑
+    sizing:          str   = "equity"         # equity=满仓复利1x / fixed=固定保证金×杠杆
+    margin_usdt:     float = 10.0
+    leverage:        int   = 1
+    # 弱档：er_min 和 use_exit_rules 都开时才有意义
+    er_weak_min:     Optional[float] = None   # None = 不启用弱档
+    quick_enabled:   bool  = False
+    # 实盘口径闸门覆盖字段：_GATE_FIELDS 里的字段必须在此声明，
+    # 否则 Pydantic 会丢弃请求体里的未知字段，_live_gate 永远覆盖不到
+    er_trend:            Optional[float] = None
+    mtf_filter_enabled:  Optional[bool]  = None
+    mtf_consistency_min: Optional[float] = None
+    mtf_flip_max:        Optional[int]   = None
+    # 只在 use_exit_rules=True 时生效；不传的字段沿用面板上的实盘设置
+    tp1_pct:          Optional[float] = None
+    tp1_ratio:        Optional[float] = None
+    move_sl_to_entry: Optional[bool]  = None
+    sl_mode:          Optional[str]   = None
+    sl_pct:           Optional[float] = None
+    trail_with_st:    Optional[bool]  = None
+    # 组合过滤器（默认全关；use_symbol_filters=True 时从当前品种配置读取）
+    use_symbol_filters:    bool  = False
+    atr_filter_enabled:    bool  = False
+    atr_vol_min:           float = 0.7
+    range_filter_enabled:  bool  = False
+    range_size_max:        float = 0.15
+    range_touches_min:     int   = 3
+    adx_filter_enabled:    bool  = False
+    adx_min:               float = 20.0
+    adx_period:            int   = 14
+
+
+def _params_with(body) -> dict:
+    p = dict(vars(state.params))
+    if getattr(body, "periods", None) is not None:
+        p["periods"] = body.periods
+    if getattr(body, "multiplier", None) is not None:
+        p["multiplier"] = body.multiplier
+    return p
+
+
+def _exit_rules_of(body):
+    """以当前品种的实盘规则为基准（无品种则用全局），用 body 里显式传的字段覆盖。
+
+    这样回测默认跑的就是「这个品种实盘现在这套」，想试别的再单独传。
+    """
+    if not getattr(body, "use_exit_rules", False):
+        return None
+    st = state.stores.get(state.current_symbol)
+    base = st.exit_rules if st else state.exit_rules
+    r = replace(base, enabled=True)
+    for f in ("tp1_pct", "tp1_ratio", "move_sl_to_entry", "sl_mode", "sl_pct", "trail_with_st"):
+        v = getattr(body, f, None)
+        if v is not None:
+            r = replace(r, **{f: v})
+    return r
+
+
+def _engine_kw(body) -> dict:
+    """回测引擎的公共入参，backtest / sweep / sweep-er 三个端点共用。"""
+    quick_on = getattr(body, "quick_enabled", False)
+    return {
+        "exit_rules":  _exit_rules_of(body),
+        "sizing":      "fixed" if getattr(body, "sizing", "equity") == "fixed" else "equity",
+        "margin_usdt": max(0.1, getattr(body, "margin_usdt", 10.0)),
+        "leverage":    max(1, min(125, getattr(body, "leverage", 1))),
+        "er_weak_min": getattr(body, "er_weak_min", None) if quick_on else None,
+        # 弱档规则始终用面板上的那套（state.exit_rules_quick）
+        "exit_rules_quick": state.exit_rules_quick if quick_on else None,
+    }
+
+
+def _filter_kw(body) -> dict:
+    """组合过滤器参数。use_symbol_filters=True 时从当前品种配置读取，否则用 body 里的值。"""
+    cfg = state.cfg_for(state.current_symbol)
+    use = getattr(body, "use_symbol_filters", False)
+    return {
+        "atr_filter_enabled":   cfg.atr_filter_enabled   if use else getattr(body, "atr_filter_enabled", False),
+        "atr_vol_min":          cfg.atr_vol_min           if use else getattr(body, "atr_vol_min", 0.7),
+        "range_filter_enabled": cfg.range_filter_enabled  if use else getattr(body, "range_filter_enabled", False),
+        "range_size_max":       cfg.range_size_max        if use else getattr(body, "range_size_max", 0.15),
+        "range_touches_min":    cfg.range_touches_min     if use else getattr(body, "range_touches_min", 3),
+        "adx_filter_enabled":   cfg.adx_filter_enabled    if use else getattr(body, "adx_filter_enabled", False),
+        "adx_min":              cfg.adx_min               if use else getattr(body, "adx_min", 20.0),
+        "adx_period":           cfg.adx_period            if use else getattr(body, "adx_period", 14),
+    }
+
+
+# 实盘口径回测：这些字段在增强闸门里也按「品种配置 + 面板显式覆盖」参与，
+# 否则回测走老版简化闸门，会漏掉打分制/动量突破/假突破/等级等实盘核心判定。
+_GATE_FIELDS = (
+    "er_min", "er_weak_min", "er_trend", "quick_enabled",
+    "atr_filter_enabled", "atr_vol_min",
+    "range_filter_enabled", "range_size_max", "range_touches_min",
+    "mtf_filter_enabled", "mtf_consistency_min", "mtf_flip_max",
+    "adx_filter_enabled", "adx_min", "adx_period",
+)
+
+
+def _live_gate(body):
+    """构造实盘口径闸门：当前品种完整配置（打分制/等级/动量/假突破/ER/过滤器），
+    面板显式传过的字段覆盖。返回 TradeConfig；不适用时返回 None 走老逻辑。"""
+    if not hasattr(body, "model_dump"):
+        return None
+    cfg = state.cfg_for(state.current_symbol)
+    for k, v in body.model_dump(exclude_unset=True).items():
+        if k in _GATE_FIELDS and v is not None:
+            cfg = replace(cfg, **{k: v})
+    # 回测语义：假设自动挂单开启 —— enabled 不参与，否则品种默认关着会被全拦成 0 交易
+    return replace(cfg, enabled=True)
+
+
+async def _candles_for(tf: str, bars: int):
+    """优先用内存 deque；要的根数超出缓存时现拉 REST。"""
+    if tf not in TF_CONFIG:
+        return []
+    cached = state.candles_by_tf(tf)
+    if len(cached) >= bars:
+        return cached[-bars:]
+    loop = asyncio.get_event_loop()
+    fetched = await loop.run_in_executor(
+        None, fetch_candles, tf, bars, state.current_symbol
+    )
+    return [vars(c) for c in fetched] or cached
+
+
+@router.post("/api/backtest")
+async def backtest(body: BacktestIn):
+    candles = await _candles_for(body.tf, body.bars)
+    if not candles:
+        return {"error": f"无 {body.tf} K线数据"}
+    # 回测是纯 CPU 计算，8000 根要几十秒 —— 必须丢进线程，
+    # 否则会把事件循环整个卡住，期间实盘的止盈止损检查也是停的
+    loop = asyncio.get_event_loop()
+    r = await loop.run_in_executor(None, partial(
+        bt.run_backtest,
+        candles, _params_with(body),
+        init_cash=body.init_cash, fee_rate=body.fee_rate,
+        allow_short=body.allow_short, bias_filter=body.bias_filter,
+        er_min=body.er_min, **_engine_kw(body), **_filter_kw(body),
+        # 信号周期必须与数据周期一致，否则 1h 数据按默认 gate_tf=15m 标记信号，
+        # 会被 allow_tfs 硬检查全拦成 0 笔
+        gate_tf=body.tf,
+        # 实盘口径：打分制/动量突破/假突破/等级全部参与，面板显式字段覆盖品种配置
+        live_gate=_live_gate(body),
+    ))
+    rules = _exit_rules_of(body)
+    r.update({"tf": body.tf, "symbol": state.current_symbol,
+              "params": _params_with(body), "bias_filter": body.bias_filter,
+              "allow_short": body.allow_short, "er_min": body.er_min,
+              "sizing": body.sizing, "leverage": body.leverage,
+              "exit_rules": vars(rules) if rules else None})
+    return r
+
+
+class SweepIn(BaseModel):
+    tf:          str   = "1h"
+    bars:        int   = 800
+    fee_rate:    float = 0.0005
+    allow_short: bool  = True
+    bias_filter: bool  = False
+    period_min:  int   = 7
+    period_max:  int   = 21
+    period_step: int   = 2
+    mult_min:    float = 1.0
+    mult_max:    float = 10.0
+    mult_step:   float = 1.0
+    er_min:          Optional[float] = None
+    use_exit_rules:  bool  = False
+    sizing:          str   = "equity"
+    margin_usdt:     float = 10.0
+    leverage:        int   = 1
+    use_symbol_filters:    bool  = False
+    atr_filter_enabled:    bool  = False
+    atr_vol_min:           float = 0.7
+    range_filter_enabled:  bool  = False
+    range_size_max:        float = 0.15
+    range_touches_min:     int   = 3
+    adx_filter_enabled:    bool  = False
+    adx_min:               float = 20.0
+    adx_period:            int   = 14
+
+
+@router.post("/api/sweep")
+async def sweep(body: SweepIn):
+    """参数寻优网格。脚本默认 15/9.1 换品种基本要重调，用这个找。"""
+    candles = await _candles_for(body.tf, body.bars)
+    if not candles:
+        return {"error": f"无 {body.tf} K线数据"}
+
+    periods = list(range(body.period_min, body.period_max + 1, max(1, body.period_step)))
+    mults, m = [], body.mult_min
+    while m <= body.mult_max + 1e-9:
+        mults.append(round(m, 2))
+        m += max(0.1, body.mult_step)
+    if len(periods) * len(mults) > 400:
+        return {"error": "网格过大（上限 400 组），请调大步长或收窄范围"}
+
+    rows = await asyncio.get_event_loop().run_in_executor(None, partial(
+        bt.sweep,
+        candles, vars(state.params), periods, mults,
+        fee_rate=body.fee_rate, allow_short=body.allow_short,
+        bias_filter=body.bias_filter, er_min=body.er_min,
+        **_engine_kw(body), **_filter_kw(body),
+        gate_tf=body.tf,
+        live_gate=_live_gate(body)))
+    return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
+            "count": len(rows), "rows": rows[:60]}
+
+
+class ErSweepIn(BaseModel):
+    """扫 er_min 闸门阈值 —— 回答「震荡闸门该卡在哪」这个问题。"""
+    tf:          str   = "15m"
+    bars:        int   = 3000
+    fee_rate:    float = 0.0005
+    allow_short: bool  = True
+    bias_filter: bool  = False
+    er_list:     list  = [0.05, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30]
+    use_exit_rules:  bool  = False
+    sizing:          str   = "equity"
+    margin_usdt:     float = 10.0
+    leverage:        int   = 1
+    er_weak_min:     Optional[float] = None
+    quick_enabled:   bool  = False
+    periods:     Optional[int]   = None
+    multiplier:  Optional[float] = None
+    use_symbol_filters:    bool  = False
+    atr_filter_enabled:    bool  = False
+    atr_vol_min:           float = 0.7
+    range_filter_enabled:  bool  = False
+    range_size_max:        float = 0.15
+    range_touches_min:     int   = 3
+    adx_filter_enabled:    bool  = False
+    adx_min:               float = 20.0
+    adx_period:            int   = 14
+
+
+@router.post("/api/sweep-er")
+async def sweep_er(body: ErSweepIn):
+    """ER 闸门阈值对比。第一行是「无闸门」基准，其余按阈值升序 ——
+
+    要看的是「阈值升高时收益/回撤/交易数怎么走」的趋势，所以不按收益排序。
+    单品种样本通常只有几十笔，别拿最高那一行当结论。
+    """
+    candles = await _candles_for(body.tf, body.bars)
+    if not candles:
+        return {"error": f"无 {body.tf} K线数据"}
+
+    try:
+        ers = sorted({round(float(e), 4) for e in body.er_list if 0 <= float(e) <= 1})
+    except (TypeError, ValueError):
+        return {"error": "er_list 需为 0~1 之间的数字列表"}
+    if not ers:
+        return {"error": "er_list 为空"}
+    if len(ers) > 20:
+        return {"error": "最多 20 档（当前 %d 档）" % len(ers)}
+
+    rows = await asyncio.get_event_loop().run_in_executor(None, partial(
+        bt.sweep_er,
+        candles, _params_with(body), ers,
+        fee_rate=body.fee_rate, allow_short=body.allow_short,
+        bias_filter=body.bias_filter, **_engine_kw(body), **_filter_kw(body),
+        gate_tf=body.tf,
+        live_gate=_live_gate(body)))
+    return {"tf": body.tf, "bars": len(candles), "symbol": state.current_symbol,
+            "live_er_min": state.trade_cfg.er_min, "rows": rows}
+
+
+# ─── 推送 ────────────────────────────────────────────────────────
+
+@router.get("/api/notify/status")
+async def notify_status():
+    return {"enabled": notify.enabled, "min_grade": notify.MIN_GRADE}
+
+
+@router.post("/api/notify/test")
+async def notify_test():
+    if not notify.enabled:
+        return {"ok": False, "error": "未启用推送，请设置环境变量 SERVERCHAN_SENDKEY"}
+    ok = await notify.push(
+        "超级趋势监控台 测试推送",
+        "## ✅ 推送配置成功\n买卖信号将推送到此。",
+    )
+    return {"ok": ok}
+
+
+# ─── 自动挂单（OKX） ────────────────────────────────────────────
+
+def _public_trade_cfg() -> dict:
+    return {**vars(state.trade_cfg), **trade.credentials_public()}
+
+
+@router.get("/api/trade/config")
+async def trade_config():
+    return _public_trade_cfg()
+
+
+class CredentialsIn(BaseModel):
+    exchange:    Optional[str] = "okx"
+    api_key:     Optional[str] = None
+    api_secret:  Optional[str] = None
+    passphrase:  Optional[str] = None
+
+
+@router.get("/api/trade/credentials")
+async def get_credentials():
+    return trade.credentials_public()
+
+
+@router.post("/api/trade/credentials")
+async def set_credentials(body: CredentialsIn):
+    ex = (body.exchange or "okx").strip().lower()
+    if ex not in ("okx", "bitget"):
+        return {"ok": False, "error": "目前仅支持 OKX / Bitget"}
+    key = (body.api_key or "").strip()
+    secret = (body.api_secret or "").strip()
+    phrase = (body.passphrase or "").strip()
+
+    # 只切换交易所（沿用该所已存密钥）
+    if not (key or secret or phrase):
+        try:
+            pub = trade.set_exchange(ex)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        ping = None
+        if pub.get("configured"):
+            ping = await trade.ping(sim=state.trade_cfg.paper)
+        await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
+        return {"ok": True, "credentials": pub, "ping": ping, "config": _public_trade_cfg()}
+
+    # 写入密钥（可同时切换交易所）
+    # 切到新所且该所还没密钥时，必须三项齐全
+    bucket_ready = False
+    try:
+        # 先切所，再看该所是否已有完整密钥
+        trade.set_exchange(ex, persist=False)
+        bucket_ready = trade.configured
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    if not bucket_ready and not (key and secret and phrase):
+        return {"ok": False, "error": "首次配置需要填写 API Key、Secret、Passphrase"}
+
+    pub = trade.apply_credentials(key or None, secret or None, phrase or None,
+                                  exchange_id=ex)
+    if not pub.get("configured"):
+        return {"ok": False, "error": "密钥不完整，未保存"}
+    ping = await trade.ping(sim=state.trade_cfg.paper)
+    await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
+    return {"ok": True, "credentials": pub, "ping": ping, "config": _public_trade_cfg()}
+
+
+class TradeCfgIn(BaseModel):
+    enabled:      Optional[bool]  = None
+    paper:        Optional[bool]  = None
+    category:     Optional[str]   = None
+    leverage:     Optional[int]   = None
+    margin_mode:  Optional[str]   = None
+    amount_usdt:  Optional[float] = None
+    price_offset: Optional[float] = None
+    er_hide_below: Optional[float] = None
+    er_min:       Optional[float] = None
+    er_trend:     Optional[float] = None
+    er_weak_min:  Optional[float] = None
+    quick_enabled: Optional[bool]  = None
+    allow_grades: Optional[list]  = None
+    min_score:    Optional[int]   = None
+    allow_tfs:    Optional[list]  = None
+    cooldown_sec: Optional[int]   = None
+
+
+@router.post("/api/trade/config")
+async def set_trade_config(body: TradeCfgIn):
+    cfg = state.trade_cfg
+    if body.enabled is not None:
+        if body.enabled and not trade.configured:
+            return {"ok": False, "error": "未配置交易所 API 密钥，无法开启自动挂单"}
+        cfg.enabled = body.enabled
+    if body.paper        is not None: cfg.paper        = body.paper
+    if body.category     is not None:
+        if body.category not in ("SWAP", "SPOT"):
+            return {"ok": False, "error": "category 仅支持 SWAP（合约）/ SPOT（现货）"}
+        cfg.category = body.category
+    if body.leverage     is not None: cfg.leverage     = max(1, min(125, body.leverage))
+    if body.margin_mode  is not None:
+        if body.margin_mode not in ("cross", "isolated"):
+            return {"ok": False, "error": "margin_mode 仅支持 cross（全仓）/ isolated（逐仓）"}
+        cfg.margin_mode = body.margin_mode
+    # 两个 ER 下界互相约束，必须先算出「改完会是什么」再校验 ——
+    # 边改边校验的话，返回错误时脏值已经写进 cfg 了
+    new_er_min = max(0.0, min(1.0, body.er_min)) if body.er_min is not None else cfg.er_min
+    new_weak = (max(0.0, min(1.0, body.er_weak_min))
+                if body.er_weak_min is not None else cfg.er_weak_min)
+    if new_weak > new_er_min:
+        return {"ok": False,
+                "error": f"弱档下界 {new_weak} 不能大于标准档下界 {new_er_min} —— "
+                         f"否则弱档区间为空，开了也永远不触发"}
+    cfg.er_min, cfg.er_weak_min = new_er_min, new_weak
+
+    if body.amount_usdt  is not None: cfg.amount_usdt  = max(1.0, body.amount_usdt)
+    if body.price_offset is not None: cfg.price_offset = max(0.0, min(5.0, body.price_offset))
+    if body.er_hide_below is not None: cfg.er_hide_below = max(0.0, min(1.0, body.er_hide_below))
+    if body.er_trend     is not None: cfg.er_trend     = max(0.0, min(1.0, body.er_trend))
+    if body.allow_grades is not None: cfg.allow_grades = [g.upper() for g in body.allow_grades if g]
+    if body.min_score    is not None: cfg.min_score    = max(0, min(3, body.min_score))
+    if body.allow_tfs    is not None: cfg.allow_tfs    = [t for t in body.allow_tfs if t in TF_CONFIG]
+    if body.cooldown_sec is not None: cfg.cooldown_sec = max(0, body.cooldown_sec)
+    if body.quick_enabled is not None: cfg.quick_enabled = body.quick_enabled
+
+    # 注意：leverage / amount_usdt / allow_tfs 已下放到品种级（/api/trade/symbols），
+    # 这里改的只是「新品种默认值」，不影响已添加品种。
+
+    if cfg.enabled and not cfg.paper:
+        logger.warning("⚠️ 自动挂单已开启且指向【实盘】，将使用真实资金下单")
+        if cfg.quick_enabled:
+            logger.warning(f"⚠️ 弱档自动下单已开启：ER {cfg.er_weak_min}~{cfg.er_min} "
+                           f"的信号也会用真实资金下单（快进快出规则）")
+
+    await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
+    state.save_settings()
+
+    # ER 参数改变后重扫历史信号，更新 hidden 字段
+    state.feed.rescan_signals()
+
+    return {"ok": True, "config": _public_trade_cfg()}
+
+
+# ─── 止盈止损规则 ────────────────────────────────────────────────
+
+class ExitRulesPatch(BaseModel):
+    enabled:          Optional[bool]  = None
+    tp1_pct:          Optional[float] = None
+    tp1_ratio:        Optional[float] = None
+    tp2_pct:          Optional[float] = None   # 第二档止盈触发幅度 %
+    tp2_ratio:        Optional[float] = None   # 第二档止盈平仓比例 %
+    tp3_pct:          Optional[float] = None   # 第三档止盈触发幅度 %（0=反向信号平仓）
+    tp3_ratio:        Optional[float] = None   # 第三档止盈平仓比例 %（建议100全平）
+    tp3_mode:         Optional[str]   = None   # pct | reverse_signal
+    move_sl_to_entry: Optional[bool]  = None
+    sl_mode:          Optional[str]   = None
+    sl_pct:           Optional[float] = None
+    trail_with_st:    Optional[bool]  = None
+    reverse_close:    Optional[bool]  = None   # 反向信号平仓开关（保留兼容）
+    max_loss_enabled: Optional[bool]  = None
+    max_loss_pct:     Optional[float] = None
+    sl_buffer_atr:    Optional[float] = None
+    sl_min_pct:       Optional[float] = None
+    protect_profit_at: Optional[float] = None
+    protect_trail_pct: Optional[float] = None
+
+
+class ExitRulesIn(ExitRulesPatch):
+    symbol:           Optional[str]  = None   # 品种独立时指定品种，None=改全局默认
+    profile:          str = "normal"    # normal 标准档 / quick 快进快出档
+
+
+def _apply_exit_patch(r, patch: ExitRulesPatch):
+    """把 patch 写进 ExitRules。非法 sl_mode 返回错误字符串。"""
+    if patch is None:
+        return None
+    if patch.enabled          is not None: r.enabled = patch.enabled
+    if patch.tp1_pct          is not None: r.tp1_pct = max(0.1, min(100.0, patch.tp1_pct))
+    if patch.tp1_ratio        is not None: r.tp1_ratio = max(1.0, min(100.0, patch.tp1_ratio))
+    if patch.tp2_pct          is not None: r.tp2_pct = max(0.1, min(100.0, patch.tp2_pct))
+    if patch.tp2_ratio        is not None: r.tp2_ratio = max(0.0, min(100.0, patch.tp2_ratio))
+    # tp3_pct 允许为 0（反向信号平仓模式）
+    if patch.tp3_pct          is not None: r.tp3_pct = max(0.0, min(100.0, patch.tp3_pct))
+    if patch.tp3_ratio        is not None: r.tp3_ratio = max(0.0, min(100.0, patch.tp3_ratio))
+    if patch.tp3_mode is not None:
+        if patch.tp3_mode not in ("pct", "reverse_signal"):
+            return "tp3_mode 仅支持 pct（按幅度）/ reverse_signal（反向可下单信号全平）"
+        if hasattr(r, "tp3_mode"):
+            r.tp3_mode = patch.tp3_mode
+    if patch.move_sl_to_entry is not None: r.move_sl_to_entry = patch.move_sl_to_entry
+    if patch.sl_mode is not None:
+        if patch.sl_mode not in ("st", "pct"):
+            return "sl_mode 仅支持 st（超趋线）/ pct（百分比）"
+        r.sl_mode = patch.sl_mode
+    if patch.sl_pct           is not None: r.sl_pct = max(0.1, min(50.0, patch.sl_pct))
+    if patch.trail_with_st    is not None: r.trail_with_st = patch.trail_with_st
+    if patch.reverse_close    is not None: r.reverse_close = patch.reverse_close
+    if patch.max_loss_enabled is not None and hasattr(r, "max_loss_enabled"):
+        r.max_loss_enabled = patch.max_loss_enabled
+    if patch.max_loss_pct is not None and hasattr(r, "max_loss_pct"):
+        r.max_loss_pct = max(0.5, min(50.0, patch.max_loss_pct))
+    if patch.sl_buffer_atr is not None and hasattr(r, "sl_buffer_atr"):
+        r.sl_buffer_atr = max(0.0, min(5.0, patch.sl_buffer_atr))
+    if patch.sl_min_pct is not None and hasattr(r, "sl_min_pct"):
+        r.sl_min_pct = max(0.1, min(20.0, patch.sl_min_pct))
+    if patch.protect_profit_at is not None and hasattr(r, "protect_profit_at"):
+        r.protect_profit_at = max(0.1, min(50.0, patch.protect_profit_at))
+    if patch.protect_trail_pct is not None and hasattr(r, "protect_trail_pct"):
+        r.protect_trail_pct = max(0.0, min(20.0, patch.protect_trail_pct))
+    return None
+
+
+def _all_rules(symbol: Optional[str] = None) -> dict:
+    """symbol 指定则返回该品种的规则，否则返回全局默认规则。"""
+    if symbol:
+        st = state.stores.get(symbol)
+        if st:
+            return {"normal": vars(st.exit_rules), "quick": vars(st.exit_rules_quick)}
+    return {"normal": vars(state.exit_rules), "quick": vars(state.exit_rules_quick)}
+
+
+@router.get("/api/trade/exit-rules")
+async def get_exit_rules(symbol: Optional[str] = None):
+    return _all_rules(symbol)
+
+
+@router.post("/api/trade/exit-rules")
+async def set_exit_rules(body: ExitRulesIn):
+    if body.profile not in ("normal", "quick"):
+        return {"ok": False, "error": "profile 仅支持 normal（标准档）/ quick（快进快出档）"}
+
+    # 品种独立止盈止损
+    if body.symbol:
+        st = state.stores.get(body.symbol)
+        if not st:
+            return {"ok": False, "error": f"品种 {body.symbol} 不存在"}
+        r = st.exit_rules_quick if body.profile == "quick" else st.exit_rules
+    else:
+        # 全局默认规则
+        r = state.rules_for(body.profile)
+
+    err = _apply_exit_patch(r, body)
+    if err:
+        return {"ok": False, "error": err}
+
+    await state.broadcast({"type": "exit_rules", "data": _all_rules(body.symbol)})
+    state.save_settings()
+    return {"ok": True, "rules": _all_rules(body.symbol)}
+
+
+# ─── 交易品种管理（多品种） ──────────────────────────────────────
+
+def _symbol_row(st) -> dict:
+    return {
+        **vars(st.cfg),
+        "params": vars(st.params),
+        "exit_rules": vars(st.exit_rules),
+        "exit_rules_quick": vars(st.exit_rules_quick),
+        "last": st.ticker.last,
+        "history_loaded": st.history_loaded,
+        "position": st.position.to_dict(st.ticker.last) if st.position else None,
+    }
+
+
+def _symbols_payload() -> list:
+    return [_symbol_row(st) for st in state.stores.values() if st.cfg]
+
+
+@router.get("/api/trade/symbols")
+async def list_trade_symbols():
+    return {"symbols": _symbols_payload(), "max": MAX_SYMBOLS}
+
+
+class SymbolCfgIn(BaseModel):
+    symbol:      str
+    enabled:     Optional[bool]  = None
+    margin_usdt: Optional[float] = None
+    leverage:    Optional[int]   = None
+    allow_tfs:   Optional[list]  = None
+    sizing_mode: Optional[str]   = None   # fixed / equity_pct
+    equity_pct:  Optional[float] = None   # 1~100，净值百分比模式用
+    # ER 闸门品种独立
+    er_hide_below: Optional[float] = None
+    er_weak_min:   Optional[float] = None
+    er_min:        Optional[float] = None
+    er_trend:      Optional[float] = None
+    quick_enabled: Optional[bool]  = None
+    allow_grades:  Optional[list]  = None
+    min_score:     Optional[int]   = None
+    cooldown_sec:  Optional[int]   = None
+    # 指标参数
+    periods:     Optional[int]   = None
+    multiplier:  Optional[float] = None
+    # 组合过滤器
+    atr_filter_enabled:    Optional[bool]  = None
+    atr_vol_min:           Optional[float] = None
+    range_filter_enabled:  Optional[bool]  = None
+    range_size_max:        Optional[float] = None
+    range_touches_min:     Optional[int]   = None
+    mtf_filter_enabled:    Optional[bool]  = None
+    mtf_consistency_min:   Optional[float] = None
+    mtf_flip_max:          Optional[int]   = None
+    adx_filter_enabled:    Optional[bool]  = None
+    adx_min:               Optional[float] = None
+    adx_period:            Optional[int]   = None
+    # ── 信号打分制（平衡型方案）──
+    use_scoring:             Optional[bool]  = None
+    scoring_full_threshold:  Optional[float] = None
+    scoring_half_threshold:  Optional[float] = None
+    scoring_alert_threshold: Optional[float] = None
+    use_dynamic_threshold:   Optional[bool]  = None
+    # 评分引擎（Engine Profile）："" = 默认(v1)；"quality_filter_v2"/"v2" = V2 软分
+    score_engine:            Optional[str]   = None
+    # Shadow Mode（阶段3）：另一引擎名 = 每次判单双引擎对照落盘；"" = 关闭
+    shadow_engine:           Optional[str]   = None
+    # 4h MA30 方向门
+    ma30_dir_enabled: Optional[bool] = None
+    ma30_tf:          Optional[str]  = None
+    ma30_period:      Optional[int]  = None
+    # 双因子（低相关量能维度补充 SuperTrend）
+    flow_enabled:  Optional[bool]  = None
+    flow_mode:     Optional[str]   = None   # "veto"=否决 / "fill"=补位
+    flow_theta:    Optional[float] = None   # 补位阈值
+    flow_veto:     Optional[float] = None   # 否决阈值
+    flow_lookback: Optional[int]   = None   # 量能 z 窗口
+    flow_scale:    Optional[float] = None   # 量能 z 归一
+    # 宽幅震荡闸门（2026-10-20 BTC-1h 研究成果；品种独立开关，默认关）
+    churn_gate:        Optional[bool]  = None
+    churn_er_cap:      Optional[float] = None
+    churn_vol_floor:   Optional[float] = None
+    churn_tf:          Optional[str]   = None
+    # 止盈止损（品种独立）
+    exit_rules:            Optional[ExitRulesPatch] = None
+    exit_rules_quick:      Optional[ExitRulesPatch] = None
+    # 前端「保存所有配置」带 true：不论改了哪些字段都重扫图表信号
+    rescan:                Optional[bool] = None
+
+
+async def _load_symbol_history(sym: str):
+    """新品种历史在后台拉，不阻塞请求。完成后重扫信号并刷新前端。"""
+    st = state.stores.get(sym)
+    if st is None:
+        return
+    try:
+        await load_history(st)
+        if state.feed:
+            state.feed.rescan_signals(st)
+            await state.feed.push_snapshot()
+        logger.info(f"[{sym}] 历史加载完成，进入实时监控")
+    except Exception as e:
+        logger.warning(f"[{sym}] 历史加载失败: {e}")
+
+
+# ── 月度参数寻优结果（本地滚动寻优上传 / 前端展示，手动确认后才应用） ──
+REOPT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reopt_results.json")
+
+
+class ReoptUpload(BaseModel):
+    date:   str           = ""
+    bars:   dict          = {}
+    best:   dict          = {}
+    prev:   dict          = {}
+    drift:  dict          = {}
+    secret: Optional[str] = None
+
+
+@router.get("/api/trade/reopt-results")
+async def get_reopt_results():
+    """前端读取最近一轮寻优结果（挂单页「最新寻优」展示用）。"""
+    if not os.path.exists(REOPT_FILE):
+        return {"ok": False, "error": "尚无寻优结果，等待每月 28 日自动寻优", "results": None}
+    try:
+        with open(REOPT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"ok": True, "results": data}
+    except Exception as e:
+        logger.warning(f"读取寻优结果失败: {e}")
+        return {"ok": False, "error": f"读取失败: {e}", "results": None}
+
+
+@router.post("/api/trade/reopt-results")
+async def post_reopt_results(body: ReoptUpload):
+    """本地滚动寻优脚本上传最近一轮结果。可选 REOPT_SECRET 环境变量校验。"""
+    secret = os.environ.get("REOPT_SECRET", "")
+    if secret and body.secret != secret:
+        return {"ok": False, "error": "secret 校验失败"}
+    try:
+        tmp = REOPT_FILE + ".tmp"
+        payload = body.model_dump(exclude={"secret"})
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, REOPT_FILE)
+        return {"ok": True, "saved": payload["date"]}
+    except Exception as e:
+        logger.warning(f"保存寻优结果失败: {e}")
+        return {"ok": False, "error": f"保存失败: {e}"}
+
+
+@router.post("/api/trade/symbols")
+async def upsert_trade_symbol(body: SymbolCfgIn):
+    """新增或修改一个交易品种的下单参数。新品种默认 enabled=False。"""
+    sym = body.symbol.strip().upper()
+    st = state.stores.get(sym)
+
+    if st is None:                                   # ── 新增 ──
+        if len(state.stores) >= MAX_SYMBOLS:
+            return {"ok": False, "error": f"最多同时交易 {MAX_SYMBOLS} 个品种"}
+        if not await instruments.is_valid(sym):
+            return {"ok": False, "error": f"未知品种: {sym}"}
+        from state import SymbolStore, SymbolTradeConfig
+        cfg = SymbolTradeConfig(
+            symbol=sym, margin_usdt=state.trade_cfg.amount_usdt,
+            leverage=state.trade_cfg.leverage,
+            allow_tfs=list(state.trade_cfg.allow_tfs),
+        )
+        vs = state.view_store
+        if vs and vs.symbol == sym:                  # 正在看图的品种升级为交易品种
+            st = vs
+            st.cfg = cfg
+            state.view_store = None
+        else:
+            st = SymbolStore(sym, cfg=cfg)
+        state.stores[sym] = st
+        from executor import Executor
+        state.executors[sym] = Executor(state, st)
+        if state.feed:
+            await state.feed.add_symbol(sym)
+        if not st.history_loaded:
+            asyncio.get_event_loop().create_task(_load_symbol_history(sym))
+
+    c = st.cfg
+    if body.enabled is not None:
+        if body.enabled and not trade.configured:
+            return {"ok": False, "error": "未配置 OKX API 密钥，无法开启该品种"}
+        c.enabled = body.enabled
+    if body.margin_usdt is not None: c.margin_usdt = max(1.0, body.margin_usdt)
+    if body.leverage    is not None: c.leverage    = max(1, min(125, body.leverage))
+    if body.allow_tfs   is not None: c.allow_tfs   = [t for t in body.allow_tfs if t in TF_CONFIG]
+    if body.sizing_mode is not None:
+        if body.sizing_mode not in ("fixed", "equity_pct"):
+            return {"ok": False, "error": "sizing_mode 仅支持 fixed（固定金额）/ equity_pct（净值百分比）"}
+        c.sizing_mode = body.sizing_mode
+    if body.equity_pct  is not None: c.equity_pct  = max(1.0, min(100.0, body.equity_pct))
+
+    # ER 闸门品种独立
+    if body.er_hide_below is not None: c.er_hide_below = max(0.0, min(1.0, body.er_hide_below))
+    if body.er_min        is not None: c.er_min        = max(0.0, min(1.0, body.er_min))
+    if body.er_weak_min   is not None: c.er_weak_min   = max(0.0, min(1.0, body.er_weak_min))
+    if body.er_trend      is not None: c.er_trend      = max(0.0, min(1.0, body.er_trend))
+    if body.quick_enabled is not None: c.quick_enabled = body.quick_enabled
+    if body.allow_grades  is not None: c.allow_grades  = [g.upper() for g in body.allow_grades if g]
+    if body.min_score     is not None: c.min_score     = max(0, min(3, body.min_score))
+    if body.cooldown_sec  is not None: c.cooldown_sec  = max(0, body.cooldown_sec)
+
+    # 组合过滤器品种独立
+    if body.atr_filter_enabled   is not None: c.atr_filter_enabled   = body.atr_filter_enabled
+    if body.atr_vol_min          is not None: c.atr_vol_min          = max(0.0, min(2.0, body.atr_vol_min))
+    if body.range_filter_enabled is not None: c.range_filter_enabled = body.range_filter_enabled
+    if body.range_size_max       is not None: c.range_size_max       = max(0.01, min(1.0, body.range_size_max))
+    if body.range_touches_min    is not None: c.range_touches_min    = max(1, body.range_touches_min)
+    if body.mtf_filter_enabled   is not None: c.mtf_filter_enabled   = body.mtf_filter_enabled
+    if body.mtf_consistency_min  is not None: c.mtf_consistency_min  = max(0.0, min(1.0, body.mtf_consistency_min))
+    if body.mtf_flip_max         is not None: c.mtf_flip_max         = max(1, body.mtf_flip_max)
+    if body.adx_filter_enabled   is not None: c.adx_filter_enabled   = body.adx_filter_enabled
+    if body.adx_min              is not None: c.adx_min              = max(0.0, min(100.0, body.adx_min))
+    if body.adx_period           is not None: c.adx_period           = max(1, min(50, body.adx_period))
+
+    # 信号打分制品种独立
+    if body.use_scoring is not None: c.use_scoring = body.use_scoring
+    if body.scoring_full_threshold  is not None:
+        c.scoring_full_threshold  = max(0.0, min(100.0, body.scoring_full_threshold))
+    if body.scoring_half_threshold  is not None:
+        c.scoring_half_threshold  = max(0.0, min(100.0, body.scoring_half_threshold))
+    if body.scoring_alert_threshold is not None:
+        c.scoring_alert_threshold = max(0.0, min(100.0, body.scoring_alert_threshold))
+    if body.use_dynamic_threshold is not None: c.use_dynamic_threshold = body.use_dynamic_threshold
+    # 评分引擎（Engine Profile）；空字符串 = 默认 v1
+    if body.score_engine is not None: c.score_engine = (body.score_engine or "").strip().lower()
+    # Shadow Mode（阶段3）：另一引擎名 = 双引擎对照采集；"" = 关闭。白名单防手滑。
+    if body.shadow_engine is not None:
+        _se = (body.shadow_engine or "").strip().lower()
+        if _se not in ("", "v1", "v2", "trend_follow_v1", "quality_filter_v2"):
+            return {"ok": False,
+                    "error": "shadow_engine 仅支持 空 / v1 / v2 / trend_follow_v1 / quality_filter_v2"}
+        c.shadow_engine = _se
+
+    # 4h MA30 方向门
+    if body.ma30_dir_enabled is not None: c.ma30_dir_enabled = body.ma30_dir_enabled
+    if body.ma30_tf          is not None: c.ma30_tf          = body.ma30_tf.strip()
+    if body.ma30_period      is not None: c.ma30_period      = max(2, min(500, body.ma30_period))
+
+    # 双因子 flow（低相关量能维度补充 SuperTrend）
+    if body.flow_enabled is not None: c.flow_enabled = body.flow_enabled
+    if body.flow_mode    is not None:
+        if body.flow_mode not in ("veto", "fill"):
+            return {"ok": False, "error": "flow_mode 仅支持 veto（否决）/ fill（补位）"}
+        c.flow_mode = body.flow_mode
+    if body.flow_theta    is not None: c.flow_theta    = max(0.0, min(1.0, body.flow_theta))
+    if body.flow_veto     is not None: c.flow_veto     = max(0.0, min(1.0, body.flow_veto))
+    if body.flow_lookback is not None: c.flow_lookback = max(2, min(500, body.flow_lookback))
+    if body.flow_scale    is not None: c.flow_scale    = max(0.1, min(10.0, body.flow_scale))
+
+    # 宽幅震荡闸门（ER × ATR 坟墓象限过滤；默认关=放行，须按品种+周期验证后开）
+    if body.churn_gate      is not None: c.churn_gate      = body.churn_gate
+    if body.churn_er_cap    is not None: c.churn_er_cap    = float(body.churn_er_cap)
+    if body.churn_vol_floor is not None: c.churn_vol_floor = float(body.churn_vol_floor)
+    if body.churn_tf        is not None: c.churn_tf        = body.churn_tf.strip()
+
+    # 指标参数
+    if body.periods     is not None: st.params.periods    = max(1, body.periods)
+    if body.multiplier  is not None: st.params.multiplier = max(0.1, body.multiplier)
+
+    # 品种独立止盈止损
+    if body.exit_rules is not None:
+        err = _apply_exit_patch(st.exit_rules, body.exit_rules)
+        if err:
+            return {"ok": False, "error": err}
+    if body.exit_rules_quick is not None:
+        err = _apply_exit_patch(st.exit_rules_quick, body.exit_rules_quick)
+        if err:
+            return {"ok": False, "error": err}
+
+    # 闸门 / 指标 / 允许周期变化，或「保存所有配置」显式要求，都重扫历史信号
+    # enabled 也触发：打分制里 cfg.enabled=False → action=alert_only（will_trade=False），图表要跟着变
+    _affects_signals = any(x is not None for x in [
+        body.enabled,
+        body.er_hide_below, body.er_min, body.er_weak_min, body.er_trend,
+        body.allow_grades, body.min_score, body.quick_enabled, body.allow_tfs,
+        body.atr_filter_enabled, body.atr_vol_min,
+        body.range_filter_enabled, body.range_size_max, body.range_touches_min,
+        body.mtf_filter_enabled, body.mtf_consistency_min, body.mtf_flip_max,
+        body.adx_filter_enabled, body.adx_min, body.adx_period,
+        body.periods, body.multiplier,
+        body.use_scoring, body.scoring_full_threshold, body.scoring_half_threshold,
+        body.scoring_alert_threshold, body.use_dynamic_threshold,
+        body.score_engine,
+        body.ma30_dir_enabled, body.ma30_tf, body.ma30_period,
+        body.flow_enabled, body.flow_mode, body.flow_theta, body.flow_veto,
+        body.flow_lookback, body.flow_scale,
+    ])
+    did_rescan = False
+    if (body.rescan or _affects_signals) and state.feed:
+        state.feed.rescan_signals(st)
+        did_rescan = True
+
+    payload = {"type": "symbols", "data": _symbols_payload(), "symbol": sym}
+    if did_rescan and st.symbol == state.current_symbol:
+        payload["signals"] = list(st.signals)
+        payload["params"] = vars(st.params)
+    await state.broadcast(payload)
+    state.save_settings()
+    return {"ok": True, "symbols": _symbols_payload()}
+
+
+@router.delete("/api/trade/symbols/{symbol}")
+async def delete_trade_symbol(symbol: str):
+    sym = symbol.strip().upper()
+    st = state.stores.get(sym)
+    if st is None:
+        return {"ok": False, "error": f"{sym} 不在交易列表"}
+    if st.position and st.position.qty > 0:
+        return {"ok": False, "error": f"{sym} 有未平仓位，先平仓再移除"}
+    if len(state.stores) <= 1:
+        return {"ok": False, "error": "至少保留一个品种"}
+
+    state.stores.pop(sym, None)
+    state.executors.pop(sym, None)
+    if sym == state.current_symbol:
+        st.cfg = None                      # 还在看图 → 降级为仅看图 store
+        state.view_store = st
+    elif state.feed:
+        await state.feed.remove_symbol(sym)
+
+    await state.broadcast({"type": "symbols", "data": _symbols_payload()})
+    state.save_settings()
+    return {"ok": True, "symbols": _symbols_payload()}
+
+
+# ─── 持仓 ────────────────────────────────────────────────────────
+
+@router.get("/api/trade/position")
+async def get_position():
+    """旧接口：图表品种的持仓（兼容保留）。全品种用 /api/trade/positions。"""
+    pos = state.position
+    return {
+        "position": pos.to_dict(state.ticker.last) if pos else None,
+        "closed":   state.closed[-20:],
+    }
+
+
+@router.get("/api/trade/positions")
+async def get_positions_all():
+    """全品种持仓 + 合并的已平仓历史（带 sym 字段，按时间升序）。"""
+    closed = [row for st in state.stores.values() for row in st.closed]
+    closed.sort(key=lambda r: r.get("entry_ts") or 0)
+    return {
+        "positions": {sym: st.position.to_dict(st.ticker.last)
+                      for sym, st in state.stores.items() if st.position},
+        "closed": closed[-30:],
+    }
+
+
+class CloseIn(BaseModel):
+    symbol: Optional[str] = None    # 不传 = 图表当前品种
+
+
+@router.post("/api/trade/close")
+async def close_position(body: CloseIn = None):
+    """手动平掉指定品种的全部持仓。"""
+    sym = (body.symbol.strip().upper() if body and body.symbol
+           else state.current_symbol)
+    ex = state.executors.get(sym)
+    if not ex:
+        return {"ok": False, "error": f"{sym} 不在交易列表或执行器未初始化"}
+    return await ex.close_manual("手动平仓")
+
+
+@router.get("/api/trade/exchange-position")
+async def exchange_position(symbol: Optional[str] = None):
+    """查交易所实际持仓，用于和本地状态机对账。"""
+    return await trade.get_positions(symbol or state.current_symbol,
+                                     state.trade_cfg.category,
+                                     sim=state.trade_cfg.paper)
+
+
+class LeverageIn(BaseModel):
+    leverage: int
+    symbol:   Optional[str] = None
+
+
+@router.post("/api/trade/leverage")
+async def set_lev(body: LeverageIn):
+    sym = (body.symbol or state.current_symbol).strip().upper()
+    lev = max(1, min(125, body.leverage))
+    r = await trade.set_leverage(sym, lev,
+                                 state.trade_cfg.margin_mode, sim=state.trade_cfg.paper)
+    if r.get("ok"):
+        st = state.stores.get(sym)
+        if st and st.cfg:
+            st.cfg.leverage = lev
+            await state.broadcast({"type": "symbols", "data": _symbols_payload()})
+        else:
+            state.trade_cfg.leverage = lev
+            await state.broadcast({"type": "trade_config", "data": _public_trade_cfg()})
+        state.save_settings()
+    return r
+
+
+@router.get("/api/trade/orders")
+async def trade_orders(limit: int = 50):
+    return state.orders[-limit:]
+
+
+@router.get("/api/trade/history")
+async def trade_history(months: int = 3, sym: Optional[str] = None, recent: int = 50):
+    """落盘账本的总账（重启不丢）：按品种的已平仓笔数 / 已实现盈亏 / 胜负。
+
+    months=0 表示统计全部历史；sym 只筛单个品种；recent 是回传的最近笔数。
+    """
+    return trade_log.summary(months=months, sym=sym, recent=recent)
+
+
+@router.get("/api/trade/ping")
+async def trade_ping():
+    """密钥自检：查一次账户资产，顺便确认走的是模拟盘还是实盘。"""
+    return await trade.ping(sim=state.trade_cfg.paper)
+
+
+@router.get("/api/regime")
+async def get_regime(tf: str = "15m"):
+    """当前周期的行情状态（震荡 / 震荡边缘 / 弱趋势 / 趋势），闸门就是按这个判的。"""
+    candles = state.candles_by_tf(tf)
+    cfg = state.trade_cfg
+    er = regime.efficiency_ratio(candles)
+    return {"tf": tf,
+            **regime.classify(er, cfg.er_min, cfg.er_trend,
+                              cfg.er_weak_min, cfg.quick_enabled),
+            "er_min": cfg.er_min, "er_trend": cfg.er_trend,
+            "er_weak_min": cfg.er_weak_min, "quick_enabled": cfg.quick_enabled,
+            "window": regime.ER_WINDOW}
+
+
+class TestOrderIn(BaseModel):
+    side:   str   = "buy"
+    amount: Optional[float] = None
+    paper:  Optional[bool]  = None
+
+
+@router.post("/api/trade/test-order")
+async def test_order(body: TestOrderIn):
+    """手动挂一笔测试单，验证密钥、杠杆和下单链路是否通。
+
+    挂在盘口 ±3%（合约 LimitPriceRatio 上限 5%），正常不成交，可撤单。
+    这笔单不会进入持仓状态机 —— 只验证链路，不参与止盈止损。
+    """
+    if not trade.configured:
+        return {"ok": False, "error": "未配置 OKX API 密钥"}
+    last = state.ticker.last
+    if not last:
+        return {"ok": False, "error": "暂无最新价"}
+
+    cfg = state.trade_cfg
+    paper = cfg.paper if body.paper is None else body.paper
+    if cfg.category != "SPOT":
+        await trade.set_leverage(state.current_symbol, cfg.leverage,
+                                 cfg.margin_mode, sim=paper)
+
+    px = last * (0.97 if body.side == "buy" else 1.03)
+    r = await trade.place_order(
+        state.current_symbol, body.side, px,
+        margin_usdt=body.amount or cfg.amount_usdt,
+        leverage=cfg.leverage, category=cfg.category, mgn_mode=cfg.margin_mode,
+        client_oid=f"t{int(time.time())}",
+        sim=paper, ref_price=last,
+    )
+    r["note"] = "测试单挂在盘口 ±3%，正常不成交，可撤单；不进入持仓管理"
+    if r.get("ok"):
+        state.add_order({**r, "kind": "test", "tf": "test", "sig_type": body.side, "trigger": last})
+    return r
+
+
+class CancelIn(BaseModel):
+    orderId: str
+    symbol:  Optional[str] = None
+
+
+@router.post("/api/trade/cancel")
+async def cancel_order(body: CancelIn):
+    return await trade.cancel(body.symbol or state.current_symbol, body.orderId,
+                              state.trade_cfg.category, sim=state.trade_cfg.paper)
+
+
+# ─── WebSocket ───────────────────────────────────────────────────
+
+SNAPSHOT_CAP = 500      # 单周期快照最多带多少根，控制 payload 体积
+
+
+@router.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    state.clients.add(ws)
+    logger.info(f"客户端连接，共 {len(state.clients)} 个")
+    try:
+        candles = {
+            tf: (lst[-SNAPSHOT_CAP:] if len(lst) > SNAPSHOT_CAP else lst)
+            for tf, lst in state.all_candles().items()
+        }
+        await ws.send_json({
+            "type":    "snapshot",
+            "symbol":  state.current_symbol,
+            "ticker":  vars(state.ticker),
+            "candles": candles,
+            "signals": state.signals,
+            "params":  vars(state.params),
+            "tfs":     [{"tf": tf, "label": cfg["label"]} for tf, cfg in TF_CONFIG.items()],
+            "bias_tfs": BIAS_TFS,
+            "trade_config": _public_trade_cfg(),
+            "exit_rules": _all_rules(),
+            "orders":  state.orders[-50:],
+            "position": state.position.to_dict(state.ticker.last) if state.position else None,
+            "closed":  state.closed[-20:],
+            # 多品种：所有品种的最新价 / 持仓 / 品种配置
+            "tickers":   {sym: vars(st.ticker) for sym, st in state.stores.items()},
+            "positions": {sym: st.position.to_dict(st.ticker.last)
+                          for sym, st in state.stores.items() if st.position},
+            "symbols":   _symbols_payload(),
+            "max_symbols": MAX_SYMBOLS,
+        })
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        state.clients.discard(ws)
+        logger.info(f"客户端断开，剩余 {len(state.clients)} 个")

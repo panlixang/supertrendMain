@@ -1,0 +1,55 @@
+[数据] SKHYNIX-USDT 1h K线 2978 根, 时间 1781067600000 ~ 1791784800000
+[参数] ST 15x2.5 src=close change_atr=True | MTF 20/50 EMA
+[交易] margin=50.0U leverage=10x notional=500.0U allow_tfs=['1h']
+[出场] tp1=1.2%/50.0% sl=st 3.0% trail=True tp2/tp3=开
+================================================================
+SKHYNIX-USDT 首页策略回测（线上真实参数）
+K线: 1h  2978 根  时间窗 1781067600000 ~ 1791784800000
+参数: ST 15x2.5 close chg_atr=True | MTF 20/50 EMA
+交易: 50.0U x10 = 500.0U  入场=信号收盘  冷却=300s
+出场: tp1=1.2%/50.0% 保本  sl=st 3.0%  trail=True
+闸门: use_scoring=True full/half/alert=70.0/70.0/60.0
+----------------------------------------------------------------
+全样本: 笔数=39  收益=+15.00%  PF=inf 胜率=92.3%  盈亏=+75.00U
+IS(前70%): 笔数=27  收益=+10.50%  PF=inf 胜率=92.6%
+OOS(后30%): 笔数=12  收益=+4.50%  PF=inf 胜率=91.7%
+----------------------------------------------------------------
+最大回撤: 4.94%   末净值: 575.00U
+================================================================
+逐笔明细（前20笔）:
+  short entry=1890.250 exit=1867.567 pnl=+3.00U  tp1
+  short entry=1890.250 exit=1890.250 pnl=+0.00U  止损
+  short entry=1673.890 exit=1653.803 pnl=+3.00U  tp1
+  short entry=1673.890 exit=1673.890 pnl=+0.00U  止损
+  short entry=1426.040 exit=1408.928 pnl=+3.00U  tp1
+  short entry=1426.040 exit=1404.649 pnl=+1.50U  tp2
+  short entry=1426.040 exit=1411.780 pnl=+1.50U  止损
+  short entry=1223.380 exit=1208.699 pnl=+3.00U  tp1
+  short entry=1223.380 exit=1205.029 pnl=+1.50U  tp2
+  short entry=1223.380 exit=1211.146 pnl=+1.50U  止损
+  short entry=978.930 exit=967.183 pnl=+3.00U  tp1
+  short entry=978.930 exit=964.246 pnl=+1.50U  tp2
+  short entry=978.930 exit=969.141 pnl=+1.50U  止损
+  short entry=1000.520 exit=988.514 pnl=+3.00U  tp1
+  short entry=1000.520 exit=985.512 pnl=+1.50U  tp2
+  short entry=1000.520 exit=990.515 pnl=+1.50U  止损
+  short entry=1228.690 exit=1213.946 pnl=+3.00U  tp1
+  short entry=1228.690 exit=1210.260 pnl=+1.50U  tp2
+  short entry=1228.690 exit=1216.403 pnl=+1.50U  止损
+  short entry=1352.460 exit=1336.230 pnl=+3.00U  tp1
+  ... 共 39 笔
+Traceback (most recent call last):
+  File "d:\������Ŀ����\supertrendMain\backend\backtest\SKHYNIX\run_skhynix_backtest.py", line 9, in <module>
+    run_backtest(
+    ~~~~~~~~~~~~^
+        db_symbol="SKHYNIX-USDT",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        out_name="skhynix_backtest_1h.txt",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "d:\������Ŀ����\supertrendMain\backend\backtest\engine.py", line 311, in run_backtest
+    with open(os.path.join(out_dir, out_name), "w", encoding="utf-8") as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: 'd:\\������Ŀ����\\supertrendMain\\backend\\backtest\\SKHYNIX\\skhynix_backtest_1h.txt'

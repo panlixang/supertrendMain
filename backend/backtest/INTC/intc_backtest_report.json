@@ -1,0 +1,154 @@
+{
+  "symbol": "INTC-USDT-SWAP",
+  "tf": "1h",
+  "params": {
+    "st": {
+      "periods": 15,
+      "multiplier": 9.1,
+      "src": "hl2",
+      "change_atr": true
+    },
+    "bias": {
+      "fast_len": 20,
+      "slow_len": 50,
+      "ma_type": "EMA"
+    },
+    "exit": {
+      "tp1_pct": 1.5,
+      "tp1_ratio": 70.0,
+      "tp2_pct": 2.0,
+      "tp2_ratio": 40.0,
+      "tp3_pct": 3.5,
+      "tp3_ratio": 100.0,
+      "tp3_mode": "pct",
+      "sl_pct": 2.0,
+      "sl_mode": "st",
+      "sl_buffer_atr": 0.5,
+      "sl_min_pct": 1.2,
+      "move_sl_to_entry": true,
+      "trail_with_st": true,
+      "protect_profit_at": 1.5,
+      "protect_trail_pct": 0.8,
+      "max_loss_enabled": false,
+      "max_loss_pct": 10.0,
+      "enabled": true
+    },
+    "leverage": 10
+  },
+  "trades": 12,
+  "win_rate": 100.0,
+  "total_return_pct": 18.11,
+  "total_return_usdt": 90.56,
+  "profit_factor": "inf",
+  "avg_win_pct": 1.5093,
+  "avg_loss_pct": 0.0,
+  "max_drawdown_pct": 0.0,
+  "is": {
+    "trades": 8,
+    "win_rate": 100.0,
+    "total_pct": 11.92
+  },
+  "oos": {
+    "trades": 4,
+    "win_rate": 100.0,
+    "total_pct": 6.19
+  },
+  "trades_detail": [
+    {
+      "side": "short",
+      "entry": 120.12,
+      "exit": 120.12,
+      "exit_i": 180,
+      "pnl_pct": 1.2613,
+      "reason": "stop"
+    },
+    {
+      "side": "long",
+      "entry": 134.27,
+      "exit": 136.035,
+      "exit_i": 239,
+      "pnl_pct": 1.9687,
+      "reason": "stop"
+    },
+    {
+      "side": "short",
+      "entry": 100.06,
+      "exit": 100.06,
+      "exit_i": 898,
+      "pnl_pct": 1.0506,
+      "reason": "stop"
+    },
+    {
+      "side": "short",
+      "entry": 96.18,
+      "exit": 92.47,
+      "exit_i": 1095,
+      "pnl_pct": 1.8467,
+      "reason": "tp_done"
+    },
+    {
+      "side": "short",
+      "entry": 87.89,
+      "exit": 87.0111,
+      "exit_i": 1330,
+      "pnl_pct": 1.3138,
+      "reason": "stop"
+    },
+    {
+      "side": "long",
+      "entry": 96.39,
+      "exit": 97.3539,
+      "exit_i": 1354,
+      "pnl_pct": 1.4234,
+      "reason": "stop"
+    },
+    {
+      "side": "long",
+      "entry": 106.0,
+      "exit": 106.0,
+      "exit_i": 1572,
+      "pnl_pct": 1.113,
+      "reason": "stop"
+    },
+    {
+      "side": "short",
+      "entry": 101.06,
+      "exit": 97.35,
+      "exit_i": 1689,
+      "pnl_pct": 1.9404,
+      "reason": "tp_done"
+    },
+    {
+      "side": "short",
+      "entry": 88.15,
+      "exit": 87.2685,
+      "exit_i": 2026,
+      "pnl_pct": 1.3171,
+      "reason": "stop"
+    },
+    {
+      "side": "short",
+      "entry": 99.41,
+      "exit": 96.05,
+      "exit_i": 2336,
+      "pnl_pct": 1.9087,
+      "reason": "tp_done"
+    },
+    {
+      "side": "long",
+      "entry": 123.77,
+      "exit": 123.77,
+      "exit_i": 2771,
+      "pnl_pct": 1.2996,
+      "reason": "stop"
+    },
+    {
+      "side": "short",
+      "entry": 114.74,
+      "exit": 113.54,
+      "exit_i": 2880,
+      "pnl_pct": 1.6684,
+      "reason": "stop"
+    }
+  ]
+}

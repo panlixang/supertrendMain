@@ -1,0 +1,36 @@
+================================================================
+CL-USDT 首页策略回测（线上真实参数）
+K线: 1h  5322 根  时间窗 1772625600000 ~ 1791781200000
+参数: ST 19x2.5 hl2 chg_atr=True | MTF 20/50 EMA
+交易: 50.0U x10 = 500.0U  入场=信号收盘  冷却=300s
+出场: tp1=1.2%/30.0% 保本  sl=st 3.0%  trail=True
+闸门: use_scoring=True full/half/alert=50.0/50.0/40.0
+----------------------------------------------------------------
+全样本: 笔数=107  收益=+18.58%  PF=1.58 胜率=70.1%  盈亏=+92.89U
+IS(前70%): 笔数=74  收益=+7.90%  PF=1.28 胜率=70.3%
+OOS(后30%): 笔数=33  收益=+10.68%  PF=3.62 胜率=69.7%
+----------------------------------------------------------------
+最大回撤: 17.24%   末净值: 592.89U
+================================================================
+逐笔明细（前20笔）:
+  short entry=103.733 exit=106.940 pnl=-15.46U  极端止损
+  long  entry=90.315 exit=91.399 pnl=+1.80U  tp1
+  long  entry=90.315 exit=93.024 pnl=+4.20U  tp2
+  long  entry=90.315 exit=91.218 pnl=+2.10U  止损
+  long  entry=97.278 exit=98.445 pnl=+1.80U  tp1
+  long  entry=97.278 exit=97.278 pnl=+0.00U  止损
+  short entry=92.470 exit=91.360 pnl=+1.80U  tp1
+  short entry=92.470 exit=89.696 pnl=+4.20U  tp2
+  short entry=92.470 exit=91.545 pnl=+2.10U  止损
+  long  entry=97.900 exit=99.075 pnl=+1.80U  tp1
+  long  entry=97.900 exit=97.900 pnl=+0.00U  止损
+  short entry=94.240 exit=93.109 pnl=+1.80U  tp1
+  short entry=94.240 exit=91.413 pnl=+4.20U  tp2
+  short entry=94.240 exit=93.298 pnl=+2.10U  止损
+  long  entry=94.000 exit=95.128 pnl=+1.80U  tp1
+  long  entry=94.000 exit=96.820 pnl=+4.20U  tp2
+  long  entry=94.000 exit=94.940 pnl=+2.10U  止损
+  short entry=95.200 exit=94.058 pnl=+1.80U  tp1
+  short entry=95.200 exit=92.344 pnl=+4.20U  tp2
+  short entry=95.200 exit=89.930 pnl=+11.62U  反向信号平仓
+  ... 共 107 笔

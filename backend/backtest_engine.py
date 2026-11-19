@@ -1,0 +1,663 @@
+"""
+SuperTrend 策略回测
+
+对应 Pine 的：
+    if buySignal  and window() → strategy.entry('BUY',  strategy.long)
+    if sellSignal and window() → strategy.entry('SELL', strategy.short)
+strategy.entry 反向进场会自动平掉原仓，所以这里就是「永远满仓、多空反手」。
+
+在原脚本基础上补的开关（Pine 版没有，实盘要用）：
+  allow_short=False   只做多，翻空时平仓观望
+  bias_filter         用 MTF Bias（fast/slow MA）过滤：只接受与偏向一致的开仓，
+                      逆向信号只平仓不反手 —— 把 Bias 表从「看」变成「用」
+  er_min              震荡闸门，同 regime.evaluate：ER 低于阈值的信号只提醒不开仓
+  exit_rules          止盈止损，直接复用 position.py 那套实盘状态机
+  sizing              equity=满仓复利1x（原行为）/ fixed=固定保证金×杠杆（对齐实盘）
+
+后三个默认关闭 —— 不传就是原来的「翻转即反手、永远满仓」行为。
+
+⚠️ 闸门只拦【开仓】，不拦【平反向仓】—— 严格还原 executor.on_signal：
+   反向信号先无条件平掉手上的仓，再判闸门决定要不要开新仓。不这样还原，
+   被拦的信号会让仓位一直挂着，结果差很多。
+
+⚠️ 盘中止盈止损只有 OHLC、没有 tick，用极值近似：止损按最低/最高价判定但
+   【按止损价成交】，同一根同时触及止损和止盈时算止损（保守，也和
+   position.check 自身的优先级一致）。实盘是秒级 tick 检查，会有偏差。
+
+成交价用翻转当根收盘（信号收盘确认），手续费按成交额双边计。
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from typing import Callable
+
+import position
+import strategy
+from indicators import ma, st_signals, super_trend
+from integration import enhanced_signal_handler
+from position import ExitRules
+from regime import TradeConfig, classify, efficiency_ratio
+from signal_v3 import features_from_candles, v3_decide
+
+try:
+    from position_enhanced import (
+        EnhancedExitRules, check_enhanced, apply_tp_enhanced, trail_enhanced,
+        enhanced_initial_stop,
+    )
+    _HAS_ENH = True
+except ImportError:
+    EnhancedExitRules = None  # type: ignore
+    _HAS_ENH = False
+
+# 不启用止盈止损时用的哨兵：check() 见 enabled=False 直接返回 None，
+# trail_with_st 也关掉，确保走的是原来那条「只靠翻转进出」的路径。
+_OFF = ExitRules(enabled=False, trail_with_st=False)
+
+
+def _is_enhanced(rules) -> bool:
+    return _HAS_ENH and isinstance(rules, EnhancedExitRules)
+
+
+def _rules_active(rules) -> bool:
+    """原版 ExitRules 靠 enabled；增强版 enabled=False 只关价格止损，止盈仍有效。"""
+    if rules is None:
+        return False
+    if _is_enhanced(rules):
+        return True
+    return bool(rules.enabled)
+
+
+def _bias_series(candles: list[dict], p: dict) -> list[int | None]:
+    """逐根的 fast MA vs slow MA 偏向，用于回测中按时间对齐过滤。"""
+    closes = [c["c"] for c in candles]
+    fast = ma(closes, p.get("fast_len", 20), p.get("ma_type", "EMA"))
+    slow = ma(closes, p.get("slow_len", 50), p.get("ma_type", "EMA"))
+    out = []
+    for f, s in zip(fast, slow):
+        out.append(None if f is None or s is None else (1 if f >= s else -1))
+    return out
+
+
+def run_backtest(
+    candles: list[dict],
+    p: dict,
+    init_cash: float = 10000.0,
+    fee_rate: float = 0.0005,
+    allow_short: bool = True,
+    bias_filter: bool = False,
+    er_min: float | None = None,
+    exit_rules: ExitRules | None = None,
+    sizing: str = "equity",
+    margin_usdt: float = 10.0,
+    leverage: int = 1,
+    er_weak_min: float | None = None,
+    exit_rules_quick: ExitRules | None = None,
+    atr_filter_enabled: bool = False,
+    atr_vol_min: float = 0.7,
+    range_filter_enabled: bool = False,
+    range_size_max: float = 0.15,
+    range_touches_min: int = 3,
+    adx_filter_enabled: bool = False,
+    adx_min: float = 20.0,
+    adx_period: int = 14,
+    live_gate: TradeConfig | None = None,
+    gate_tf: str = "15m",
+    candles_by_tf: dict[str, list[dict]] | None = None,
+    gate_fn: Callable | None = None,
+    score_only_gate: bool = False,
+    min_total_score: float = 60.0,
+    block_untradable: bool = False,
+    full_trades: bool = False,
+    trend_align: dict[int, int] | None = None,
+    max_loss_pct: float | None = None,
+    enhanced_stop: bool = False,
+    v3_filter: bool = False,
+    v3_min_score: float = 0.0,
+    block_if: Callable[[int], bool] | None = None,
+) -> dict:
+    """block_if: 传入 bar 的 ts(ms)，返回 True = **禁止在该根开新仓**。
+
+    只拦【开仓】，不拦【平反向仓】—— 与 ER / 评分闸门同一条原则（严格还原
+    executor.on_signal：反向信号先无条件平掉手上的仓，再判闸门要不要开新仓）。
+    否则遇到休市日信号，仓位会被无限期挂住，回测结果失真。
+    典型用法：周末休市不开单 block_if=lambda ts: et_weekday(ts) >= 5。
+    """
+    periods = p.get("periods", 15)
+    if len(candles) < periods + 5:
+        return {"error": "K线不足，无法回测"}
+
+    st = super_trend(
+        [c["o"] for c in candles], [c["h"] for c in candles],
+        [c["l"] for c in candles], [c["c"] for c in candles],
+        periods=periods, multiplier=p.get("multiplier", 9.1),
+        src=p.get("src", "hl2"), change_atr=p.get("change_atr", True),
+    )
+    if not st.get("flips"):
+        return {"error": "该区间内无翻转信号（可调小 ATR 倍数或加长区间）"}
+
+    biases = _bias_series(candles, p) if bias_filter else []
+    flip_at = {f["i"]: f["type"] for f in st["flips"]}
+    trend, up, dn = st["trend"], st["up"], st["dn"]
+    sig_by_ts = {}
+    if live_gate or v3_filter:
+        if live_gate:
+            # 与实盘一致：信号要带 grade（A/B/C），否则打分制里 grade=None 不在
+            # allow_grades 会一律 alert_only，回测全被拦成 0 交易
+            try:
+                verdict = strategy.mtf_bias(candles_by_tf or {gate_tf: candles}, p)["verdict"]
+            except Exception:
+                verdict = "mixed"
+            for s in st_signals(candles, st, gate_tf):
+                s["grade"] = strategy.grade(s, verdict)
+                sig_by_ts[s["ts"]] = s
+        if v3_filter:
+            for s in st_signals(candles, st, gate_tf):
+                sig_by_ts[s["ts"]] = s
+
+    def _cbtf_at(i: int) -> dict[str, list[dict]]:
+        ts = candles[i]["ts"]
+        if not candles_by_tf:
+            return {gate_tf: candles[: i + 1]}
+        out: dict[str, list[dict]] = {}
+        for tf, arr in candles_by_tf.items():
+            sl = [c for c in arr if c["ts"] <= ts]
+            if sl:
+                out[tf] = sl
+        return out or {gate_tf: candles[: i + 1]}
+
+    # 两档出场规则。弱档启用条件：
+    #  - live_gate（评分/实盘闸门）模式：只要传了弱档规则就启用，profile 由
+    #    score_signal 内部 classify 算出（ER∈[er_weak_min,er_min) → "quick"）。
+    #  - 老的非 live_gate 模式：三个条件都齐才算启用（有弱档下界、有弱档规则），
+    #    缺任何一个都退回「低于 er_min 一律拦」的老行为。
+    # 增强版：enabled=False 仍保留规则（只关价格止损，三级止盈照常）。
+    rules_normal = exit_rules if _rules_active(exit_rules) else _OFF
+    quick_on = (_rules_active(exit_rules_quick)
+                and (live_gate is not None
+                     or (er_min is not None and er_weak_min is not None)))
+    rules_by = {"normal": rules_normal,
+                "quick": exit_rules_quick if quick_on else _OFF}
+    lev = max(1, int(leverage))
+    fixed = sizing == "fixed"
+
+    equity = init_cash       # 已实现权益（现金）
+    pos: position.Position | None = None
+    cur: dict | None = None  # 当前这笔的累计记录（一笔可能分多次离场）
+    trades: list[dict] = []
+    curve: list[dict] = []
+    peak = init_cash
+    max_dd = 0.0
+    n_block = n_tp1 = n_tp2 = n_tp3 = n_stop = n_rev = n_liq = n_skip = 0
+    n_ml = 0
+    n_align_block = 0
+    n_block_rest = 0
+
+    def st_line(i: int) -> float | None:
+        """该根的超趋线值，同 feed._st_line：多头取 up、空头取 dn。"""
+        if trend[i] is None:
+            return None
+        return up[i] if trend[i] == 1 else dn[i]
+
+    def unrealized(price: float) -> float:
+        return pos.float_pnl(price) if pos else 0.0
+
+    def liq_price() -> float | None:
+        """爆仓价近似 —— 不含维持保证金率，是乐观估计。仅 fixed + 杠杆>1 时有意义。"""
+        if not fixed or lev <= 1 or not pos:
+            return None
+        return pos.entry * (1 - 1 / lev) if pos.long else pos.entry * (1 + 1 / lev)
+
+    def close_part(i: int, price: float, qty: float, reason: str):
+        """部分/全部离场。qty 单位同 pos.qty（ct_val=1，即币数）。"""
+        nonlocal equity, pos, cur
+        gross = qty * (price - pos.entry) * (1 if pos.long else -1)
+        fee = qty * price * fee_rate
+        equity += gross - fee
+        cur["pnl"] += gross - fee
+        cur["gross"] += gross
+        cur["exits"].append({
+            "px": round(price, 6), "qty": qty,
+            "reason": reason, "ts": candles[i]["ts"],
+        })
+        position.apply_close(pos, price, qty, reason)
+        if pos.qty <= 0:
+            finalize(i)
+
+    def finalize(i: int):
+        nonlocal pos, cur
+        ex = cur["exits"]
+        tot_q = sum(e["qty"] for e in ex) or 1.0
+        avg_exit = sum(e["px"] * e["qty"] for e in ex) / tot_q
+        base = cur["qty0"] * cur["entry"]
+        trades.append({
+            "side":     cur["side"],
+            "entry_ts": cur["entry_ts"], "exit_ts": ex[-1]["ts"],
+            "entry":    round(cur["entry"], 6), "exit": round(avg_exit, 6),
+            "pnl_pct":  round(cur["gross"] / base * 100, 2) if base else 0.0,
+            "pnl":      round(cur["pnl"], 2),
+            "bars":     i - cur["entry_i"],
+            "exits":    ex,
+            "reason":   ex[-1]["reason"],
+            "profile":  cur.get("profile", "normal"),
+        })
+        pos, cur = None, None
+
+    def open_pos(i: int, price: float, typ: str, profile: str = "normal",
+                 mul: float = 1.0):
+        """mul = 仓位系数（0.5 = 半仓，对齐实盘 executor 保证金减半）。"""
+        nonlocal equity, pos, cur, n_skip
+        if fixed:
+            m = margin_usdt * mul
+            if equity < m:
+                n_skip += 1
+                return
+            notional = m * lev
+            qty = notional / price
+            equity -= qty * price * fee_rate
+        else:
+            # 这三行的写法要和改造前逐字一致，否则浮点结果会有微小漂移
+            qty = equity / price
+            equity -= qty * price * fee_rate
+            qty = equity / price
+            if mul != 1.0:
+                qty *= mul
+
+        sig = {"price": price, "type": typ, "line": st_line(i)}
+        # enhanced_stop: 对齐实盘 enhanced_initial_stop（3% 保底 / sl_min 下限 /
+        # ST∓0.5ATR 外扩取最远）。默认 False 保持历史口径（直接用 ST 线）。
+        if enhanced_stop and _HAS_ENH:
+            _a = (st.get("atr") or [None] * len(candles))[i]
+            try:
+                stop = enhanced_initial_stop(sig, rules_by[profile], _a, 1)
+            except Exception:
+                stop = position.initial_stop(sig, rules_by[profile])
+        else:
+            stop = position.initial_stop(sig, rules_by[profile])
+        pos = position.Position(
+            symbol="BT", side="long" if typ == "buy" else "short", tf="",
+            entry=price, qty=qty, init_qty=qty,
+            stop=stop,
+            leverage=lev, entry_ts=candles[i]["ts"], ct_val=1.0, profile=profile,
+        )
+        pos.tp2_done = False
+        pos.tp3_done = False
+        pos.max_unrealized_pct = 0.0
+        cur = {
+            "side": pos.side, "entry": price, "entry_ts": candles[i]["ts"],
+            "entry_i": i, "qty0": qty, "pnl": 0.0, "gross": 0.0, "exits": [],
+            "profile": profile,
+        }
+
+    def take_profit(i: int, act: dict, rules):
+        """按触发价分批止盈。增强版比例相对 init_qty；第三档平剩余。"""
+        nonlocal equity, pos, cur, n_tp1, n_tp2, n_tp3
+        stage = {"tp1": 1, "tp2": 2, "tp3": 3}.get(act["action"], 1)
+        if act.get("price") is not None:
+            trig = act["price"]
+        else:
+            pct = getattr(rules, f"tp{stage}_pct", rules.tp1_pct)
+            trig = pos.entry * (1 + pct / 100) if pos.long else pos.entry * (1 - pct / 100)
+        if act["action"] == "tp3" and _is_enhanced(rules):
+            q = pos.qty
+        elif _is_enhanced(rules):
+            base = pos.init_qty if pos.init_qty else pos.qty
+            q = min(pos.qty, base * act["ratio"] / 100)
+        else:
+            q = pos.qty * act["ratio"] / 100
+        if q <= 0:
+            return
+        gross = q * (trig - pos.entry) * (1 if pos.long else -1)
+        fee = q * trig * fee_rate
+        equity += gross - fee
+        cur["pnl"] += gross - fee
+        cur["gross"] += gross
+        cur["exits"].append({
+            "px": round(trig, 6), "qty": q,
+            "reason": f"止盈{stage}", "ts": candles[i]["ts"],
+        })
+        if _is_enhanced(rules):
+            apply_tp_enhanced(pos, trig, q, rules, stage)
+        else:
+            position.apply_tp1(pos, trig, q, rules)
+        if stage == 1:
+            n_tp1 += 1
+        elif stage == 2:
+            n_tp2 += 1
+        else:
+            n_tp3 += 1
+        if pos.qty <= 0:
+            finalize(i)
+
+    def eval_open_gate(i: int, typ: str) -> tuple[bool, str, float]:
+        """此根 typ 方向是否过闸门可开仓（与 executor 一致）。
+
+        返回 (是否开仓, profile, 仓位系数)：仓位系数 0.5 表示半仓，
+        对齐实盘 executor（trade_half → 保证金减半）。默认 1.0。
+        """
+        profile = "normal"
+        if v3_filter:
+            sig = sig_by_ts.get(candles[i]["ts"])
+            if not sig or sig["type"] != typ:
+                return False, profile, 1.0
+            feats = features_from_candles(
+                candles, i, 1 if typ == "buy" else -1,
+                candles_htf=_cbtf_at(i).get("4h"),
+                st_periods=10, st_mult=3.0)
+            if not feats:
+                return False, profile, 1.0
+            dec = v3_decide(1 if typ == "buy" else -1, feats)
+            if not dec.get("execute") or dec.get("score", 0) < v3_min_score:
+                return False, profile, 1.0
+            return True, "normal", 1.0
+        if live_gate:
+            sig = sig_by_ts.get(candles[i]["ts"])
+            if not sig or sig["type"] != typ:
+                return False, profile, 1.0
+            # bias_filter 面板开关：只接受与 MA 偏向一致的开仓（实盘面板可勾选）
+            if bias_filter:
+                b = biases[i] if i < len(biases) else None
+                if (b == 1 and typ != "buy") or (b == -1 and typ != "sell"):
+                    return False, profile
+            full = strategy.evaluate(_cbtf_at(i), p, sig)
+            if score_only_gate:
+                from regime_scoring import score_signal
+                sc = score_signal(
+                    full, candles[: i + 1], live_gate,
+                    candles_by_tf=_cbtf_at(i), p=p,
+                )
+                if sc["total_score"] < min_total_score:
+                    return False, profile, 1.0
+                # 彻底关弱档：非 tradable（edge/range）信号直接拦掉，只下标准档。
+                # 实盘打分制默认不拦（executor 只看分数）；此开关用于「假设关弱档」回测。
+                if block_untradable and not sc["regime"].get("tradable", True):
+                    return False, profile, 1.0
+                return True, sc["regime"].get("profile") or "normal", (
+                    0.5 if sc.get("action") == "trade_half" else 1.0)
+            if gate_fn is not None:
+                gate = gate_fn(full, candles[: i + 1], live_gate,
+                               _cbtf_at(i), p, typ=typ)
+            else:
+                gate = enhanced_signal_handler(
+                    full, candles[: i + 1], live_gate,
+                    candles_by_tf=_cbtf_at(i), p=p,
+                    use_momentum=True, use_false_filter=True,
+                    use_adaptive=True,
+                )
+            if gate.get("hidden") or not gate.get("trade"):
+                return False, profile, 1.0
+            return True, gate.get("profile") or "normal", (
+                0.5 if gate.get("trade_half") else 1.0)
+        ok = True
+        if bias_filter:
+            b = biases[i] if i < len(biases) else None
+            ok = (b == 1 and typ == "buy") or (b == -1 and typ == "sell")
+        if ok and er_min is not None:
+            er = efficiency_ratio(candles[:i + 1])
+            reg = classify(er, er_min,
+                           er_weak_min=er_weak_min if quick_on else None,
+                           quick_enabled=quick_on)
+            if reg["tradable"]:
+                profile = reg["profile"] or "normal"
+            else:
+                ok = False
+        if ok and atr_filter_enabled:
+            from regime import atr_volatility
+            atr_vol = atr_volatility(candles[:i + 1])
+            if atr_vol is not None and atr_vol < atr_vol_min:
+                ok = False
+        if ok and range_filter_enabled:
+            from regime import range_bound
+            rc = range_bound(candles[:i + 1])
+            if (rc["range_size_pct"] < range_size_max * 100
+                    and rc["touches"] >= range_touches_min):
+                ok = False
+        if ok and adx_filter_enabled:
+            from regime import adx_latest
+            adx_val = adx_latest(candles[:i + 1], adx_period)
+            if adx_val is not None and adx_val < adx_min:
+                ok = False
+        return ok, profile, 1.0
+
+    for i, c in enumerate(candles):
+        rules = rules_by[pos.profile] if pos else rules_normal
+        # ── 1) 盘中止盈止损（先止损后止盈，同一根同时满足时算止损） ──
+        # 增强版 enabled=False：跳过价格止损，仍跑三级止盈（对齐实盘 executor）
+        if pos and _rules_active(rules):
+            adverse = c["l"] if pos.long else c["h"]
+            liq = liq_price()
+            stop_px = pos.stop
+            is_ml = False
+            # 极端保护止损(max_loss_pct, 可选, 默认不模拟)：与实盘 check_enhanced
+            # 语义一致 —— max_loss 线比正常止损更近时先于它触发；否则它不单独生效
+            #（正常止损更近，价格到不了 max_loss 线；已保本后同样不会触发）。
+            if rules.enabled and max_loss_pct:
+                ml_px = pos.entry * (1 - max_loss_pct / 100) if pos.long \
+                    else pos.entry * (1 + max_loss_pct / 100)
+                ml_nearer = (ml_px > pos.stop) if pos.long else (ml_px < pos.stop)
+                if ml_nearer and (
+                        adverse <= ml_px if pos.long else adverse >= ml_px):
+                    stop_px = ml_px
+                    is_ml = True
+            hit_s = rules.enabled and position.hit_stop(pos, adverse)
+            if is_ml:
+                hit_s = True
+            hit_l = liq is not None and (adverse <= liq if pos.long else adverse >= liq)
+            if hit_s or hit_l:
+                if hit_s and hit_l:
+                    # 价格朝不利方向走，先碰到的是离开仓价更近的那个
+                    px = max(stop_px, liq) if pos.long else min(stop_px, liq)
+                    was_liq = px == liq
+                else:
+                    px, was_liq = (liq, True) if hit_l else (stop_px, False)
+                # 跳空：开盘就已在止损之外时，只能成交在开盘价附近，
+                # 仍按止损价记账会系统性高估。取更不利的一边。
+                px = min(px, c["o"]) if pos.long else max(px, c["o"])
+                if was_liq:
+                    n_liq += 1
+                elif is_ml:
+                    n_ml += 1
+                else:
+                    n_stop += 1
+                close_part(i, px, pos.qty, "爆仓" if was_liq else
+                           ("极端止损" if is_ml else
+                            ("保本止损" if pos.breakeven else "止损")))
+            else:
+                favorable = c["h"] if pos.long else c["l"]
+                # 同根可连破多档：每档成交后重判，直到不再触发或仓位清完
+                for _ in range(3):
+                    if not pos:
+                        break
+                    pos.max_unrealized_pct = max(
+                        getattr(pos, "max_unrealized_pct", 0.0) or 0.0,
+                        pos.pnl_pct(favorable),
+                    )
+                    if _is_enhanced(rules):
+                        act = check_enhanced(pos, favorable, rules,
+                                             pos.max_unrealized_pct)
+                    else:
+                        act = position.check(pos, favorable, rules)
+                    if not act or act["action"] not in ("tp1", "tp2", "tp3"):
+                        break
+                    take_profit(i, act, rules)
+
+        # ── 2) 翻转信号 ──
+        typ = flip_at.get(i)
+        if typ:
+            price = c["c"]
+            # 休市日/自定义黑名单：在闸门【之前】短路，且根本不进 eval_open_gate，
+            # 这样 n_block（闸门拦）与 n_block_rest（休市拦）天然互斥，可直接相加。
+            rest_hit = block_if is not None and block_if(candles[i]["ts"])
+            if rest_hit:
+                n_block_rest += 1
+                gate_ok, profile, size_mul = False, "normal", 1.0
+            else:
+                gate_ok, profile, size_mul = eval_open_gate(i, typ)
+            # 反向持仓先平 —— 第三档 reverse_signal 仅在同周期反向且过闸门时平剩余
+            if pos and ((pos.long and typ == "sell") or (not pos.long and typ == "buy")):
+                rules_r = rules_by[pos.profile]
+                tp2_done = getattr(pos, "tp2_done", False)
+                tp3_done = getattr(pos, "tp3_done", False)
+                signal_tp3 = (
+                    _is_enhanced(rules_r)
+                    and getattr(rules_r, "tp3_mode", "pct") == "reverse_signal"
+                    and tp2_done and not tp3_done
+                )
+                if signal_tp3:
+                    if gate_ok:
+                        take_profit(i, {
+                            "action": "tp3",
+                            "ratio": 100.0,
+                            "reason": "反向可下单信号第三档全平",
+                            "price": price,
+                        }, rules_r)
+                else:
+                    n_rev += 1
+                    close_part(i, price, pos.qty, "反向信号")
+
+            if pos is None and not (typ == "sell" and not allow_short):
+                # 高周期方向同向过滤（可选）：只看开仓，反向仓照常先平。
+                d = None
+                if trend_align is not None:
+                    d = trend_align.get(candles[i]["ts"])
+                aligned = d is None or ((d == 1 and typ == "buy")
+                                        or (d == -1 and typ == "sell"))
+                if gate_ok and aligned:
+                    open_pos(i, price, typ, profile, size_mul)
+                elif rest_hit:
+                    pass   # 已被休市日/黑名单拦掉，不计入闸门统计（两者互斥）
+                elif aligned and (live_gate or er_min is not None or v3_filter):
+                    n_block += 1
+                elif not aligned:
+                    n_align_block += 1
+
+
+
+        # ── 3) 收盘后随超趋线移动止损（对应 feed.on_st_line） ──
+        # 注意重取规则：本根刚开的仓，循环顶部的 rules 还是开仓前的旧值
+        # 增强版即使 enabled=False 仍跟踪（实盘 trail_with_st=True）
+        if pos:
+            r3 = rules_by[pos.profile]
+            if r3.trail_with_st:
+                if _is_enhanced(r3):
+                    trail_enhanced(pos, st_line(i), r3, c["c"])
+                else:
+                    position.trail(pos, st_line(i), r3)
+
+        eq = equity + unrealized(c["c"])
+        peak = max(peak, eq)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - eq) / peak * 100)
+        curve.append({"ts": c["ts"], "equity": round(eq, 2)})
+
+    # 末尾未平仓按最后收盘结算（标记为持仓中）
+    if pos:
+        last_i = len(candles) - 1
+        close_part(last_i, candles[last_i]["c"], pos.qty, "区间结束")
+        trades[-1]["open"] = True
+
+    final = curve[-1]["equity"] if curve else init_cash
+    wins   = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] <= 0]
+    ret  = (final - init_cash) / init_cash * 100
+    hold = (candles[-1]["c"] - candles[0]["c"]) / candles[0]["c"] * 100
+    gain = sum(t["pnl"] for t in wins)
+    loss = abs(sum(t["pnl"] for t in losses))
+
+    return {
+        "init_cash":     init_cash,
+        "final":         round(final, 2),
+        "return_pct":    round(ret, 2),
+        "hold_pct":      round(hold, 2),        # 同期买入持有基准
+        "alpha_pct":     round(ret - hold, 2),
+        "max_dd_pct":    round(max_dd, 2),
+        "trades":        len(trades),
+        "trades_list":   trades,   # 逐笔明细，供 regime 归因按笔贴标签（不改策略逻辑）
+        "wins":          len(wins),
+        "win_rate":      round(len(wins) / len(trades) * 100, 1) if trades else 0.0,
+        "avg_win":       round(sum(t["pnl_pct"] for t in wins) / len(wins), 2) if wins else 0.0,
+        "avg_loss":      round(sum(t["pnl_pct"] for t in losses) / len(losses), 2) if losses else 0.0,
+        "profit_factor": round(gain / loss, 2) if loss > 0 else None,
+        "avg_bars":      round(sum(t["bars"] for t in trades) / len(trades), 1) if trades else 0,
+        "bars":          len(candles),
+        "start_ts":      candles[0]["ts"],
+        "end_ts":        candles[-1]["ts"],
+        # ── 闸门 / 离场统计 ──
+        "er_blocked":    n_block,
+        "align_blocked": n_align_block,
+        "rest_blocked":  n_block_rest,   # block_if（休市日等）拦掉的开仓次数
+        "tp1_count":     n_tp1,
+        "tp2_count":     n_tp2,
+        "tp3_count":     n_tp3,
+        "stop_count":    n_stop,
+        "max_loss_count": n_ml,
+        "reverse_count": n_rev,
+        "liq_count":     n_liq,
+        "skipped_insufficient": n_skip,
+        "quick_trades":  sum(1 for t in trades if t.get("profile") == "quick"),
+        "trade_list":    trades if full_trades else trades[-80:],
+        "equity":        curve[:: max(1, len(curve) // 300)],   # 抽稀到 ~300 点
+    }
+
+
+def sweep(candles: list[dict], base: dict, periods: list[int], mults: list[float],
+          fee_rate: float = 0.0005, allow_short: bool = True,
+          bias_filter: bool = False,
+          atr_filter_enabled: bool = False, atr_vol_min: float = 0.7,
+          range_filter_enabled: bool = False, range_size_max: float = 0.15,
+          range_touches_min: int = 3,
+          adx_filter_enabled: bool = False, adx_min: float = 20.0,
+          adx_period: int = 14,
+          **kw) -> list[dict]:
+    """参数寻优：网格跑 ATR Period × Multiplier，按收益率降序。
+
+    脚本默认 15 / 9.1 是作者在某个品种上调出来的，换品种/周期基本要重调，
+    所以这个网格是本项目的必要补充。kw 透传 er_min / exit_rules / sizing 等。
+    """
+    out = []
+    for pe in periods:
+        for m in mults:
+            r = run_backtest(
+                candles, {**base, "periods": pe, "multiplier": m},
+                fee_rate=fee_rate, allow_short=allow_short, bias_filter=bias_filter,
+                atr_filter_enabled=atr_filter_enabled, atr_vol_min=atr_vol_min,
+                range_filter_enabled=range_filter_enabled, range_size_max=range_size_max,
+                range_touches_min=range_touches_min,
+                adx_filter_enabled=adx_filter_enabled, adx_min=adx_min,
+                adx_period=adx_period,
+                **kw,
+            )
+            if "error" in r:
+                continue
+            out.append({
+                "periods": pe, "multiplier": round(m, 2),
+                "return_pct": r["return_pct"], "max_dd_pct": r["max_dd_pct"],
+                "trades": r["trades"], "win_rate": r["win_rate"],
+                "profit_factor": r["profit_factor"],
+            })
+    out.sort(key=lambda r: r["return_pct"], reverse=True)
+    return out
+
+
+def sweep_er(candles: list[dict], p: dict, er_list: list[float],
+             fee_rate: float = 0.0005, allow_short: bool = True,
+             bias_filter: bool = False, live_gate: TradeConfig | None = None,
+             **kw) -> list[dict]:
+    """扫 er_min 闸门阈值。第一行是「无闸门」基准，其余按传入顺序（不排序 ——
+    这张表要看的是阈值升高时各指标的走势，重排就看不出单调性了）。"""
+    out = []
+    for em in [None] + list(er_list):
+        # live_gate 模式：把 er_min 覆盖进实盘口径闸门（第一行 None = 品种当前阈值）
+        lg = (replace(live_gate, er_min=em if em is not None else live_gate.er_min)
+              if live_gate else None)
+        r = run_backtest(candles, p, fee_rate=fee_rate, allow_short=allow_short,
+                         bias_filter=bias_filter, er_min=em, live_gate=lg, **kw)
+        if "error" in r:
+            continue
+        out.append({
+            "er_min": em, "return_pct": r["return_pct"], "max_dd_pct": r["max_dd_pct"],
+            "trades": r["trades"], "blocked": r["er_blocked"],
+            "win_rate": r["win_rate"], "profit_factor": r["profit_factor"],
+            "alpha_pct": r["alpha_pct"],
+        })
+    return out

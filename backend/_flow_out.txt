@@ -1,0 +1,18 @@
+
+########## SNDK (SNDK-USDT) ST=15x2.5 数据=5349根 ##########
+  单因子        : ret=  3.38% n= 64 win= 71.9% dd=0.46% pf=3.25 多=38 空=26  ←基准
+  flow补位θ=0.3: ret=  3.35% n=107 win= 66.4% dd=0.59% pf=1.92 多=38 空=69 
+  flow补位θ=0.5: ret=  3.24% n=100 win= 66.0% dd=0.59% pf=1.99 多=38 空=62 
+  flow否决V=0.5: ret=  2.77% n= 54 win= 70.4% dd=0.46% pf=2.95 多=34 空=20 否=10 
+  flow否决V=0.7: ret=  2.77% n= 54 win= 70.4% dd=0.46% pf=2.95 多=34 空=20 否=10 
+  >>> SNDK: flow双因子仍≤单因子
+
+########## MU (MU-USDT) ST=18x3.0 数据=5349根 ##########
+  单因子        : ret=  1.96% n= 85 win= 75.3% dd=0.69% pf=1.80 多=45 空=40  ←基准
+Traceback (most recent call last):
+  File "d:\个人项目代码\supertrendMain\backend\_scan_flow.py", line 162, in <module>
+    print(f"  flow补位θ={th}: ret={s['ret']:6.2f}% n={s['n']:3d} win={s['win']:5.1f}% "
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+          f"dd={s['dd']:4.2f}% pf={s['pf']:4.2f} 多={s['lo']} 空={s['sh']} {'\u2713反超' if over else ''}")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'gbk' codec can't encode character '\u2713' in position 71: illegal multibyte sequence
