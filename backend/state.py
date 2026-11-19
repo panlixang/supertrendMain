@@ -181,6 +181,7 @@ class SymbolTradeConfig:
     atr_ratio_max:   float = 1.30    # ATR14/ATR50 上限（含）
     er20_min:        float = 0.08    # ER20 下限（含）
     er20_max:        float = 0.30    # ER20 上限（含）
+    er_rise_gate:    bool  = False   # ER上升闸门：当前ER20 > 上一笔ST翻转的ER20 才下单（默认关）
 
     # ── 双因子（低相关量能维度补充 SuperTrend）──
     # flow_enabled=False 时完全不干预原信号链；=True 时按 mode 生效。

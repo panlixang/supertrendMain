@@ -7,7 +7,7 @@
  * 面板只暴露用户要的参数：
  *   交易所配置（OKX / Bitget + 各自 Key + 模拟盘）
  *   是否开启 4h 方向拦截
- *   每个品种的过滤开关（4h 方向 / V3 / ATR14-ATR50 与 ER20 双区间）+ 止盈止损
+ *   每个品种的过滤开关（4h 方向 / V3 / ATR14-ATR50 与 ER20 双区间 / ER上升）+ 止盈止损
  * 出场规则固定用回测验证档（TP1 1.5% 平 70% + 保本 + 跟随 SuperTrend 跟踪）。
  */
 import { useCallback, useEffect, useState } from "react";
@@ -413,6 +413,7 @@ export default function PatternTradePanel({ currentSymbol }) {
                   s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
                   s.allow_tfs, s.block_4h, s.filter_v3,
                   s.range_gate, s.atr_ratio_min, s.atr_ratio_max, s.er20_min, s.er20_max,
+                  s.er_rise_gate,
                 ])}
                style={{ borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 6 }}>
             <div style={SZ.row}>
@@ -504,6 +505,16 @@ export default function PatternTradePanel({ currentSymbol }) {
                 />
                 <span style={{ fontSize: 11 }}>
                   V3 趋势过滤（Trend Score：成熟趋势 / 早期启动 / 慢热接住 才放行，含两级Fuse）
+                </span>
+              </div>
+              <div style={SZ.row}>
+                <input
+                  type="checkbox"
+                  checked={!!s.er_rise_gate}
+                  onChange={(e) => updateSymbol(s.symbol, { er_rise_gate: e.target.checked })}
+                />
+                <span style={{ fontSize: 11 }}>
+                  ER上升过滤（当前ER20 &gt; 上一笔ST信号的ER20才下单；数据不足放行）
                 </span>
               </div>
               <div style={SZ.row}>

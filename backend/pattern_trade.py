@@ -4,7 +4,7 @@
 - 配置文件 pattern_trade.json、凭据文件 pattern_credentials.json，都不进 settings.json
 - 下单通过 creds 的 ContextVar 覆盖 —— Task 级隔离，两页可跑不同交易所 / 不同子账户
 - 信号用基础周期的「原始 SuperTrend」（ATR 10 / factor 3.0），与首页 15/9.1 无关
-- 过滤：block_4h（4h 形态反向拦截）+ V3 趋势过滤 + ATR14/ATR50、ER20 双区间闸门（品种独立）
+- 过滤：block_4h（4h 形态反向拦截）+ V3 趋势过滤 + ATR14/ATR50、ER20 双区间闸门 + ER上升闸门（品种独立）
 - 出场用 position.ExitRules 默认档 = 回测验证过的 TP1 1.5% 平 70% + 保本 + 跟随 ST 跟踪
 
 同一品种两页都可能下单时不校验冲突（用户用不同子账户各自管理）。
@@ -193,6 +193,7 @@ class PatternTrader:
         self.events: deque = deque(maxlen=200)
         self._keys: dict = {"exchange": "okx", "okx": {}, "bitget": {}}
         self._last_flip: dict[tuple, int] = {}      # (sym, tf) -> 已处理的翻转 ts
+        self._last_er20: dict[tuple, float] = {}    # (sym, tf) -> 上一笔 ST 翻转的 ER20
         self._last_order_at: dict[tuple, float] = {}
         self._pos_check: dict[str, float] = {}       # sym -> 上次与交易所对账真实持仓的时间
         self._pat_cache: dict[str, tuple] = {}      # sym -> (最新4h ts, pts, pmap)
@@ -273,6 +274,7 @@ class PatternTrader:
                     atr_ratio_max=_cfg_float(row.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
                     er20_min=_cfg_float(row.get("er20_min"), DEF_ER20_MIN),
                     er20_max=_cfg_float(row.get("er20_max"), DEF_ER20_MAX),
+                    er_rise_gate=bool(row.get("er_rise_gate", False)),
                 )
             except Exception as e2:
                 self._load_bad_rows += 1
@@ -396,6 +398,7 @@ class PatternTrader:
             atr_ratio_max=_cfg_float(kw.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
             er20_min=_cfg_float(kw.get("er20_min"), DEF_ER20_MIN),
             er20_max=_cfg_float(kw.get("er20_max"), DEF_ER20_MAX),
+            er_rise_gate=bool(kw.get("er_rise_gate", False)),
         )
         self._sync()
         self.save()
@@ -424,7 +427,7 @@ class PatternTrader:
                    "block_4h",
                    "filter_v3",
                    "range_gate", "atr_ratio_min", "atr_ratio_max",
-                   "er20_min", "er20_max")
+                   "er20_min", "er20_max", "er_rise_gate")
         for k in xr_keys:
             if k in kw and kw[k] is not None:
                 v = kw[k]
@@ -771,16 +774,23 @@ class PatternTrader:
             if max_age and max_age > 0 and \
                     time.time() * 1000 - sig["ts"] > (TF_SEC.get(tf, 3600) + max_age) * 1000:
                 self._last_flip[key] = sig["ts"]
+                if sig.get("er20") is not None:
+                    self._last_er20[key] = sig["er20"]
                 logger.info(
                     f"[过期信号] {sym} {tf} {sig['type']} 信号 K 已收盘 "
                     f"{(time.time() * 1000 - sig['ts']) / 3600000:.1f}h > 上限，不补单")
                 continue
             if self._last_flip.get(key) is None:
                 self._last_flip[key] = sig["ts"]   # 首次仅记录，不给历史信号补单
+                if sig.get("er20") is not None:
+                    self._last_er20[key] = sig["er20"]
                 continue
             if sig["ts"] <= self._last_flip[key]:
                 continue
+            prev_er = self._last_er20.get(key)
             self._last_flip[key] = sig["ts"]
+            if sig.get("er20") is not None:
+                self._last_er20[key] = sig["er20"]
             if self.cfg.cooldown_sec > 0:
                 last = self._last_order_at.get(key, 0)
                 if time.time() - last < self.cfg.cooldown_sec:
@@ -793,6 +803,8 @@ class PatternTrader:
             if not await self._allow_by_filter(sym, sc, sig):
                 continue
             if not await self._allow_by_range(sym, sc, sig):
+                continue
+            if not self._allow_by_er_rise(sc, sig, prev_er):
                 continue
             self._last_order_at[key] = time.time()
             await ex.on_signal(sig, {"trade": True, "profile": "normal"})
@@ -835,6 +847,7 @@ class PatternTrader:
                 "symbol": sym, "tf": tf, "type": typ, "ts": c["ts"],
                 "price": c["c"],
                 "line": (st["up_plot"][i] if typ == "buy" else st["dn_plot"][i]),
+                "er20": efficiency_ratio(cs[:i + 1], ER20_WINDOW),
             }
         except Exception as e:
             logger.warning(f"[形态下单] {sym} {tf} 信号计算失败: {e}")
@@ -923,6 +936,24 @@ class PatternTrader:
                 sym, tf, atr_r, a_min, a_max, er20, e_min, e_max)
             return False
         return True
+
+    def _allow_by_er_rise(self, sc: "SymbolTradeConfig", sig: dict, prev_er) -> bool:
+        """True=放行。ER上升闸门（品种独立，默认关）。
+
+        当前信号的 ER20 必须 > 上一笔 ST 翻转的 ER20 才下单；相等或下降 → 拦截。
+        上一笔取的是「信号」而非「成交」，与回测口径一致；无上一笔 / 指标缺失 → 放行。
+        """
+        if not getattr(sc, "er_rise_gate", False):
+            return True
+        cur = sig.get("er20")
+        if cur is None or prev_er is None:
+            return True
+        if cur > prev_er:
+            return True
+        logger.info(
+            "[形态下单] %s %s ER上升闸门拦截: 当前ER20=%.3f <= 上一笔=%.3f",
+            sig.get("symbol") or "?", sig.get("tf") or "?", cur, prev_er)
+        return False
 
     async def _v3_allow(self, sym: str, sc, sig: dict):
         """V3 趋势过滤：Trend Score 通过（成熟趋势 / 早期启动）才放行。

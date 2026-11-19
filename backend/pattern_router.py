@@ -82,6 +82,7 @@ class SymbolIn(BaseModel):
     atr_ratio_max:    Optional[float] = None
     er20_min:         Optional[float] = None
     er20_max:         Optional[float] = None
+    er_rise_gate:     Optional[bool]  = None
 
 
 def _symbols_view() -> list[dict]:
@@ -110,6 +111,7 @@ def _symbols_view() -> list[dict]:
             "atr_ratio_max": sc.atr_ratio_max,
             "er20_min": sc.er20_min,
             "er20_max": sc.er20_max,
+            "er_rise_gate": sc.er_rise_gate,
             "position": None,
         }
         if st and st.position:
