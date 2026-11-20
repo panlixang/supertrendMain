@@ -411,7 +411,7 @@ export default function PatternTradePanel({ currentSymbol }) {
           // 表现为「点了预设数字没变」。服务端值一变就重挂，立即反映真实配置。
           <div key={s.symbol + "#" + JSON.stringify([
                   s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
-                  s.allow_tfs, s.block_4h, s.filter_v3,
+                  s.reverse_close, s.allow_tfs, s.block_4h, s.filter_v3,
                   s.range_gate, s.atr_ratio_min, s.atr_ratio_max,
                   s.atr_ratio2_enabled, s.atr_ratio2_min, s.atr_ratio2_max,
                   s.er20_min, s.er20_max, s.er_dir_filter, s.er_rise_gate,
@@ -700,6 +700,13 @@ export default function PatternTradePanel({ currentSymbol }) {
                   <input type="checkbox" defaultChecked={s.trail_with_st ?? cfg.trail_with_st ?? true}
                          onChange={(e) => updateSymbol(s.symbol, { trail_with_st: e.target.checked })} />
                   跟踪
+                </label>
+              </div>
+              <div style={SZ.row}>
+                <label style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>
+                  <input type="checkbox" defaultChecked={s.reverse_close ?? cfg?.reverse_close ?? false}
+                         onChange={(e) => updateSymbol(s.symbol, { reverse_close: e.target.checked })} />
+                  仅反向信号平仓（开启后 TP / 止损 / 保本 / 跟踪全部失效）
                 </label>
               </div>
             </div>
