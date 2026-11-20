@@ -7,7 +7,7 @@
  * 面板只暴露用户要的参数：
  *   交易所配置（OKX / Bitget + 各自 Key + 模拟盘）
  *   是否开启 4h 方向拦截
- *   每个品种的过滤开关（4h 方向 / V3 / ATR14-ATR50 与 ER20 双区间 / ER上升）+ 止盈止损
+ *   每个品种的过滤开关（4h 方向 / V3 / ATR14-ATR50 与 ER20 双区间 / ER方向上升下降）+ 止盈止损
  * 出场规则固定用回测验证档（TP1 1.5% 平 70% + 保本 + 跟随 SuperTrend 跟踪）。
  */
 import { useCallback, useEffect, useState } from "react";
@@ -412,8 +412,9 @@ export default function PatternTradePanel({ currentSymbol }) {
           <div key={s.symbol + "#" + JSON.stringify([
                   s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
                   s.allow_tfs, s.block_4h, s.filter_v3,
-                  s.range_gate, s.atr_ratio_min, s.atr_ratio_max, s.er20_min, s.er20_max,
-                  s.er_rise_gate,
+                  s.range_gate, s.atr_ratio_min, s.atr_ratio_max,
+                  s.atr_ratio2_enabled, s.atr_ratio2_min, s.atr_ratio2_max,
+                  s.er20_min, s.er20_max, s.er_dir_filter, s.er_rise_gate,
                 ])}
                style={{ borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 6 }}>
             <div style={SZ.row}>
@@ -508,13 +509,18 @@ export default function PatternTradePanel({ currentSymbol }) {
                 </span>
               </div>
               <div style={SZ.row}>
-                <input
-                  type="checkbox"
-                  checked={!!s.er_rise_gate}
-                  onChange={(e) => updateSymbol(s.symbol, { er_rise_gate: e.target.checked })}
-                />
-                <span style={{ fontSize: 11 }}>
-                  ER上升过滤（当前ER20 &gt; 上一笔ST信号的ER20才下单；数据不足放行）
+                <span style={{ fontSize: 11, minWidth: 56 }}>ER方向过滤</span>
+                <select
+                  style={SZ.sel}
+                  value={s.er_dir_filter || (s.er_rise_gate ? "rise" : "none")}
+                  onChange={(e) => updateSymbol(s.symbol, { er_dir_filter: e.target.value })}
+                >
+                  <option value="none">不选</option>
+                  <option value="rise">当前ER20 &gt; 上一笔</option>
+                  <option value="fall">当前ER20 &lt; 上一笔</option>
+                </select>
+                <span style={{ fontSize: 10, color: C.neutral }}>
+                  对比上一笔ST信号；数据不足放行
                 </span>
               </div>
               <div style={SZ.row}>
@@ -532,13 +538,24 @@ export default function PatternTradePanel({ currentSymbol }) {
                 {tpInput(s.symbol, s, "atr_ratio_max", 1.30, 0.01, 62, "0 0 auto")}
               </div>
               <div style={{ ...SZ.row, paddingLeft: 18 }}>
+                <input
+                  type="checkbox"
+                  checked={!!s.atr_ratio2_enabled}
+                  onChange={(e) => updateSymbol(s.symbol, { atr_ratio2_enabled: e.target.checked })}
+                />
+                <span style={{ fontSize: 11, color: C.neutral, width: 50 }}>第二段</span>
+                {tpInput(s.symbol, s, "atr_ratio2_min", 1.30, 0.01, 62, "0 0 auto")}
+                <span style={{ fontSize: 11 }}>—</span>
+                {tpInput(s.symbol, s, "atr_ratio2_max", 1.50, 0.01, 62, "0 0 auto")}
+              </div>
+              <div style={{ ...SZ.row, paddingLeft: 18 }}>
                 <span style={{ fontSize: 11, color: C.neutral, width: 66 }}>ER20</span>
                 {tpInput(s.symbol, s, "er20_min", 0.08, 0.01, 62, "0 0 auto")}
                 <span style={{ fontSize: 11 }}>—</span>
                 {tpInput(s.symbol, s, "er20_max", 0.30, 0.01, 62, "0 0 auto")}
               </div>
               <div style={{ fontSize: 10, color: C.neutral, marginTop: 2, lineHeight: 1.5 }}>
-                开启后仅当两项指标都落在区间内才正常下单，区间外拦截；数据不足放行。
+                开启后 ATR14/50 落在第一段或第二段（第二段需勾选才生效）且 ER20 在区间内才下单；数据不足放行。
                 口径：信号周期的当前 ATR14/ATR50（RMA）与最近 20 段价格变化的 ER，端点含在区间内。
               </div>
             </div>

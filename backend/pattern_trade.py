@@ -4,7 +4,7 @@
 - 配置文件 pattern_trade.json、凭据文件 pattern_credentials.json，都不进 settings.json
 - 下单通过 creds 的 ContextVar 覆盖 —— Task 级隔离，两页可跑不同交易所 / 不同子账户
 - 信号用基础周期的「原始 SuperTrend」（ATR 10 / factor 3.0），与首页 15/9.1 无关
-- 过滤：block_4h（4h 形态反向拦截）+ V3 趋势过滤 + ATR14/ATR50、ER20 双区间闸门 + ER上升闸门（品种独立）
+- 过滤：block_4h（4h 形态反向拦截）+ V3 趋势过滤 + ATR14/ATR50、ER20 双区间闸门 + ER方向过滤（上升/下降/不选，品种独立）
 - 出场用 position.ExitRules 默认档 = 回测验证过的 TP1 1.5% 平 70% + 保本 + 跟随 ST 跟踪
 
 同一品种两页都可能下单时不校验冲突（用户用不同子账户各自管理）。
@@ -58,6 +58,8 @@ ER20_WINDOW = 21
 # 指标区间闸门默认区间（面板可逐品种手填）
 DEF_ATR_RATIO_MIN = 1.10
 DEF_ATR_RATIO_MAX = 1.30
+DEF_ATR2_RATIO_MIN = 1.30
+DEF_ATR2_RATIO_MAX = 1.50
 DEF_ER20_MIN = 0.08
 DEF_ER20_MAX = 0.30
 
@@ -70,6 +72,20 @@ def _cfg_float(v, default: float) -> float:
         return float(v)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _cfg_er_dir(row: dict) -> str:
+    """ER方向过滤：none / rise / fall；兼容旧 er_rise_gate 布尔。"""
+    v = row.get("er_dir_filter")
+    if v is not None:
+        s = str(v).strip().lower()
+        if s in ("上升", "rise", "up"):
+            return "rise"
+        if s in ("下降", "fall", "down"):
+            return "fall"
+        if s in ("", "不选", "none", "off"):
+            return "none"
+    return "rise" if bool(row.get("er_rise_gate", False)) else "none"
 
 
 def atr_ratio_14_50(candles: list[dict]) -> float | None:
@@ -272,9 +288,12 @@ class PatternTrader:
                     range_gate=bool(row.get("range_gate", False)),
                     atr_ratio_min=_cfg_float(row.get("atr_ratio_min"), DEF_ATR_RATIO_MIN),
                     atr_ratio_max=_cfg_float(row.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
+                    atr_ratio2_enabled=bool(row.get("atr_ratio2_enabled", False)),
+                    atr_ratio2_min=_cfg_float(row.get("atr_ratio2_min"), DEF_ATR2_RATIO_MIN),
+                    atr_ratio2_max=_cfg_float(row.get("atr_ratio2_max"), DEF_ATR2_RATIO_MAX),
                     er20_min=_cfg_float(row.get("er20_min"), DEF_ER20_MIN),
                     er20_max=_cfg_float(row.get("er20_max"), DEF_ER20_MAX),
-                    er_rise_gate=bool(row.get("er_rise_gate", False)),
+                    er_dir_filter=_cfg_er_dir(row),
                 )
             except Exception as e2:
                 self._load_bad_rows += 1
@@ -396,9 +415,12 @@ class PatternTrader:
             range_gate=bool(kw.get("range_gate", False)),
             atr_ratio_min=_cfg_float(kw.get("atr_ratio_min"), DEF_ATR_RATIO_MIN),
             atr_ratio_max=_cfg_float(kw.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
+            atr_ratio2_enabled=bool(kw.get("atr_ratio2_enabled", False)),
+            atr_ratio2_min=_cfg_float(kw.get("atr_ratio2_min"), DEF_ATR2_RATIO_MIN),
+            atr_ratio2_max=_cfg_float(kw.get("atr_ratio2_max"), DEF_ATR2_RATIO_MAX),
             er20_min=_cfg_float(kw.get("er20_min"), DEF_ER20_MIN),
             er20_max=_cfg_float(kw.get("er20_max"), DEF_ER20_MAX),
-            er_rise_gate=bool(kw.get("er_rise_gate", False)),
+            er_dir_filter=_cfg_er_dir(kw),
         )
         self._sync()
         self.save()
@@ -427,7 +449,8 @@ class PatternTrader:
                    "block_4h",
                    "filter_v3",
                    "range_gate", "atr_ratio_min", "atr_ratio_max",
-                   "er20_min", "er20_max", "er_rise_gate")
+                   "atr_ratio2_enabled", "atr_ratio2_min", "atr_ratio2_max",
+                   "er20_min", "er20_max", "er_dir_filter")
         for k in xr_keys:
             if k in kw and kw[k] is not None:
                 v = kw[k]
@@ -437,7 +460,9 @@ class PatternTrader:
                 if k == "leverage":
                     v = int(float(v))
                 elif k in ("margin_usdt", "equity_pct",
-                           "atr_ratio_min", "atr_ratio_max", "er20_min", "er20_max"):
+                           "atr_ratio_min", "atr_ratio_max",
+                           "atr_ratio2_min", "atr_ratio2_max",
+                           "er20_min", "er20_max"):
                     v = float(v)
                 setattr(sc, k, v)
         self.save()
@@ -804,7 +829,7 @@ class PatternTrader:
                 continue
             if not await self._allow_by_range(sym, sc, sig):
                 continue
-            if not self._allow_by_er_rise(sc, sig, prev_er):
+            if not self._allow_by_er_dir(sc, sig, prev_er):
                 continue
             self._last_order_at[key] = time.time()
             await ex.on_signal(sig, {"trade": True, "profile": "normal"})
@@ -893,10 +918,11 @@ class PatternTrader:
         return ok
 
     async def _allow_by_range(self, sym: str, sc: "SymbolTradeConfig", sig: dict) -> bool:
-        """True=放行。ATR14/ATR50 + ER20 双区间闸门（品种独立，默认关）。
+        """True=放行。ATR14/ATR50（可两段）+ ER20 区间闸门（品种独立，默认关）。
 
-        开启后，当前 ATR14/ATR50 与 ER20 必须同时落在各自配置的闭区间内才下单；
-        任一指标在区间外 → 拦截（仅提醒不下单）。两端数字均可在面板手填。
+        开启后，当前 ATR14/ATR50 必须落在第一段或第二段（第二段可单独开关），
+        且 ER20 落在配置闭区间内才下单；否则拦截（仅提醒不下单）。
+        数字均可在面板手填。
 
         计算取信号所在周期 K 线，窗口末尾即最新/信号根。
         取数失败 / 数据不足 / 指标算不出 → 一律放行（不因缺数据误杀）。
@@ -922,37 +948,51 @@ class PatternTrader:
 
         a_min = _cfg_float(getattr(sc, "atr_ratio_min", None), DEF_ATR_RATIO_MIN)
         a_max = _cfg_float(getattr(sc, "atr_ratio_max", None), DEF_ATR_RATIO_MAX)
+        a2_en = bool(getattr(sc, "atr_ratio2_enabled", False))
+        a2_min = _cfg_float(getattr(sc, "atr_ratio2_min", None), DEF_ATR2_RATIO_MIN)
+        a2_max = _cfg_float(getattr(sc, "atr_ratio2_max", None), DEF_ATR2_RATIO_MAX)
         e_min = _cfg_float(getattr(sc, "er20_min", None), DEF_ER20_MIN)
         e_max = _cfg_float(getattr(sc, "er20_max", None), DEF_ER20_MAX)
         if a_min > a_max:
             a_min, a_max = a_max, a_min
+        if a2_min > a2_max:
+            a2_min, a2_max = a2_max, a2_min
         if e_min > e_max:
             e_min, e_max = e_max, e_min
 
-        if not (a_min <= atr_r <= a_max and e_min <= er20 <= e_max):
+        atr_ok = (a_min <= atr_r <= a_max) or (a2_en and a2_min <= atr_r <= a2_max)
+        if not (atr_ok and e_min <= er20 <= e_max):
             logger.info(
-                "[形态下单] %s %s 区间闸门拦截: ATR14/50=%.3f 区间[%.3f,%.3f] "
-                "ER20=%.3f 区间[%.3f,%.3f]",
-                sym, tf, atr_r, a_min, a_max, er20, e_min, e_max)
+                "[形态下单] %s %s 区间闸门拦截: ATR14/50=%.3f 段1[%.3f,%.3f] "
+                "段2(开=%s)[%.3f,%.3f] ER20=%.3f 区间[%.3f,%.3f]",
+                sym, tf, atr_r, a_min, a_max, a2_en, a2_min, a2_max, er20, e_min, e_max)
             return False
         return True
 
-    def _allow_by_er_rise(self, sc: "SymbolTradeConfig", sig: dict, prev_er) -> bool:
-        """True=放行。ER上升闸门（品种独立，默认关）。
+    def _allow_by_er_dir(self, sc: "SymbolTradeConfig", sig: dict, prev_er) -> bool:
+        """True=放行。ER方向过滤（品种独立）：none / rise / fall。
 
-        当前信号的 ER20 必须 > 上一笔 ST 翻转的 ER20 才下单；相等或下降 → 拦截。
+        rise=当前ER20>上一笔；fall=当前ER20<上一笔；none=不过滤。
         上一笔取的是「信号」而非「成交」，与回测口径一致；无上一笔 / 指标缺失 → 放行。
         """
-        if not getattr(sc, "er_rise_gate", False):
+        mode = str(getattr(sc, "er_dir_filter", "none") or "none").strip().lower()
+        if mode in ("上升", "rise", "up"):
+            mode = "rise"
+        elif mode in ("下降", "fall", "down"):
+            mode = "fall"
+        else:
+            mode = "none"
+        if mode == "none":
             return True
         cur = sig.get("er20")
         if cur is None or prev_er is None:
             return True
-        if cur > prev_er:
+        ok = (cur > prev_er) if mode == "rise" else (cur < prev_er)
+        if ok:
             return True
         logger.info(
-            "[形态下单] %s %s ER上升闸门拦截: 当前ER20=%.3f <= 上一笔=%.3f",
-            sig.get("symbol") or "?", sig.get("tf") or "?", cur, prev_er)
+            "[形态下单] %s %s ER方向过滤拦截(%s): 当前ER20=%.3f 上一笔=%.3f",
+            sig.get("symbol") or "?", sig.get("tf") or "?", mode, cur, prev_er)
         return False
 
     async def _v3_allow(self, sym: str, sc, sig: dict):

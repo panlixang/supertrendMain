@@ -80,9 +80,12 @@ class SymbolIn(BaseModel):
     range_gate:       Optional[bool]  = None
     atr_ratio_min:    Optional[float] = None
     atr_ratio_max:    Optional[float] = None
+    atr_ratio2_enabled: Optional[bool]  = None
+    atr_ratio2_min:   Optional[float] = None
+    atr_ratio2_max:   Optional[float] = None
     er20_min:         Optional[float] = None
     er20_max:         Optional[float] = None
-    er_rise_gate:     Optional[bool]  = None
+    er_dir_filter:    Optional[str]   = None
 
 
 def _symbols_view() -> list[dict]:
@@ -109,9 +112,12 @@ def _symbols_view() -> list[dict]:
             "range_gate": sc.range_gate,
             "atr_ratio_min": sc.atr_ratio_min,
             "atr_ratio_max": sc.atr_ratio_max,
+            "atr_ratio2_enabled": sc.atr_ratio2_enabled,
+            "atr_ratio2_min": sc.atr_ratio2_min,
+            "atr_ratio2_max": sc.atr_ratio2_max,
             "er20_min": sc.er20_min,
             "er20_max": sc.er20_max,
-            "er_rise_gate": sc.er_rise_gate,
+            "er_dir_filter": sc.er_dir_filter,
             "position": None,
         }
         if st and st.position:

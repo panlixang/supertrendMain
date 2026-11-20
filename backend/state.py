@@ -172,16 +172,19 @@ class SymbolTradeConfig:
                                       # ⚠ 仅形态识别页(pattern_trade)使用。首页回测(/api/backtest)、参数寻优、新模型回测(sl2_*)不得继承此字段；
                                       #    后者如需 V3 请在各自入口显式开启（sl2 用 --v3）。
     # ── 形态识别页 指标区间闸门（品种独立；形态识别页专用）──
-    # 规则：开启后，信号出现时当前 ATR14/ATR50 与 ER20 必须同时落在配置区间内才下单；
-    #       任一指标在区间外 → 拦截（仅提醒）。默认关=不启用该闸门。
+    # 规则：开启后，当前 ATR14/ATR50 必须落在第一段或第二段（第二段可单独开关），
+    #       且 ER20 落在配置区间内才下单；否则拦截。默认关=不启用该闸门。
     # 口径：ATR = RMA(TR, N)，ER20 = |末-首| / 逐段路径长度（最近 20 段，即 21 根收盘）；
     #       K 线取信号所在周期，窗口末尾即最新/信号根。
     range_gate:      bool  = False   # 区间闸门开关（默认关）
-    atr_ratio_min:   float = 1.10    # ATR14/ATR50 下限（含）
-    atr_ratio_max:   float = 1.30    # ATR14/ATR50 上限（含）
+    atr_ratio_min:   float = 1.10    # ATR 第一段下限（含）
+    atr_ratio_max:   float = 1.30    # ATR 第一段上限（含）
+    atr_ratio2_enabled: bool = False # ATR 第二段开关（默认关）
+    atr_ratio2_min:  float = 1.30    # ATR 第二段下限（含）
+    atr_ratio2_max:  float = 1.50    # ATR 第二段上限（含）
     er20_min:        float = 0.08    # ER20 下限（含）
     er20_max:        float = 0.30    # ER20 上限（含）
-    er_rise_gate:    bool  = False   # ER上升闸门：当前ER20 > 上一笔ST翻转的ER20 才下单（默认关）
+    er_dir_filter:   str   = "none"  # ER方向过滤：none=不选 / rise=当前ER20>上一笔 / fall=当前ER20<上一笔
 
     # ── 双因子（低相关量能维度补充 SuperTrend）──
     # flow_enabled=False 时完全不干预原信号链；=True 时按 mode 生效。
