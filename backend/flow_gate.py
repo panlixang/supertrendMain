@@ -131,6 +131,10 @@ def apply_flow_gate(candles, params, sig, gate, cfg):
     """
     if not getattr(cfg, "flow_enabled", False):
         return gate
+    # 总开关（全局 enabled AND 品种 enabled）关闭时，绝不允许补位复活信号。
+    # 否则「关掉自动下单」后，fill 模式仍会把 gate.trade=False 强行改成 True 下单。
+    if not getattr(cfg, "enabled", True):
+        return gate
     flow = flow_factor(candles, getattr(cfg, "flow_lookback", 24),
                        getattr(cfg, "flow_scale", 2.0))
     want_long = sig.get("type") == "buy"
