@@ -23,7 +23,6 @@ class CfgIn(BaseModel):
     margin_mode:   Optional[str]   = None
     price_offset:  Optional[float] = None
     exchange:      Optional[str]   = None
-    block_4h:      Optional[bool]  = None
     confirm_close: Optional[bool]  = None   # True = 只在信号 K 收盘后下单（对齐回测口径）
     signal_max_age_sec: Optional[int] = None  # 信号过期护栏：翻转那根 K 收盘超过这么久就不再补单
     position_recheck_sec: Optional[int] = None  # 本地有仓时，每隔这么久对账一次交易所真实持仓
@@ -72,8 +71,6 @@ class SymbolIn(BaseModel):
     move_sl_to_entry: Optional[bool]  = None
     trail_with_st:    Optional[bool]  = None
     reverse_close:    Optional[bool]  = None
-    block_4h:         Optional[bool]  = None   # 4h 方向拦截（品种独立；True=4h ST 方向与信号反向则不开仓）
-    filter_v3:        Optional[bool]  = None
     st_periods:       Optional[int]   = None   # ST ATR 周期（品种独立；空=用默认10）
     st_multiplier:    Optional[float] = None   # ST Factor（品种独立；空=用默认3.0）
     atr_ratio_enabled:   Optional[bool]  = None
@@ -112,8 +109,6 @@ def _symbols_view() -> list[dict]:
             "sl_mode": sc.sl_mode,
             "move_sl_to_entry": sc.move_sl_to_entry,
             "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
-            "block_4h": sc.block_4h,
-            "filter_v3": sc.filter_v3,
             "st_periods": sc.st_periods,
             "st_multiplier": sc.st_multiplier,
             "atr_ratio_enabled": sc.atr_ratio_enabled,
@@ -175,7 +170,7 @@ async def set_keys(body: KeysIn):
 async def symbols(body: SymbolIn):
     t = pattern_trade.trader
     # 以前这里只转发 enabled/margin_usdt/leverage/allow_tfs，
-    # 出场参数（tp1~tp3、sl_pct、保本、ST跟踪、reverse_close）和 filter_v3 全被丢掉，
+    # 出场参数（tp1~tp3、sl_pct、保本、ST跟踪、reverse_close）全被丢掉，
     # 表现为「面板改了保存不了、刷新回默认值」。现在按 body 显式传值全量转发。
     fields = {k: v for k, v in body.model_dump().items()
               if k not in ("action", "symbol") and v is not None}

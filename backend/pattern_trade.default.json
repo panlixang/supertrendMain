@@ -6,7 +6,6 @@
     "margin_mode": "cross",
     "price_offset": 0.05,
     "exchange": "okx",
-    "block_4h": false,
     "confirm_close": true,
     "cooldown_sec": 300,
     "poll_sec": 20,
@@ -30,7 +29,9 @@
       "enabled": true,
       "margin_usdt": 50.0,
       "leverage": 10,
-      "allow_tfs": ["1h"],
+      "allow_tfs": [
+        "1h"
+      ],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
       "tp1_pct": 1.5,
@@ -45,15 +46,16 @@
       "sl_mode": "pct",
       "move_sl_to_entry": true,
       "trail_with_st": true,
-      "reverse_close": false,
-      "filter_v3": true
+      "reverse_close": false
     },
     {
       "symbol": "CL-USDT-SWAP",
       "enabled": true,
       "margin_usdt": 50.0,
       "leverage": 10,
-      "allow_tfs": ["1h"],
+      "allow_tfs": [
+        "1h"
+      ],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
       "tp1_pct": 1.5,
@@ -68,15 +70,16 @@
       "sl_mode": "st",
       "move_sl_to_entry": true,
       "trail_with_st": true,
-      "reverse_close": false,
-      "filter_v3": true
+      "reverse_close": false
     },
     {
       "symbol": "BTC-USDT-SWAP",
       "enabled": true,
       "margin_usdt": 100.0,
       "leverage": 10,
-      "allow_tfs": ["4h"],
+      "allow_tfs": [
+        "4h"
+      ],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
       "tp1_pct": 4.0,
@@ -91,15 +94,16 @@
       "sl_mode": "pct",
       "move_sl_to_entry": true,
       "trail_with_st": true,
-      "reverse_close": false,
-      "filter_v3": false
+      "reverse_close": false
     },
     {
       "symbol": "ETH-USDT-SWAP",
       "enabled": true,
       "margin_usdt": 50.0,
       "leverage": 10,
-      "allow_tfs": ["4h"],
+      "allow_tfs": [
+        "4h"
+      ],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
       "tp1_pct": 5.0,
@@ -114,15 +118,16 @@
       "sl_mode": "pct",
       "move_sl_to_entry": true,
       "trail_with_st": true,
-      "reverse_close": false,
-      "filter_v3": false
+      "reverse_close": false
     },
     {
       "symbol": "SKHYNIX-USDT-SWAP",
       "enabled": true,
       "margin_usdt": 5.0,
       "leverage": 10,
-      "allow_tfs": ["1h"],
+      "allow_tfs": [
+        "1h"
+      ],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
       "tp1_pct": 1.5,
@@ -137,15 +142,16 @@
       "sl_mode": "pct",
       "move_sl_to_entry": true,
       "trail_with_st": true,
-      "reverse_close": false,
-      "filter_v3": true
+      "reverse_close": false
     },
     {
       "symbol": "TSLA-USDT-SWAP",
       "enabled": true,
       "margin_usdt": 50.0,
       "leverage": 10,
-      "allow_tfs": ["1h"],
+      "allow_tfs": [
+        "1h"
+      ],
       "sizing_mode": "fixed",
       "equity_pct": 10.0,
       "tp1_pct": 1.5,
@@ -160,8 +166,7 @@
       "sl_mode": "pct",
       "move_sl_to_entry": true,
       "trail_with_st": true,
-      "reverse_close": false,
-      "filter_v3": true
+      "reverse_close": false
     }
   ]
 }

@@ -4,7 +4,7 @@
 - 配置文件 pattern_trade.json、凭据文件 pattern_credentials.json，都不进 settings.json
 - 下单通过 creds 的 ContextVar 覆盖 —— Task 级隔离，两页可跑不同交易所 / 不同子账户
 - 信号用基础周期的「原始 SuperTrend」（ATR 10 / factor 3.0），与首页 15/9.1 无关
-- 过滤：block_4h（4h 形态反向拦截）+ V3 趋势过滤 + ATR14/ATR50、ER20 双区间闸门 + ER方向过滤（上升/下降/不选，品种独立）
+- 过滤：ATR ratio 过滤 + ATR14/ATR50、ER20 双区间闸门 + ER方向过滤（上升/下降/不选，品种独立）
 - 出场用 position.ExitRules 默认档 = 回测验证过的 TP1 1.5% 平 70% + 保本 + 跟随 ST 跟踪
 
 同一品种两页都可能下单时不校验冲突（用户用不同子账户各自管理）。
@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import asyncio
-import bisect
 import json
 import logging
 import math
@@ -30,12 +29,10 @@ import history
 import trade
 from executor import Executor
 from indicators import ma, super_trend, ta_adx, ta_atr, ta_ema, ta_sma
-from pattern_recog import recognize as recognize_pattern
 from position import ExitRules
 from position_enhanced import EnhancedExitRules
 from regime import TradeConfig, efficiency_ratio
 from state import SymbolStore, SymbolTradeConfig
-import signal_v3
 
 logger = logging.getLogger(__name__)
 
@@ -177,16 +174,9 @@ class PatternConfig:
     margin_mode:  str   = "cross"
     price_offset: float = 0.05
     exchange:     str   = "okx"
-    block_4h:     bool  = True     # 已废弃：4h 方向拦截 2026-10-30 下放为品种独立开关 SymbolTradeConfig.block_4h（见 state.py）
-                                   # 此全局字段仅为兼容保留，过滤逻辑不再读取它（实际开关见每品种 block_4h）
     confirm_close: bool = True     # True = 只在信号那根 K 收盘后才下单（对齐回测：用收盘数据确认 flip，避免未收盘 K 的 ST 重绘假信号）
     signal_max_age_sec: int = 300  # 信号过期护栏：翻转那根 K 收盘超过这么久就不再补单（防幽灵仓/掉线后旧信号被当新信号成交）
     position_recheck_sec: int = 60  # 本地有仓时，每隔这么久去交易所对账一次真实持仓（用于发现手动平仓/幽灵仓）
-
-    # ── 过滤策略 ──
-    # 品种独立开关 block_4h（4h 方向拦截）与 filter_v3（V3 打分），均挂在 SymbolTradeConfig（见 state.py）。
-    # 判断顺序：block_4h 在 filter_v3 之前（4h 硬门槛优先于 V3 打分）。
-    # 实现见 _allow_by_4h / _allow_by_filter（_v3_allow，signal_v3 打分体系）。
 
     cooldown_sec: int   = 300      # 同一品种同一周期两次下单最小间隔
     poll_sec:     int   = 20       # 轮询间隔
@@ -262,7 +252,6 @@ class PatternTrader:
         self._last_er20: dict[tuple, float] = {}    # (sym, tf) -> 上一笔 ST 翻转的 ER20
         self._last_order_at: dict[tuple, float] = {}
         self._pos_check: dict[str, float] = {}       # sym -> 上次与交易所对账真实持仓的时间
-        self._pat_cache: dict[str, tuple] = {}      # sym -> (最新4h ts, pts, pmap)
         self._running = False
         self._load_rows = 0       # 上一次加载时 json 里的品种行数
         self._load_bad_rows = 0   # 其中解析失败（被跳过）的行数
@@ -333,8 +322,6 @@ class PatternTrader:
                     move_sl_to_entry=row.get("move_sl_to_entry"),
                     trail_with_st=row.get("trail_with_st"),
                     reverse_close=row.get("reverse_close"),
-                    block_4h=bool(row.get("block_4h", False)),
-                    filter_v3=bool(row.get("filter_v3", True)),
                     st_periods=(_cfg_int(row.get("st_periods"), DEF_ST_PERIODS)
                                 if row.get("st_periods") is not None else None),
                     st_multiplier=(_cfg_float(row.get("st_multiplier"), DEF_ST_MULTIPLIER)
@@ -469,8 +456,6 @@ class PatternTrader:
             move_sl_to_entry=kw.get("move_sl_to_entry"),
             trail_with_st=kw.get("trail_with_st"),
             reverse_close=kw.get("reverse_close"),
-            block_4h=bool(kw.get("block_4h", False)),
-            filter_v3=bool(kw.get("filter_v3", True)),
             st_periods=(_cfg_int(kw.get("st_periods"), DEF_ST_PERIODS)
                         if kw.get("st_periods") is not None else None),
             st_multiplier=(_cfg_float(kw.get("st_multiplier"), DEF_ST_MULTIPLIER)
@@ -514,8 +499,6 @@ class PatternTrader:
                    "tp3_pct", "tp3_ratio", "tp3_mode", "exit_mode",
                    "sl_pct", "sl_mode",
                    "move_sl_to_entry", "trail_with_st", "reverse_close",
-                   "block_4h",
-                   "filter_v3",
                    "st_periods", "st_multiplier",
                    "atr_ratio_enabled", "atr_ratio_threshold", "atr_ratio_window",
                    "range_gate", "atr_ratio_min", "atr_ratio_max",
@@ -893,13 +876,7 @@ class PatternTrader:
                 last = self._last_order_at.get(key, 0)
                 if time.time() - last < self.cfg.cooldown_sec:
                     continue
-            # 3) 过滤器：4h 方向 + 4 条规则过滤（趋势形态识别.md，品种独立开关）
-            # block_4h 已下放为品种独立开关（sc.block_4h），全局 cfg.block_4h 不再参与；
-            # 顺序保持在 V3 之前（4h 硬门槛优先于 V3 打分）
-            if getattr(sc, "block_4h", False) and not await self._allow_by_4h(sym, sig):
-                continue
-            if not await self._allow_by_filter(sym, sc, sig):
-                continue
+            # 3) 过滤器：ATR ratio + ATR14/ATR50、ER20 双区间闸门 + ER方向过滤（品种独立开关）
             if not await self._allow_by_range(sym, sc, sig):
                 continue
             if not await self._allow_by_atr_ratio(sym, sc, sig):
@@ -953,45 +930,6 @@ class PatternTrader:
         except Exception as e:
             logger.warning(f"[形态下单] {sym} {tf} 信号计算失败: {e}")
             return None
-
-    async def _allow_by_4h(self, sym: str, sig: dict) -> bool:
-        """True=放行。4h 无明显趋势 / 数据不足一律放行，只拦明确反向。"""
-        import bisect
-        cs = await self._kline(sym, "4h", 600)
-        if not cs:
-            return True
-        cached = self._pat_cache.get(sym)
-        if cached and cached[0] == cs[-1]["ts"]:
-            _, pts, pmap = cached
-        else:
-            pat = recognize_pattern(
-                [{"ts": c["ts"], "o": c["o"], "h": c["h"], "l": c["l"], "c": c["c"]} for c in cs]
-            )["pattern"]
-            pts = [p["ts"] for p in pat]
-            pmap = {p["ts"]: p for p in pat}
-            self._pat_cache[sym] = (cs[-1]["ts"], pts, pmap)
-        if not pts:
-            return True
-        idx = bisect.bisect_right(pts, sig["ts"]) - 1
-        if idx < 0:
-            return True
-        pdir = pmap[pts[idx]].get("dir")
-        return pdir != -sig_dir(sig)
-
-    async def _allow_by_filter(self, sym: str, sc: "SymbolTradeConfig", sig: dict) -> bool:
-        """True=放行。当前唯一过滤策略是 V3 趋势过滤，品种独立开关，默认关=放行。
-
-        V3（signal_v3 打分体系）：
-          ST Signal → Trend Gate(成熟趋势) / Early Breakout V2(早期启动) → Trend Score
-          → Range Penalty(两级 Fuse) → Execute
-        数据不足 / 信号根对不上 → 一律放行。
-        """
-        if not getattr(sc, "filter_v3", False):
-            return True
-        ok, why = await self._v3_allow(sym, sc, sig)
-        if not ok:
-            logger.info("[形态下单] %s %s V3拦截: %s", sym, sig.get("tf") or "1h", why)
-        return ok
 
     async def _allow_by_range(self, sym: str, sc: "SymbolTradeConfig", sig: dict) -> bool:
         """True=放行。ATR14/ATR50（可两段）+ ER20 区间闸门（品种独立，默认关）。
@@ -1097,45 +1035,6 @@ class PatternTrader:
             "[形态下单] %s %s ER方向过滤拦截(%s): 当前ER20=%.3f 上一笔=%.3f",
             sig.get("symbol") or "?", sig.get("tf") or "?", mode, cur, prev_er)
         return False
-
-    async def _v3_allow(self, sym: str, sc, sig: dict):
-        """V3 趋势过滤：Trend Score 通过（成熟趋势 / 早期启动）才放行。
-
-        与回测 build_signal_features_1h.py 共用 backend/signal_v3.py，口径单一。
-        注意：V3 是在「1h 信号 + 4h 上下文」上拟合的，其它周期开启请谨慎。
-        数据不足 / 信号根对不上 → 一律放行。
-        返回 (是否放行, 说明)。
-        """
-        tf = sig.get("tf") or "1h"
-        try:
-            cs = await self._kline(sym, tf, 600)
-            cs4 = await self._kline(sym, "4h", 300)
-        except Exception as e:
-            logger.warning(f"[形态下单] {sym} {tf} V3 取数失败: {e}")
-            return True, "取数失败放行"
-        if len(cs) < 120 or len(cs4) < 60:
-            return True, "数据不足放行"
-
-        periods, multiplier = st_params_for(sc)
-        st = super_trend([x["o"] for x in cs], [x["h"] for x in cs],
-                         [x["l"] for x in cs], [x["c"] for x in cs],
-                         periods=periods, multiplier=multiplier, change_atr=True)
-        flips = st.get("flips") or []
-        if not flips:
-            return True, "无翻转放行"
-        fd = flips[-1]
-        i = fd["i"]
-        if i >= len(cs) or cs[i]["ts"] != sig.get("ts"):
-            return True, "信号根对不上放行"   # 数据延迟，不拦
-
-        sd = 1 if fd["type"] == "buy" else -1
-        feats = signal_v3.features_from_candles(
-            cs, i, sd, cs4, st_periods=periods, st_mult=multiplier)
-        if not feats:
-            return True, "特征不足放行"
-        v = signal_v3.v3_decide(sd, feats)
-        return v["execute"], f"{v['path']} score={v['score']}"
-
 
 def pattern_score_detail(closes, highs, lows, opens, vols, h4_closes=None, h4_highs=None,
                           h4_lows=None, sd=1, break_price=None) -> dict:
@@ -1288,10 +1187,6 @@ def pattern_score(closes, highs, lows, opens, vols, h4_closes=None, h4_highs=Non
     """
     return pattern_score_detail(closes, highs, lows, opens, vols, h4_closes, h4_highs,
                                  h4_lows, sd, break_price)["total"]
-
-
-def sig_dir(sig: dict) -> int:
-    return 1 if sig["type"] == "buy" else -1
 
 
 # 全局单例

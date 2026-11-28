@@ -322,10 +322,6 @@ export default function PatternTradePanel({ currentSymbol }) {
           <input type="checkbox" checked={cfg.paper} onChange={(e) => patch({ paper: e.target.checked })} />
           <span style={{ color: cfg.paper ? C.text : C.down }}>模拟盘（取消勾选 = 真实下单）</span>
         </div>
-        <div style={SZ.row}>
-          <input type="checkbox" checked={cfg.block_4h} onChange={(e) => patch({ block_4h: e.target.checked })} />
-          <span>开启 4h 方向拦截（仅拦 4h 明确反向）</span>
-        </div>
         </div>
 
       {/* 默认出场 · 止盈止损 */}
@@ -411,7 +407,7 @@ export default function PatternTradePanel({ currentSymbol }) {
           // 表现为「点了预设数字没变」。服务端值一变就重挂，立即反映真实配置。
           <div key={s.symbol + "#" + JSON.stringify([
                   s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
-                  s.reverse_close, s.allow_tfs, s.block_4h, s.filter_v3,
+                  s.reverse_close, s.allow_tfs,
                   s.st_periods, s.st_multiplier,
                   s.atr_ratio_enabled, s.atr_ratio_threshold, s.atr_ratio_window,
                   s.range_gate, s.atr_ratio_min, s.atr_ratio_max,
@@ -521,26 +517,6 @@ export default function PatternTradePanel({ currentSymbol }) {
             <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 6 }}>
               <div style={{ fontSize: 11, color: C.neutral, marginBottom: 4 }}>
                 过滤策略（勾选即启用）
-              </div>
-              <div style={SZ.row}>
-                <input
-                  type="checkbox"
-                  checked={!!s.block_4h}
-                  onChange={(e) => updateSymbol(s.symbol, { block_4h: e.target.checked })}
-                />
-                <span style={{ fontSize: 11 }}>
-                  4h 方向过滤（4h SuperTrend 方向与信号反向 → 拦截开仓；数据不足放行）
-                </span>
-              </div>
-              <div style={SZ.row}>
-                <input
-                  type="checkbox"
-                  checked={!!s.filter_v3}
-                  onChange={(e) => updateSymbol(s.symbol, { filter_v3: e.target.checked })}
-                />
-                <span style={{ fontSize: 11 }}>
-                  V3 趋势过滤（Trend Score：成熟趋势 / 早期启动 / 慢热接住 才放行，含两级Fuse）
-                </span>
               </div>
               <div style={SZ.row}>
                 <span style={{ fontSize: 11, minWidth: 56 }}>ER方向过滤</span>
@@ -684,16 +660,13 @@ export default function PatternTradePanel({ currentSymbol }) {
                 </button>
                 <button
                   style={{ ...SZ.btnGhost, marginLeft: 6 }}
-                  title="4h 趋势跟随策略（已 walk-forward 样本外验证）：4h SuperTrend(10,3.0) 翻转开仓，TP1 +2.0% 平 50% 后止损移到开仓价保本，剩余由同周期反向信号（下一翻转）平仓，初始止损固定 2%。样本外 +837%、pf 7.72、回撤 -7.4%（1X、约 50 笔/年、均持仓 7.3 天）。点击会顺带把该品种「允许周期」设为仅 4h，并关闭 V3 过滤（验证基准为零过滤）。"
+                  title="4h 趋势跟随策略（已 walk-forward 样本外验证）：4h SuperTrend(10,3.0) 翻转开仓，TP1 +2.0% 平 50% 后止损移到开仓价保本，剩余由同周期反向信号（下一翻转）平仓，初始止损固定 2%。样本外 +837%、pf 7.72、回撤 -7.4%（1X、约 50 笔/年、均持仓 7.3 天）。点击会顺带把该品种「允许周期」设为仅 4h。"
                   onClick={() => updateSymbol(s.symbol, {
                     exit_mode: "single",
                     tp1_pct: 2.0, tp1_ratio: 50,
                     sl_mode: "pct", sl_pct: 2.0,
                     move_sl_to_entry: true, trail_with_st: true, reverse_close: false,
                     allow_tfs: ["4h"],
-                    // 验证基准是「零过滤」：V3 是为 1h 设计的（含 4H 趋势环境维度），
-                    // base=4h 时它会自我比较且未经任何验证，开着会偏离回测结论。
-                    filter_v3: false,
                   })}
                 >
                   预设：4h趋势跟随 · 单档2.0%/50% · 下一翻转平仓
