@@ -44,10 +44,10 @@ CONFIG_FILE = os.path.join(_DIR, "pattern_trade.json")
 CRED_FILE = os.path.join(_DIR, "pattern_credentials.json")
 
 EXCHANGES = ("okx", "bitget")
-ALL_TFS = ["15m", "1h", "4h", "1d"]
+ALL_TFS = ["15m", "30m", "1h", "4h", "1d"]
 
 # 各周期 K 线时长（秒），用于"收盘确认"判断
-TF_SEC = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+TF_SEC = {"15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 
 # ER20 = 最近 20 段价格变化；efficiency_ratio 的 window 是收盘根数（段数 + 1）
 ER20_WINDOW = 21

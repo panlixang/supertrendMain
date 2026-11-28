@@ -2115,12 +2115,15 @@ def simulate_pct_exits(candles, candidates, st, fee_bps: float, slip_bps: float,
                        legs: list[tuple[float, float]] | None = None,
                        move_be: bool = True,
                        use_trail: bool = True,
-                       stop_atr: float | None = None) -> dict:
+                       stop_atr: float | None = None,
+                       no_stop: bool = False) -> dict:
     """固定百分比（或 ATR 倍数）硬止损 + 多档 % 止盈 + 剩余出场方式。
 
     stop_pct：硬止损按入场价百分比；stop_atr：硬止损按 stop_atr × ATR（二选一）。
     legs=[(浮盈%, 平仓比例%), ...] 依序触发，触发后 remaining 继续跑；
     move_be=True 时首档止盈后止损移到开仓价；use_trail=False 则剩余只等反向翻转。
+    no_stop=True 时取消初始硬止损（仓位仍按 stop_atr/stop_pct 的名义风险折算），
+    只剩「首档止盈后保本」和「反向翻转平仓」两道出场。
     同根先判止损、再按顺序判各档止盈。
     """
     fee = fee_bps / 10_000.0
@@ -2167,7 +2170,7 @@ def simulate_pct_exits(candles, candidates, st, fee_bps: float, slip_bps: float,
             pos = None
 
     for i, bar in enumerate(candles):
-        if pos is not None and i > pos["entry_i"]:
+        if pos is not None and i > pos["entry_i"] and pos["stop"] is not None:
             side = pos["side"]
             line = st["up"][i] if side == 1 else st["dn"][i]
             if use_trail and line is not None and (
@@ -2194,8 +2197,9 @@ def simulate_pct_exits(candles, candidates, st, fee_bps: float, slip_bps: float,
                 if pos is None:
                     break
                 if move_be and pos["leg_i"] == 1:
-                    pos["stop"] = (max(pos["stop"], pos["entry_fill"]) if side == 1
-                                   else min(pos["stop"], pos["entry_fill"]))
+                    base_stop = pos["stop"] if pos["stop"] is not None else pos["entry_fill"]
+                    pos["stop"] = (max(base_stop, pos["entry_fill"]) if side == 1
+                                   else min(base_stop, pos["entry_fill"]))
                     pos["be"] = True
             if pos is not None and st["trend"][i] not in (None, side):
                 leg(i, "st_flip", bar["c"], pos["qty"])
@@ -2221,7 +2225,8 @@ def simulate_pct_exits(candles, candidates, st, fee_bps: float, slip_bps: float,
                 "flip_i": cand["flip_i"], "entry_i": i, "side": side,
                 "entry": cand["entry"], "entry_fill": entry_fill,
                 "qty": qty, "qty0": qty,
-                "stop": (cand["entry"] - dist if side == 1 else cand["entry"] + dist),
+                "stop": (None if no_stop else
+                         (cand["entry"] - dist if side == 1 else cand["entry"] + dist)),
                 "entry_fee": qty * cand["entry"] * fee,
                 "leg_i": 0, "be": False, "trailing": False,
                 "legs": [], "pnl": 0.0, "gross_sum": 0.0, "fee_sum": 0.0,
@@ -2449,6 +2454,158 @@ def run_pct_reverse_study() -> None:
     print(f"\n[done] pct reverse report: {rp}")
 
 
+def _seg_min(pf_map: dict) -> float:
+    vals = [v for v in pf_map.values() if v is not None]
+    return min(vals) if vals else 0.0
+
+
+def run_eth_optimize() -> None:
+    """ETH 1h 联合寻优：ST 周期×倍数×ATR ratio 与出场参数一起搜。
+
+    筛选口径（不只看 OOS 单点，避免过拟合）：
+      主排序 = min(DEV PF, VAL PF, OOS PF)   —— 三段里最差的那段
+      约束   = 全样本笔数 >= 120，且 OOS 笔数 >= 40
+      输出   = 同时给出净PF、OOS PF、压力费率 OOS PF、全周期回撤、2026 盈亏
+    """
+    symbol = "ETHUSDT"
+    tf = "1h"
+    periods = [10, 11, 12, 14, 15, 16, 18, 20]
+    multipliers = [3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0]
+    ratios = [0.0, 1.0, 1.05, 1.1, 1.2, 1.3]
+    MIN_N, MIN_OOS_N = 120, 40
+
+    candles = load_tf(tf, symbol)
+    o = [c["o"] for c in candles]
+    h = [c["h"] for c in candles]
+    lo_ = [c["l"] for c in candles]
+    cl = [c["c"] for c in candles]
+    adx = ta_adx(h, lo_, cl, ADX_LEN)
+    er = er_series(cl, ER_LEN)
+    atr_of = {p: ta_atr(h, lo_, cl, p) for p in periods}
+
+    # 第一阶段：固定"无止损 + TP1 1%/30% + 保本 + 反向"扫入场空间
+    stage1_exit = dict(stop_atr=3.5, legs=[(1.0, 30.0)], move_be=True,
+                       use_trail=False, no_stop=True)
+    cache: dict[tuple, tuple] = {}
+    rows = []
+    for p in periods:
+        atr = atr_of[p]
+        for m in multipliers:
+            st = super_trend(o, h, lo_, cl, periods=p, multiplier=m,
+                             src="hl2", change_atr=True)
+            for ratio in ratios:
+                cands = build_candidates(candles, st, atr, adx, er, "A", 0,
+                                         stop_atr=3.0, atr_min_ratio=ratio)
+                if len(cands) < MIN_N:
+                    continue
+                cache[(p, m, ratio)] = (st, cands)
+                b = simulate_pct_exits(candles, cands, st, BASE_FEE_BPS,
+                                       BASE_SLIP_BPS, **stage1_exit)
+                segs = {x[0]: stat_block(b["trades"], st["flips"], candles,
+                                        b["equity"], x) for x in SEGMENTS}
+                a = stat_block(b["trades"], st["flips"], candles, b["equity"],
+                               ("all", 2021, 2100))
+                if a["n"] < MIN_N or segs["oos"]["n"] < MIN_OOS_N:
+                    continue
+                pf = {k: segs[k]["pf"] for k in ("dev", "val", "oos")}
+                rows.append({
+                    "period": p, "multiplier": m, "ratio": ratio,
+                    "label": f"ST{p}x{m:g}/R{ratio:g}",
+                    "n": a["n"], "ret_pct": a["ret_pct"], "pf": a["pf"],
+                    "dev": pf["dev"], "val": pf["val"], "oos": pf["oos"],
+                    "min_pf": _seg_min(pf), "oos_dd": segs["oos"]["max_dd_pct"],
+                    "max_dd": b["max_dd_pct"],
+                    "winrate": a["winrate"], "streak": a["max_stop_streak"],
+                })
+
+    print(f"\n=== ETH {tf} 第一阶段：入场空间（{len(rows)} 组，"
+          f"固定 无止损+TP1 1%/30%+保本+反向） ===")
+    print(f"{'组合':<18} {'笔数':>5} {'收益%':>8} {'净PF':>6} {'DEV':>6} {'VAL':>6} "
+          f"{'OOS':>6} {'最差段':>7} {'OOSDD%':>7} {'胜率%':>6} {'连损':>4}")
+    rows.sort(key=lambda x: -x["min_pf"])
+    for r in rows[:18]:
+        print(f"{r['label']:<18} {r['n']:>5} {r['ret_pct']:>+8.1f} {fmt_pf(r['pf']):>6} "
+              f"{fmt_pf(r['dev']):>6} {fmt_pf(r['val']):>6} {fmt_pf(r['oos']):>6} "
+              f"{fmt_pf(r['min_pf']):>7} {r['oos_dd']:>7.2f} {r['winrate']:>6.1f} "
+              f"{r['streak']:>4}")
+
+    # 第二阶段：对入场 Top12 扫出场（TP1 幅度 × 平仓比例 × 有无初始止损）
+    top = rows[:12]
+    tp_grid = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]
+    ratio_grid = [20.0, 30.0, 40.0, 50.0]
+    stop_grid = [("无初始止损", None, True), ("3.0ATR止损", 3.0, False),
+                 ("3.5ATR止损", 3.5, False)]
+    best = []
+    for e in top:
+        st, cands = cache[(e["period"], e["multiplier"], e["ratio"])]
+        for pct in tp_grid:
+            for pr in ratio_grid:
+                for slabel, sa, no_stop in stop_grid:
+                    kw = dict(stop_atr=(sa or 3.5), legs=[(pct, pr)],
+                              move_be=True, use_trail=False, no_stop=no_stop)
+                    b = simulate_pct_exits(candles, cands, st, BASE_FEE_BPS,
+                                           BASE_SLIP_BPS, **kw)
+                    segs = {x[0]: stat_block(b["trades"], st["flips"], candles,
+                                            b["equity"], x) for x in SEGMENTS}
+                    a = stat_block(b["trades"], st["flips"], candles, b["equity"],
+                                   ("all", 2021, 2100))
+                    if a["n"] < MIN_N or segs["oos"]["n"] < MIN_OOS_N:
+                        continue
+                    pf = {k: segs[k]["pf"] for k in ("dev", "val", "oos")}
+                    best.append({
+                        "label": e["label"], "stop": slabel,
+                        "tp1": pct, "tp1_ratio": pr,
+                        "n": a["n"], "ret_pct": a["ret_pct"], "pf": a["pf"],
+                        "dev": pf["dev"], "val": pf["val"], "oos": pf["oos"],
+                        "min_pf": _seg_min(pf), "oos_dd": segs["oos"]["max_dd_pct"],
+                        "max_dd": b["max_dd_pct"], "winrate": a["winrate"],
+                        "streak": a["max_stop_streak"], "kw": kw,
+                        "cands": cands, "st": st,
+                    })
+
+    best.sort(key=lambda x: -x["min_pf"])
+    # 压力费率只对前 30 名算，省时间
+    for r in best[:30]:
+        s = simulate_pct_exits(candles, r["cands"], r["st"], STRESS_FEE_BPS,
+                               STRESS_SLIP_BPS, **r["kw"])
+        r["stress_oos"] = stat_block(s["trades"], r["st"]["flips"], candles,
+                                     s["equity"], SEGMENTS[2])["pf"]
+        y26 = [t for t in s["trades"] if t["entry_ts"] >= _ms(2026)]
+        r["pnl_2026"] = sum(t["pnl"] for t in s["trades"]
+                            if t["entry_ts"] >= _ms(2026)) if y26 else 0.0
+
+    print(f"\n=== ETH {tf} 第二阶段：出场网格（{len(best)} 组，按最差段 PF 排序） ===")
+    print(f"{'组合':<18} {'止损':<10} {'TP1':>5} {'比例':>4} {'笔数':>5} {'收益%':>8} "
+          f"{'净PF':>6} {'DEV':>6} {'VAL':>6} {'OOS':>6} {'最差段':>7} {'OOSDD%':>7} "
+          f"{'压力OOS':>7} {'2026':>7}")
+    for r in best[:20]:
+        print(f"{r['label']:<18} {r['stop']:<10} {r['tp1']:>5.2f} {r['tp1_ratio']:>4.0f} "
+              f"{r['n']:>5} {r['ret_pct']:>+8.1f} {fmt_pf(r['pf']):>6} "
+              f"{fmt_pf(r['dev']):>6} {fmt_pf(r['val']):>6} {fmt_pf(r['oos']):>6} "
+              f"{fmt_pf(r['min_pf']):>7} {r['oos_dd']:>7.2f} "
+              f"{fmt_pf(r.get('stress_oos', 0)):>7} {r.get('pnl_2026', 0):>+7.0f}")
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    rp = os.path.join(CACHE_DIR, "eth_opt_report.json")
+    with open(rp, "w", encoding="utf-8") as fh:
+        json.dump({
+            "source": f"data-api.binance.vision {symbol} spot {tf}",
+            "study": "ETH entry space (ST period x multiplier x ATR ratio) x exit "
+                     "(% TP1 legs, optional hard stop, breakeven, reverse close)",
+            "params": {"risk_pct": RISK_PCT, "leverage_cap": LEVERAGE_CAP,
+                       "fee_bps": BASE_FEE_BPS, "slip_bps": BASE_SLIP_BPS,
+                       "stress_fee_bps": STRESS_FEE_BPS,
+                       "stress_slip_bps": STRESS_SLIP_BPS},
+            "grid": {"periods": periods, "multipliers": multipliers,
+                     "ratios": ratios, "tp1": tp_grid, "tp1_ratio": ratio_grid,
+                     "stops": [s[0] for s in stop_grid]},
+            "stage1": rows,
+            "stage2": [{k: v for k, v in r.items() if k not in ("kw", "cands", "st")}
+                       for r in best],
+        }, fh, ensure_ascii=False, indent=2)
+    print(f"\n[done] ETH opt report: {rp}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("action", choices=["fetch", "run", "all", "exit", "stop",
@@ -2457,9 +2614,12 @@ def main() -> None:
                                        "f35atr", "atrz", "atrpct", "atrchg",
                                        "val15", "val15matrix", "val30matrix",
                                        "delay", "full1h", "ethmatrix", "tpsl",
-                                       "pctexit", "pctrev"])
+                                       "pctexit", "pctrev", "ethopt"])
     args = ap.parse_args()
 
+    if args.action == "ethopt":
+        run_eth_optimize()
+        return
     if args.action == "pctrev":
         run_pct_reverse_study()
         return

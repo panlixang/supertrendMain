@@ -1,0 +1,113 @@
+{
+  "15m": {
+    "metrics": {
+      "ok": true,
+      "n": 33,
+      "ret": 28.832790220762888,
+      "pf": 10.128143734509745,
+      "wr": 87.87878787878788,
+      "is_ret": 14.913755439670865,
+      "oos_ret": 13.919034781092021,
+      "oos_pf": 5.4066130663953,
+      "oos_n": 10,
+      "dd": 3.591374513428691
+    },
+    "st": {
+      "periods": 18,
+      "multiplier": 3.5,
+      "src": "close",
+      "change_atr": true
+    },
+    "gate": {
+      "scoring_full_threshold": 60.0,
+      "scoring_half_threshold": 60.0,
+      "scoring_alert_threshold": 40.0,
+      "er_trend": 0.3,
+      "er_min": 0.08,
+      "er_weak_min": 0.08
+    },
+    "exit": {
+      "tp1_pct": 1.2,
+      "tp1_ratio": 30.0,
+      "tp2_pct": 3.0,
+      "tp2_ratio": 40.0,
+      "sl_pct": 1.2,
+      "sl_mode": "st",
+      "trail_with_st": true
+    }
+  },
+  "30m": {
+    "metrics": {
+      "ok": true,
+      "n": 58,
+      "ret": 53.788477769008026,
+      "pf": 8.303663977303978,
+      "wr": 89.65517241379311,
+      "is_ret": 37.51810909509262,
+      "oos_ret": 16.270368673915396,
+      "oos_pf": Infinity,
+      "oos_n": 18,
+      "dd": 4.522198801224079
+    },
+    "st": {
+      "periods": 7,
+      "multiplier": 2.5,
+      "src": "close",
+      "change_atr": true
+    },
+    "gate": {
+      "scoring_full_threshold": 50.0,
+      "scoring_half_threshold": 50.0,
+      "scoring_alert_threshold": 40.0,
+      "er_trend": 0.35,
+      "er_min": 0.12,
+      "er_weak_min": 0.12
+    },
+    "exit": {
+      "tp1_pct": 2.0,
+      "tp1_ratio": 30.0,
+      "tp2_pct": 3.0,
+      "tp2_ratio": 40.0,
+      "sl_pct": 1.5,
+      "sl_mode": "st",
+      "trail_with_st": true
+    }
+  },
+  "1h": {
+    "metrics": {
+      "ok": true,
+      "n": 72,
+      "ret": 34.79920005308484,
+      "pf": 2.829742464092878,
+      "wr": 73.61111111111111,
+      "is_ret": 15.958597398403604,
+      "oos_ret": 18.840602654681234,
+      "oos_pf": 7.7062702592575585,
+      "oos_n": 22,
+      "dd": 6.677682560253749
+    },
+    "st": {
+      "periods": 15,
+      "multiplier": 2.0,
+      "src": "hl2",
+      "change_atr": true
+    },
+    "gate": {
+      "scoring_full_threshold": 50.0,
+      "scoring_half_threshold": 50.0,
+      "scoring_alert_threshold": 40.0,
+      "er_trend": 0.3,
+      "er_min": 0.15,
+      "er_weak_min": 0.15
+    },
+    "exit": {
+      "tp1_pct": 2.0,
+      "tp1_ratio": 30.0,
+      "tp2_pct": 3.5,
+      "tp2_ratio": 40.0,
+      "sl_pct": 1.5,
+      "sl_mode": "st",
+      "trail_with_st": true
+    }
+  }
+}

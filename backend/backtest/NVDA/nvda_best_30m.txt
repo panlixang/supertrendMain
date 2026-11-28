@@ -1,0 +1,36 @@
+================================================================
+NVDA-USDT 首页策略回测（线上真实参数）
+K线: 30m  5000 根  时间窗 1786847400000 ~ 1795845600000
+参数: ST 7x2.5 close chg_atr=True | MTF 20/50 EMA
+交易: 50.0U x10 = 500.0U  入场=信号收盘  冷却=300s
+出场: tp1=2.0%/30.0% 保本  sl=st 1.5%  trail=True
+闸门: use_scoring=True full/half/alert=50.0/50.0/40.0
+----------------------------------------------------------------
+全样本: 笔数=58  收益=+53.79%  PF=8.30 胜率=89.7%  盈亏=+268.94U
+IS(前70%): 笔数=40  收益=+37.52%  PF=6.09 胜率=87.5%
+OOS(后30%): 笔数=18  收益=+16.27%  PF=inf 胜率=94.4%
+----------------------------------------------------------------
+最大回撤: 4.52%   末净值: 768.94U
+================================================================
+逐笔明细（前20笔）:
+  short entry=225.040 exit=220.539 pnl=+3.00U  tp1
+  short entry=225.040 exit=218.289 pnl=+4.20U  tp2
+  short entry=225.040 exit=217.000 pnl=+7.50U  反向信号平仓
+  long  entry=217.000 exit=221.340 pnl=+3.00U  tp1
+  long  entry=217.000 exit=223.510 pnl=+4.20U  tp2
+  long  entry=217.000 exit=225.320 pnl=+8.05U  反向信号平仓
+  short entry=225.320 exit=220.814 pnl=+3.00U  tp1
+  short entry=225.320 exit=218.560 pnl=+4.20U  tp2
+  short entry=225.320 exit=218.240 pnl=+6.60U  反向信号平仓
+  long  entry=218.240 exit=222.605 pnl=+3.00U  tp1
+  long  entry=218.240 exit=224.787 pnl=+4.20U  tp2
+  long  entry=218.240 exit=224.670 pnl=+6.19U  反向信号平仓
+  short entry=224.670 exit=232.490 pnl=-17.40U  极端止损
+  short entry=230.760 exit=226.145 pnl=+3.00U  tp1
+  short entry=230.760 exit=223.837 pnl=+4.20U  tp2
+  short entry=230.760 exit=215.070 pnl=+14.28U  反向信号平仓
+  long  entry=215.070 exit=219.371 pnl=+3.00U  tp1
+  long  entry=215.070 exit=221.522 pnl=+4.20U  tp2
+  long  entry=215.070 exit=223.800 pnl=+8.52U  反向信号平仓
+  short entry=223.800 exit=224.950 pnl=-2.57U  反向信号平仓
+  ... 共 58 笔

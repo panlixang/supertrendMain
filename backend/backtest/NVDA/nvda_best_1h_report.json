@@ -1,0 +1,680 @@
+{
+  "symbol": "NVDA-USDT",
+  "tf": "1h",
+  "n": 5000,
+  "params": {
+    "st": "15x2.0",
+    "src": "hl2",
+    "mtf": "20/50EMA"
+  },
+  "all": {
+    "n": 72,
+    "ret_pct": 34.79920005308484,
+    "pf": 2.829742464092878,
+    "winrate": 73.61111111111111,
+    "pnl": 173.9960002654242
+  },
+  "is": {
+    "n": 50,
+    "ret_pct": 15.958597398403604,
+    "pf": 1.9845375543624142,
+    "winrate": 74.0
+  },
+  "oos": {
+    "n": 22,
+    "ret_pct": 18.840602654681234,
+    "pf": 7.7062702592575585,
+    "winrate": 72.72727272727273
+  },
+  "max_dd_pct": 6.677682560253749,
+  "trades": [
+    {
+      "entry_ts": 1777906800000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": -15.531599652582672,
+      "reason": "极端止损",
+      "entry": 195.73,
+      "exit": 201.81
+    },
+    {
+      "entry_ts": 1778817600000,
+      "exit_ts": 1778835600000,
+      "side": "short",
+      "pnl": 2.9999999999999964,
+      "reason": "tp1",
+      "entry": 234.11,
+      "exit": 229.42780000000002
+    },
+    {
+      "entry_ts": 1778817600000,
+      "exit_ts": 1778850000000,
+      "side": "short",
+      "pnl": 4.899999999985271,
+      "reason": "tp2",
+      "entry": 234.11,
+      "exit": 225.91615000000002
+    },
+    {
+      "entry_ts": 1778817600000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 13.356541796849013,
+      "reason": "反向信号平仓",
+      "entry": 234.11,
+      "exit": 219.22
+    },
+    {
+      "entry_ts": 1780318800000,
+      "exit_ts": 1780333200000,
+      "side": "long",
+      "pnl": 3.0,
+      "reason": "tp1",
+      "entry": 219.22,
+      "exit": 223.6044
+    },
+    {
+      "entry_ts": 1780318800000,
+      "exit_ts": 1780387200000,
+      "side": "long",
+      "pnl": 4.900000000143383,
+      "reason": "tp2",
+      "entry": 219.22,
+      "exit": 226.8927
+    },
+    {
+      "entry_ts": 1780318800000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": 2.1000000001491532,
+      "reason": "止损",
+      "entry": 219.22,
+      "exit": 221.4122
+    },
+    {
+      "entry_ts": 1780923600000,
+      "exit_ts": 1781020800000,
+      "side": "short",
+      "pnl": 2.9999999999999956,
+      "reason": "tp1",
+      "entry": 206.37,
+      "exit": 202.2426
+    },
+    {
+      "entry_ts": 1780923600000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 206.37,
+      "exit": 206.37
+    },
+    {
+      "entry_ts": 1781186400000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": -15.301283011332423,
+      "reason": "极端止损",
+      "entry": 200.31,
+      "exit": 206.44
+    },
+    {
+      "entry_ts": 1781532000000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": -3.8255001663261265,
+      "reason": "反向信号平仓",
+      "entry": 210.43,
+      "exit": 208.82
+    },
+    {
+      "entry_ts": 1781614800000,
+      "exit_ts": 1781722800000,
+      "side": "short",
+      "pnl": 3.000000000000001,
+      "reason": "tp1",
+      "entry": 208.82,
+      "exit": 204.6436
+    },
+    {
+      "entry_ts": 1781614800000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 208.82,
+      "exit": 208.82
+    },
+    {
+      "entry_ts": 1782136800000,
+      "exit_ts": 1782183600000,
+      "side": "short",
+      "pnl": 3.0000000000000107,
+      "reason": "tp1",
+      "entry": 209.27,
+      "exit": 205.0846
+    },
+    {
+      "entry_ts": 1782136800000,
+      "exit_ts": 1782201600000,
+      "side": "short",
+      "pnl": 4.899999999858959,
+      "reason": "tp2",
+      "entry": 209.27,
+      "exit": 201.94555
+    },
+    {
+      "entry_ts": 1782136800000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 2.0999999999395578,
+      "reason": "止损",
+      "entry": 209.27,
+      "exit": 207.1773
+    },
+    {
+      "entry_ts": 1783688400000,
+      "exit_ts": 1783861200000,
+      "side": "long",
+      "pnl": 3.000000000000001,
+      "reason": "tp1",
+      "entry": 207.45,
+      "exit": 211.599
+    },
+    {
+      "entry_ts": 1783688400000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": 5.820679681950029,
+      "reason": "反向信号平仓",
+      "entry": 207.45,
+      "exit": 210.9
+    },
+    {
+      "entry_ts": 1783897200000,
+      "exit_ts": 1783929600000,
+      "side": "short",
+      "pnl": 3.000000000000013,
+      "reason": "tp1",
+      "entry": 210.9,
+      "exit": 206.682
+    },
+    {
+      "entry_ts": 1783897200000,
+      "exit_ts": 1783965600000,
+      "side": "short",
+      "pnl": 4.899999999901872,
+      "reason": "tp2",
+      "entry": 210.9,
+      "exit": 203.5185
+    },
+    {
+      "entry_ts": 1783897200000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 2.100000000042309,
+      "reason": "止损",
+      "entry": 210.9,
+      "exit": 208.791
+    },
+    {
+      "entry_ts": 1784754000000,
+      "exit_ts": 1784818800000,
+      "side": "short",
+      "pnl": 3.000000000000006,
+      "reason": "tp1",
+      "entry": 210.93,
+      "exit": 206.7114
+    },
+    {
+      "entry_ts": 1784754000000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 210.93,
+      "exit": 210.93
+    },
+    {
+      "entry_ts": 1785139200000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": -3.0304476472272164,
+      "reason": "反向信号平仓",
+      "entry": 209.54,
+      "exit": 208.27
+    },
+    {
+      "entry_ts": 1785150000000,
+      "exit_ts": 1785157200000,
+      "side": "short",
+      "pnl": 3.000000000000004,
+      "reason": "tp1",
+      "entry": 208.27,
+      "exit": 204.1046
+    },
+    {
+      "entry_ts": 1785150000000,
+      "exit_ts": 1785160800000,
+      "side": "short",
+      "pnl": 4.899999999982245,
+      "reason": "tp2",
+      "entry": 208.27,
+      "exit": 200.98055
+    },
+    {
+      "entry_ts": 1785150000000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 11.676189561816013,
+      "reason": "反向信号平仓",
+      "entry": 208.27,
+      "exit": 196.69
+    },
+    {
+      "entry_ts": 1785247200000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": -8.490518074126808,
+      "reason": "反向信号平仓",
+      "entry": 196.69,
+      "exit": 193.35
+    },
+    {
+      "entry_ts": 1785330000000,
+      "exit_ts": 1785355200000,
+      "side": "short",
+      "pnl": 2.9999999999999925,
+      "reason": "tp1",
+      "entry": 193.35,
+      "exit": 189.483
+    },
+    {
+      "entry_ts": 1785330000000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 193.35,
+      "exit": 193.35
+    },
+    {
+      "entry_ts": 1786028400000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": -15.715334495732758,
+      "reason": "极端止损",
+      "entry": 217.94,
+      "exit": 224.79
+    },
+    {
+      "entry_ts": 1786312800000,
+      "exit_ts": 1786370400000,
+      "side": "short",
+      "pnl": 3.0000000000000084,
+      "reason": "tp1",
+      "entry": 224.89,
+      "exit": 220.39219999999997
+    },
+    {
+      "entry_ts": 1786312800000,
+      "exit_ts": 1786377600000,
+      "side": "short",
+      "pnl": 4.900000000121044,
+      "reason": "tp2",
+      "entry": 224.89,
+      "exit": 217.01885
+    },
+    {
+      "entry_ts": 1786312800000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 2.0999999999619123,
+      "reason": "止损",
+      "entry": 224.89,
+      "exit": 222.6411
+    },
+    {
+      "entry_ts": 1786986000000,
+      "exit_ts": 1787040000000,
+      "side": "short",
+      "pnl": 3.0000000000000044,
+      "reason": "tp1",
+      "entry": 225.91,
+      "exit": 221.3918
+    },
+    {
+      "entry_ts": 1786986000000,
+      "exit_ts": 1787148000000,
+      "side": "short",
+      "pnl": 4.900000000055886,
+      "reason": "tp2",
+      "entry": 225.91,
+      "exit": 218.00314999999998
+    },
+    {
+      "entry_ts": 1786986000000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 6.441945908013007,
+      "reason": "反向信号平仓",
+      "entry": 225.91,
+      "exit": 218.98
+    },
+    {
+      "entry_ts": 1787778000000,
+      "exit_ts": 1787817600000,
+      "side": "long",
+      "pnl": 3.000000000000007,
+      "reason": "tp1",
+      "entry": 218.98,
+      "exit": 223.3596
+    },
+    {
+      "entry_ts": 1787778000000,
+      "exit_ts": 1787839200000,
+      "side": "long",
+      "pnl": 4.899999999904444,
+      "reason": "tp2",
+      "entry": 218.98,
+      "exit": 226.64429999999996
+    },
+    {
+      "entry_ts": 1787778000000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": 2.0999999999152514,
+      "reason": "止损",
+      "entry": 218.98,
+      "exit": 221.16979999999998
+    },
+    {
+      "entry_ts": 1787929200000,
+      "exit_ts": 1787940000000,
+      "side": "short",
+      "pnl": 2.999999999999994,
+      "reason": "tp1",
+      "entry": 221.39,
+      "exit": 216.9622
+    },
+    {
+      "entry_ts": 1787929200000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 221.39,
+      "exit": 221.39
+    },
+    {
+      "entry_ts": 1788354000000,
+      "exit_ts": 1788361200000,
+      "side": "long",
+      "pnl": 2.9999999999999973,
+      "reason": "tp1",
+      "entry": 221.44,
+      "exit": 225.8688
+    },
+    {
+      "entry_ts": 1788354000000,
+      "exit_ts": 1788454800000,
+      "side": "long",
+      "pnl": 4.8999999999533985,
+      "reason": "tp2",
+      "entry": 221.44,
+      "exit": 229.19039999999998
+    },
+    {
+      "entry_ts": 1788354000000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": 8.449692919172996,
+      "reason": "反向信号平仓",
+      "entry": 221.44,
+      "exit": 230.35
+    },
+    {
+      "entry_ts": 1788541200000,
+      "exit_ts": 1788883200000,
+      "side": "short",
+      "pnl": 3.0,
+      "reason": "tp1",
+      "entry": 230.35,
+      "exit": 225.743
+    },
+    {
+      "entry_ts": 1788541200000,
+      "exit_ts": 1789038000000,
+      "side": "short",
+      "pnl": 4.900000000079104,
+      "reason": "tp2",
+      "entry": 230.35,
+      "exit": 222.28775
+    },
+    {
+      "entry_ts": 1788541200000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 7.594095941081985,
+      "reason": "反向信号平仓",
+      "entry": 230.35,
+      "exit": 222.02
+    },
+    {
+      "entry_ts": 1789758000000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": -3.0853076299432587,
+      "reason": "反向信号平仓",
+      "entry": 222.02,
+      "exit": 220.65
+    },
+    {
+      "entry_ts": 1789873200000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": -16.06616813958759,
+      "reason": "极端止损",
+      "entry": 220.65,
+      "exit": 227.74
+    },
+    {
+      "entry_ts": 1790161200000,
+      "exit_ts": 1790236800000,
+      "side": "short",
+      "pnl": 3.000000000000008,
+      "reason": "tp1",
+      "entry": 227.93,
+      "exit": 223.3714
+    },
+    {
+      "entry_ts": 1790161200000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 227.93,
+      "exit": 227.93
+    },
+    {
+      "entry_ts": 1790701200000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": -7.898894154818313,
+      "reason": "反向信号平仓",
+      "entry": 227.88,
+      "exit": 231.48
+    },
+    {
+      "entry_ts": 1790773200000,
+      "exit_ts": 1790942400000,
+      "side": "long",
+      "pnl": 3.0000000000000067,
+      "reason": "tp1",
+      "entry": 231.48,
+      "exit": 236.1096
+    },
+    {
+      "entry_ts": 1790773200000,
+      "exit_ts": 1791223200000,
+      "side": "long",
+      "pnl": 4.900000000123349,
+      "reason": "tp2",
+      "entry": 231.48,
+      "exit": 239.58179999999996
+    },
+    {
+      "entry_ts": 1790773200000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": 7.720321409911017,
+      "reason": "反向信号平仓",
+      "entry": 231.48,
+      "exit": 239.99
+    },
+    {
+      "entry_ts": 1791306000000,
+      "exit_ts": 1791453600000,
+      "side": "short",
+      "pnl": 3.0000000000000027,
+      "reason": "tp1",
+      "entry": 239.99,
+      "exit": 235.1902
+    },
+    {
+      "entry_ts": 1791306000000,
+      "exit_ts": 1791478800000,
+      "side": "short",
+      "pnl": 4.900000000154033,
+      "reason": "tp2",
+      "entry": 239.99,
+      "exit": 231.59035
+    },
+    {
+      "entry_ts": 1791306000000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 52.729697073574016,
+      "reason": "反向信号平仓",
+      "entry": 239.99,
+      "exit": 179.73
+    },
+    {
+      "entry_ts": 1794236400000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": -6.14811105547204,
+      "reason": "反向信号平仓",
+      "entry": 179.73,
+      "exit": 177.52
+    },
+    {
+      "entry_ts": 1794312000000,
+      "exit_ts": 1794319200000,
+      "side": "short",
+      "pnl": 2.9999999999999964,
+      "reason": "tp1",
+      "entry": 177.52,
+      "exit": 173.9696
+    },
+    {
+      "entry_ts": 1794312000000,
+      "exit_ts": 1794322800000,
+      "side": "short",
+      "pnl": 4.899999999981184,
+      "reason": "tp2",
+      "entry": 177.52,
+      "exit": 171.3068
+    },
+    {
+      "entry_ts": 1794312000000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 2.1000000000274546,
+      "reason": "止损",
+      "entry": 177.52,
+      "exit": 175.7448
+    },
+    {
+      "entry_ts": 1794495600000,
+      "exit_ts": 1794560400000,
+      "side": "long",
+      "pnl": 3.000000000000014,
+      "reason": "tp1",
+      "entry": 165.82,
+      "exit": 169.1364
+    },
+    {
+      "entry_ts": 1794495600000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 165.82,
+      "exit": 165.82
+    },
+    {
+      "entry_ts": 1794578400000,
+      "exit_ts": 1794582000000,
+      "side": "short",
+      "pnl": 2.9999999999999933,
+      "reason": "tp1",
+      "entry": 162.66,
+      "exit": 159.4068
+    },
+    {
+      "entry_ts": 1794578400000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 162.66,
+      "exit": 162.66
+    },
+    {
+      "entry_ts": 1794769200000,
+      "exit_ts": 1794776400000,
+      "side": "long",
+      "pnl": 3.0000000000000004,
+      "reason": "tp1",
+      "entry": 163.57,
+      "exit": 166.8414
+    },
+    {
+      "entry_ts": 1794769200000,
+      "exit_ts": null,
+      "side": "long",
+      "pnl": 0.0,
+      "reason": "止损",
+      "entry": 163.57,
+      "exit": 163.57
+    },
+    {
+      "entry_ts": 1795510800000,
+      "exit_ts": 1795528800000,
+      "side": "short",
+      "pnl": 2.999999999999989,
+      "reason": "tp1",
+      "entry": 157.86,
+      "exit": 154.70280000000002
+    },
+    {
+      "entry_ts": 1795510800000,
+      "exit_ts": 1795532400000,
+      "side": "short",
+      "pnl": 4.899999999903632,
+      "reason": "tp2",
+      "entry": 157.86,
+      "exit": 152.3349
+    },
+    {
+      "entry_ts": 1795510800000,
+      "exit_ts": null,
+      "side": "short",
+      "pnl": 2.1000000000218324,
+      "reason": "止损",
+      "entry": 157.86,
+      "exit": 156.28140000000002
+    }
+  ]
+}

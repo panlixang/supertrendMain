@@ -40,7 +40,7 @@ const fmtBJDate = (t) => {
   return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 };
 
-const BASE_TFS = ["15m", "1h", "4h", "1d"];
+const BASE_TFS = ["15m", "30m", "1h", "4h", "1d"];
 
 function chartOptions(el) {
   // 首帧容器可能还没布局完（clientWidth/Height 为 0），直接按 0 建图会导致整张图空白。

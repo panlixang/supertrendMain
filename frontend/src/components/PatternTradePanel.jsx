@@ -388,7 +388,7 @@ export default function PatternTradePanel({ currentSymbol }) {
         </div>
         <div style={SZ.row}>
           <span style={{ color: C.neutral }}>允许周期</span>
-          {["15m", "1h", "4h", "1d"].map((tf) => (
+          {["15m", "30m", "1h", "4h", "1d"].map((tf) => (
             <label key={tf} style={{ fontSize: 11, color: C.text, display: "flex", alignItems: "center", gap: 3 }}>
               <input type="checkbox" checked={addForm.allow.includes(tf)} onChange={() => toggleTf(tf)} />
               {tf}
@@ -462,7 +462,7 @@ export default function PatternTradePanel({ currentSymbol }) {
               />
             </div>
             <div style={{ ...SZ.row, flexWrap: "wrap" }}>
-              {["15m", "1h", "4h", "1d"].map((tf) => (
+              {["15m", "30m", "1h", "4h", "1d"].map((tf) => (
                 <label key={tf} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3 }}>
                   <input
                     type="checkbox" checked={s.allow_tfs.includes(tf)}

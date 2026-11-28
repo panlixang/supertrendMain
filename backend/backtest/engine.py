@@ -245,11 +245,11 @@ def run_core(db_symbol, sc, pr, er, tf="1h", limit=0, candles=None, extra_gate=N
     }
 
 
-def run_backtest(db_symbol, config_path, out_dir, out_name="backtest_1h.txt", tf="1h", limit=0):
+def run_backtest(db_symbol, config_path, out_dir, out_name="backtest_1h.txt", tf="1h", limit=0, candles=None):
     with open(config_path, encoding="utf-8") as f:
         C = json.load(f)
     sc, pr, er = _extract(C)
-    r = run_core(db_symbol, sc, pr, er, tf=tf, limit=limit)
+    r = run_core(db_symbol, sc, pr, er, tf=tf, limit=limit, candles=candles)
 
     params, exit_rules, cfg = r["params"], r["exit_rules"], r["cfg"]
     klines, N = r["klines"], r["n"]
