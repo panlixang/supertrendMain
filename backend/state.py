@@ -171,6 +171,13 @@ class SymbolTradeConfig:
                                       # 默认开=走「形态页+V3」回测档（出场参数保持 tp1 1.5%/70% 默认）；V3 在 1h+4h 上拟合，非 1h 周期请在面板单独关闭
                                       # ⚠ 仅形态识别页(pattern_trade)使用。首页回测(/api/backtest)、参数寻优、新模型回测(sl2_*)不得继承此字段；
                                       #    后者如需 V3 请在各自入口显式开启（sl2 用 --v3）。
+    # ── 形态识别页 ST 信号参数（品种独立；None=用形态识别页全局默认 10/3.0）──
+    st_periods:     Optional[int]   = None
+    st_multiplier:  Optional[float] = None
+    # ── ATR ratio 过滤（品种独立；当前 ATR(periods) / 过去 window 根 ATR 均值）──
+    atr_ratio_enabled:   bool  = False
+    atr_ratio_threshold: float = 1.05
+    atr_ratio_window:    int   = 50
     # ── 形态识别页 指标区间闸门（品种独立；形态识别页专用）──
     # 规则：开启后，当前 ATR14/ATR50 必须落在第一段或第二段（第二段可单独开关），
     #       且 ER20 落在配置区间内才下单；否则拦截。默认关=不启用该闸门。

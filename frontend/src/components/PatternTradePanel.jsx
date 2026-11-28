@@ -412,6 +412,8 @@ export default function PatternTradePanel({ currentSymbol }) {
           <div key={s.symbol + "#" + JSON.stringify([
                   s.exit_mode, s.tp1_pct, s.tp1_ratio, s.sl_pct, s.sl_mode,
                   s.reverse_close, s.allow_tfs, s.block_4h, s.filter_v3,
+                  s.st_periods, s.st_multiplier,
+                  s.atr_ratio_enabled, s.atr_ratio_threshold, s.atr_ratio_window,
                   s.range_gate, s.atr_ratio_min, s.atr_ratio_max,
                   s.atr_ratio2_enabled, s.atr_ratio2_min, s.atr_ratio2_max,
                   s.er20_min, s.er20_max, s.er_dir_filter, s.er_rise_gate,
@@ -482,6 +484,38 @@ export default function PatternTradePanel({ currentSymbol }) {
               {s.position && (
                 <button style={{ ...SZ.btnGhost, marginLeft: "auto" }} onClick={() => closePos(s.symbol)}>平仓</button>
               )}
+            </div>
+            {/* 该品种 ST 信号参数 + ATR ratio */}
+            <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 6 }}>
+              <div style={{ fontSize: 11, color: C.neutral, marginBottom: 4 }}>
+                信号参数（{s.symbol} 独立，留空=用默认 10×3.0）
+              </div>
+              <div style={{ ...SZ.row, flexWrap: "wrap" }}>
+                <span style={{ color: C.neutral, width: 56 }}>ST</span>
+                {tpInput(s.symbol, s, "st_periods", 10, 1, 52, "0 0 auto")}
+                <span style={{ color: C.neutral }}>×</span>
+                {tpInput(s.symbol, s, "st_multiplier", 3.0, 0.1, 56, "0 0 auto")}
+                <span style={{ fontSize: 10, color: C.neutral }}>
+                  ATR 周期 × Factor；改这里会同时改信号、V3、4h 方向上下文
+                </span>
+              </div>
+              <div style={SZ.row}>
+                <input
+                  type="checkbox"
+                  checked={!!s.atr_ratio_enabled}
+                  onChange={(e) => updateSymbol(s.symbol, { atr_ratio_enabled: e.target.checked })}
+                />
+                <span style={{ fontSize: 11 }}>ATR ratio 过滤（当前 ATR / 过去均值）</span>
+              </div>
+              <div style={{ ...SZ.row, paddingLeft: 18, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: C.neutral, width: 56 }}>阈值</span>
+                {tpInput(s.symbol, s, "atr_ratio_threshold", 1.05, 0.01, 56, "0 0 auto")}
+                <span style={{ fontSize: 11, color: C.neutral, width: 40 }}>窗口</span>
+                {tpInput(s.symbol, s, "atr_ratio_window", 50, 1, 52, "0 0 auto")}
+                <span style={{ fontSize: 10, color: C.neutral }}>
+                  低于阈值视为波动收缩，拦截 ST 假翻转；数据不足放行
+                </span>
+              </div>
             </div>
             {/* 该品种过滤策略 */}
             <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 6 }}>

@@ -104,6 +104,16 @@ def _finite(v):
     return f if math.isfinite(f) else None
 
 
+def _cfg_int(v, default: int) -> int:
+    """配置值转 int；None / 空串 / 非法值回落默认。"""
+    if v is None or v == "":
+        return int(default)
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 async def _pattern_candles(symbol: str, tf: str, limit: int) -> list:
     """形态页取数：本地 SQLite → 内存（已加载的品种）→ OKX REST 现拉一次。
 
@@ -132,7 +142,9 @@ async def _pattern_candles(symbol: str, tf: str, limit: int) -> list:
 
 
 async def _pattern_impl(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
-                       filter_by_regime: bool = False, candles: Optional[list] = None):
+                       filter_by_regime: bool = False, candles: Optional[list] = None,
+                       st_periods: Optional[int] = None,
+                       st_multiplier: Optional[float] = None):
     """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转信号 + 六大市场状态判定。
 
     策略：
@@ -159,20 +171,40 @@ async def _pattern_impl(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int
         return {"symbol": symbol, "base_tf": base_tf, "error": "no_base_candles",
                 "base": None}
 
+    # ST 参数：显式传参 > 形态识别页该品种配置 > 全局默认 10/3.0
+    sym_key = pattern_trade._okx_symbol(symbol)
+    sc = pattern_trade.trader.symbols.get(sym_key)
+    cfg_periods, cfg_multiplier = pattern_trade.st_params_for(sc)
+    periods = int(st_periods) if st_periods else cfg_periods
+    multiplier = float(st_multiplier) if st_multiplier else cfg_multiplier
+    atr_ratio_window = _cfg_int(getattr(sc, "atr_ratio_window", None),
+                                pattern_trade.DEF_ATR_RATIO_WINDOW)
+
     bcandles = base
     opens = [c["o"] for c in bcandles]
     highs = [c["h"] for c in bcandles]
     lows = [c["l"] for c in bcandles]
     closes = [c["c"] for c in bcandles]
     vols = [c["vol"] for c in bcandles]
-    # 当前策略信号：原始 SuperTrend 翻转（ATR 周期=10, factor=3.0）。
-    st = super_trend(opens, highs, lows, closes, periods=10, multiplier=3.0, change_atr=True)
+    # 当前策略信号：原始 SuperTrend 翻转（默认 ATR 周期=10, factor=3.0；按品种可覆盖）。
+    st = super_trend(opens, highs, lows, closes, periods=periods,
+                     multiplier=multiplier, change_atr=True)
     st["up_plot"] = [_finite(v) for v in st["up_plot"]]
     st["dn_plot"] = [_finite(v) for v in st["dn_plot"]]
 
     atr = st["atr"]
     flips = st["flips"]
     flip_idx = [f["i"] for f in flips]
+
+    def _atr_ratio_at(i: int) -> float | None:
+        if atr_ratio_window <= 0 or i >= len(atr):
+            return None
+        cur = atr[i]
+        base_atr = [x for x in atr[max(0, i - atr_ratio_window):i] if x is not None]
+        if cur is None or not base_atr:
+            return None
+        mean = sum(base_atr) / len(base_atr)
+        return round(cur / mean, 4) if mean > 0 else None
 
     # 计算行情分类所需指标
     from market_regime import classify_market_regime
@@ -213,6 +245,7 @@ async def _pattern_impl(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int
         signals.append({
             "ts": bcandles[i]["ts"], "type": f["type"], "dir": sd,
             "price": round(entry, 6),
+            "atr_ratio": _atr_ratio_at(i),
             # 行情状态诊断
             "regime": regime_info["regime"],
             "regime_cn": regime_info["regime_cn"],
@@ -224,6 +257,14 @@ async def _pattern_impl(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int
     return {
         "symbol": symbol,
         "base_tf": base_tf,
+        "st_params": {"periods": periods, "multiplier": multiplier},
+        "atr_ratio": {
+            "window": atr_ratio_window,
+            "enabled": bool(getattr(sc, "atr_ratio_enabled", False)) if sc else False,
+            "threshold": _cfg_float(getattr(sc, "atr_ratio_threshold", None),
+                                    pattern_trade.DEF_ATR_RATIO_THRESHOLD) if sc
+                         else pattern_trade.DEF_ATR_RATIO_THRESHOLD,
+        },
         "base": {
             "tf": base_tf,
             "candles": bcandles,
@@ -240,7 +281,9 @@ async def _pattern_impl(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int
 
 @router.get("/api/pattern")
 async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int = 600,
-                     filter_by_regime: bool = False):
+                     filter_by_regime: bool = False,
+                     st_periods: Optional[int] = None,
+                     st_multiplier: Optional[float] = None):
     """形态识别页 + 行情趋势分类：基础周期 SuperTrend 翻转信号 + 六大市场状态判定。
 
     策略：
@@ -254,7 +297,8 @@ async def get_pattern(symbol: str = "BTCUSDT", base_tf: str = "1h", limit: int =
     返回每笔信号的完整行情诊断（regime, confidence, tradeable, metrics）。
     """
     return await _pattern_impl(symbol=symbol, base_tf=base_tf, limit=limit,
-                              filter_by_regime=filter_by_regime)
+                              filter_by_regime=filter_by_regime,
+                              st_periods=st_periods, st_multiplier=st_multiplier)
 
 
 # ─── 参数（对应 Pine 的 input 面板） ─────────────────────────────

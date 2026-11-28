@@ -1,0 +1,56 @@
+{
+  "source": "data-api.binance.vision BTCUSDT spot",
+  "study": "entry delay / trend capture diagnostics",
+  "horizon": 20,
+  "results": [
+    {
+      "label": "1h F3.5+ATR1.05",
+      "tf": "1h",
+      "factor": 3.5,
+      "filter": {
+        "atr_min_ratio": 1.05
+      },
+      "n": 555,
+      "avg_mfe20_atr": 2.5303239792239616,
+      "avg_mae20_atr": 2.253426972114288,
+      "avg_ret_atr": 0.4667491870640705,
+      "avg_capture": 0.2259603271717403,
+      "avg_capture_win": 0.6494621463394226,
+      "avg_missed_atr": 2.9498166435045787,
+      "avg_bars_to_mfe": 8.68108108108108,
+      "avg_hold": 44.13333333333333
+    },
+    {
+      "label": "1h F6",
+      "tf": "1h",
+      "factor": 6.0,
+      "filter": {},
+      "n": 387,
+      "avg_mfe20_atr": 2.813917700142956,
+      "avg_mae20_atr": 2.2494214322600623,
+      "avg_ret_atr": 1.3294827406548582,
+      "avg_capture": 0.23843986500138328,
+      "avg_capture_win": 0.7878988511448506,
+      "avg_missed_atr": 3.528368785995947,
+      "avg_bars_to_mfe": 9.178294573643411,
+      "avg_hold": 82.05426356589147
+    },
+    {
+      "label": "30m F7+ATR1.05",
+      "tf": "30m",
+      "factor": 7.0,
+      "filter": {
+        "atr_min_ratio": 1.05
+      },
+      "n": 535,
+      "avg_mfe20_atr": 2.644919715698371,
+      "avg_mae20_atr": 2.4393571956593587,
+      "avg_ret_atr": 1.0047210995230729,
+      "avg_capture": 0.20920626080155208,
+      "avg_capture_win": 0.8209645230296685,
+      "avg_missed_atr": 3.69445003902237,
+      "avg_bars_to_mfe": 7.661682242990654,
+      "avg_hold": 97.78317757009346
+    }
+  ]
+}

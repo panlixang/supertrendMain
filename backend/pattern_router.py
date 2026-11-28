@@ -74,6 +74,11 @@ class SymbolIn(BaseModel):
     reverse_close:    Optional[bool]  = None
     block_4h:         Optional[bool]  = None   # 4h 方向拦截（品种独立；True=4h ST 方向与信号反向则不开仓）
     filter_v3:        Optional[bool]  = None
+    st_periods:       Optional[int]   = None   # ST ATR 周期（品种独立；空=用默认10）
+    st_multiplier:    Optional[float] = None   # ST Factor（品种独立；空=用默认3.0）
+    atr_ratio_enabled:   Optional[bool]  = None
+    atr_ratio_threshold: Optional[float] = None
+    atr_ratio_window:    Optional[int]   = None
     exit_mode:        Optional[str]   = None   # 档位：multi=三挡 | single=单档
     sl_mode:          Optional[str]   = None   # st=超趋线 | pct=固定百分比真实硬止损
     # 指标区间闸门（ATR14/ATR50 + ER20；形态识别页专用，默认关）
@@ -109,6 +114,11 @@ def _symbols_view() -> list[dict]:
             "trail_with_st": sc.trail_with_st, "reverse_close": sc.reverse_close,
             "block_4h": sc.block_4h,
             "filter_v3": sc.filter_v3,
+            "st_periods": sc.st_periods,
+            "st_multiplier": sc.st_multiplier,
+            "atr_ratio_enabled": sc.atr_ratio_enabled,
+            "atr_ratio_threshold": sc.atr_ratio_threshold,
+            "atr_ratio_window": sc.atr_ratio_window,
             "range_gate": sc.range_gate,
             "atr_ratio_min": sc.atr_ratio_min,
             "atr_ratio_max": sc.atr_ratio_max,

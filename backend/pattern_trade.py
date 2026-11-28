@@ -74,6 +74,16 @@ def _cfg_float(v, default: float) -> float:
         return float(default)
 
 
+def _cfg_int(v, default: int) -> int:
+    """配置值转 int；None / 空串 / 非法值回落默认（允许显式 0）。"""
+    if v is None or v == "":
+        return int(default)
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _cfg_er_dir(row: dict) -> str:
     """ER方向过滤：none / rise / fall；兼容旧 er_rise_gate 布尔。"""
     v = row.get("er_dir_filter")
@@ -105,6 +115,46 @@ def atr_ratio_14_50(candles: list[dict]) -> float | None:
 # 形态识别页基础信号的 SuperTrend 参数（必须和 /api/pattern 一致）
 ST_PERIODS = 10
 ST_MULTIPLIER = 3.0
+
+# 按品种可覆盖的默认值（None = 用上面全局默认）
+DEF_ST_PERIODS = ST_PERIODS
+DEF_ST_MULTIPLIER = ST_MULTIPLIER
+DEF_ATR_RATIO_THRESHOLD = 1.05
+DEF_ATR_RATIO_WINDOW = 50
+
+
+def st_params_for(sc) -> tuple[int, float]:
+    """每品种 ST 参数；品种没配就用形态识别页全局默认。"""
+    if sc is None:
+        return DEF_ST_PERIODS, DEF_ST_MULTIPLIER
+    periods = _cfg_int(getattr(sc, "st_periods", None), DEF_ST_PERIODS)
+    mult = _cfg_float(getattr(sc, "st_multiplier", None), DEF_ST_MULTIPLIER)
+    return max(1, periods), max(0.1, mult)
+
+
+def atr_ratio_cur_avg(candles: list[dict], periods: int = ST_PERIODS,
+                      window: int = DEF_ATR_RATIO_WINDOW) -> float | None:
+    """当前 ATR(periods) / 过去 window 根 ATR 均值（均不含当前根之前的必要暖机）。
+
+    与回测实验口径一致：窗口使用信号根之前的 window 根 ATR，当前根 ATR 作分子。
+    数据不足返回 None。
+    """
+    if not candles or periods <= 0 or window <= 0:
+        return None
+    if len(candles) < periods + window:
+        return None
+    h = [c["h"] for c in candles]
+    l = [c["l"] for c in candles]
+    c = [c["c"] for c in candles]
+    atr = ta_atr(h, l, c, periods)
+    cur = atr[-1]
+    base = [x for x in atr[-window - 1:-1] if x is not None]
+    if cur is None or not base:
+        return None
+    mean = sum(base) / len(base)
+    if mean <= 0:
+        return None
+    return round(cur / mean, 4)
 
 
 def _okx_symbol(s: str) -> str:
@@ -285,6 +335,15 @@ class PatternTrader:
                     reverse_close=row.get("reverse_close"),
                     block_4h=bool(row.get("block_4h", False)),
                     filter_v3=bool(row.get("filter_v3", True)),
+                    st_periods=(_cfg_int(row.get("st_periods"), DEF_ST_PERIODS)
+                                if row.get("st_periods") is not None else None),
+                    st_multiplier=(_cfg_float(row.get("st_multiplier"), DEF_ST_MULTIPLIER)
+                                   if row.get("st_multiplier") is not None else None),
+                    atr_ratio_enabled=bool(row.get("atr_ratio_enabled", False)),
+                    atr_ratio_threshold=_cfg_float(row.get("atr_ratio_threshold"),
+                                                   DEF_ATR_RATIO_THRESHOLD),
+                    atr_ratio_window=_cfg_int(row.get("atr_ratio_window"),
+                                              DEF_ATR_RATIO_WINDOW),
                     range_gate=bool(row.get("range_gate", False)),
                     atr_ratio_min=_cfg_float(row.get("atr_ratio_min"), DEF_ATR_RATIO_MIN),
                     atr_ratio_max=_cfg_float(row.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
@@ -412,6 +471,15 @@ class PatternTrader:
             reverse_close=kw.get("reverse_close"),
             block_4h=bool(kw.get("block_4h", False)),
             filter_v3=bool(kw.get("filter_v3", True)),
+            st_periods=(_cfg_int(kw.get("st_periods"), DEF_ST_PERIODS)
+                        if kw.get("st_periods") is not None else None),
+            st_multiplier=(_cfg_float(kw.get("st_multiplier"), DEF_ST_MULTIPLIER)
+                           if kw.get("st_multiplier") is not None else None),
+            atr_ratio_enabled=bool(kw.get("atr_ratio_enabled", False)),
+            atr_ratio_threshold=_cfg_float(kw.get("atr_ratio_threshold"),
+                                           DEF_ATR_RATIO_THRESHOLD),
+            atr_ratio_window=_cfg_int(kw.get("atr_ratio_window"),
+                                      DEF_ATR_RATIO_WINDOW),
             range_gate=bool(kw.get("range_gate", False)),
             atr_ratio_min=_cfg_float(kw.get("atr_ratio_min"), DEF_ATR_RATIO_MIN),
             atr_ratio_max=_cfg_float(kw.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
@@ -448,6 +516,8 @@ class PatternTrader:
                    "move_sl_to_entry", "trail_with_st", "reverse_close",
                    "block_4h",
                    "filter_v3",
+                   "st_periods", "st_multiplier",
+                   "atr_ratio_enabled", "atr_ratio_threshold", "atr_ratio_window",
                    "range_gate", "atr_ratio_min", "atr_ratio_max",
                    "atr_ratio2_enabled", "atr_ratio2_min", "atr_ratio2_max",
                    "er20_min", "er20_max", "er_dir_filter")
@@ -459,7 +529,10 @@ class PatternTrader:
                 # 抛错 → 整个品种清单加载失败（该事故形态见 _load 里的逐行容错说明）。
                 if k == "leverage":
                     v = int(float(v))
+                elif k in ("st_periods", "atr_ratio_window"):
+                    v = int(float(v))
                 elif k in ("margin_usdt", "equity_pct",
+                           "st_multiplier", "atr_ratio_threshold",
                            "atr_ratio_min", "atr_ratio_max",
                            "atr_ratio2_min", "atr_ratio2_max",
                            "er20_min", "er20_max"):
@@ -780,7 +853,7 @@ class PatternTrader:
                 return
         # 2) 无持仓：找允许周期内最新的 ST 翻转
         for tf in sc.allow_tfs:
-            sig = await self._latest_signal(sym, tf)
+            sig = await self._latest_signal(sym, tf, sc)
             if not sig:
                 continue
             # 收盘确认：只有信号所在那根 K 已收盘才认。
@@ -829,6 +902,8 @@ class PatternTrader:
                 continue
             if not await self._allow_by_range(sym, sc, sig):
                 continue
+            if not await self._allow_by_atr_ratio(sym, sc, sig):
+                continue
             if not self._allow_by_er_dir(sc, sig, prev_er):
                 continue
             self._last_order_at[key] = time.time()
@@ -848,16 +923,17 @@ class PatternTrader:
             logger.warning(f"[形态下单] {sym} 取价失败: {e}")
             return 0.0
 
-    async def _latest_signal(self, sym: str, tf: str) -> dict | None:
-        """该周期最新一根 SuperTrend 翻转信号（原始参数 10/3.0）。"""
+    async def _latest_signal(self, sym: str, tf: str, sc: "SymbolTradeConfig | None" = None) -> dict | None:
+        """该周期最新一根 SuperTrend 翻转信号（默认参数 10/3.0，可按品种覆盖）。"""
         try:
             cs = await self._kline(sym, tf, 500)
             if len(cs) < 50:
                 return None
+            periods, multiplier = st_params_for(sc)
             st = super_trend(
                 [c["o"] for c in cs], [c["h"] for c in cs],
                 [c["l"] for c in cs], [c["c"] for c in cs],
-                periods=ST_PERIODS, multiplier=ST_MULTIPLIER, change_atr=True,
+                periods=periods, multiplier=multiplier, change_atr=True,
             )
             flips = st.get("flips") or []
             if not flips:
@@ -969,6 +1045,33 @@ class PatternTrader:
             return False
         return True
 
+    async def _allow_by_atr_ratio(self, sym: str, sc: "SymbolTradeConfig", sig: dict) -> bool:
+        """True=放行。ATR ratio 下限过滤（品种独立，默认关）。
+
+        规则：当前 ATR(ST周期) >= threshold × 过去 atr_ratio_window 根 ATR 均值。
+        过滤的是「波动收缩期的 SuperTrend 假翻转」；数据不足一律放行。
+        """
+        if not getattr(sc, "atr_ratio_enabled", False):
+            return True
+        tf = sig.get("tf") or "1h"
+        periods, _ = st_params_for(sc)
+        window = _cfg_int(getattr(sc, "atr_ratio_window", None), DEF_ATR_RATIO_WINDOW)
+        threshold = _cfg_float(getattr(sc, "atr_ratio_threshold", None),
+                               DEF_ATR_RATIO_THRESHOLD)
+        try:
+            cs = await self._kline(sym, tf, max(500, window + periods + 50))
+            ratio = atr_ratio_cur_avg(cs, periods=periods, window=window)
+        except Exception as e:
+            logger.warning("[形态下单] %s ATR ratio 取数/计算失败，放行: %s", sym, e)
+            return True
+        if ratio is None:
+            return True
+        if ratio < threshold:
+            logger.info("[形态下单] %s %s ATR ratio 拦截: %.3f < %.3f (period=%d window=%d)",
+                        sym, tf, ratio, threshold, periods, window)
+            return False
+        return True
+
     def _allow_by_er_dir(self, sc: "SymbolTradeConfig", sig: dict, prev_er) -> bool:
         """True=放行。ER方向过滤（品种独立）：none / rise / fall。
 
@@ -1013,9 +1116,10 @@ class PatternTrader:
         if len(cs) < 120 or len(cs4) < 60:
             return True, "数据不足放行"
 
+        periods, multiplier = st_params_for(sc)
         st = super_trend([x["o"] for x in cs], [x["h"] for x in cs],
                          [x["l"] for x in cs], [x["c"] for x in cs],
-                         periods=ST_PERIODS, multiplier=ST_MULTIPLIER, change_atr=True)
+                         periods=periods, multiplier=multiplier, change_atr=True)
         flips = st.get("flips") or []
         if not flips:
             return True, "无翻转放行"
@@ -1026,7 +1130,7 @@ class PatternTrader:
 
         sd = 1 if fd["type"] == "buy" else -1
         feats = signal_v3.features_from_candles(
-            cs, i, sd, cs4, st_periods=ST_PERIODS, st_mult=ST_MULTIPLIER)
+            cs, i, sd, cs4, st_periods=periods, st_mult=multiplier)
         if not feats:
             return True, "特征不足放行"
         v = signal_v3.v3_decide(sd, feats)
