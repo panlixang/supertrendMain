@@ -1871,6 +1871,584 @@ def run_eth_matrix() -> None:
     print(f"\n[done] ETH matrix summary: {rp}")
 
 
+def simulate_tp_sl(candles, candidates, st, fee_bps: float, slip_bps: float,
+                   tp1_r: float | None = None, tp1_ratio: float = 0.0,
+                   tp_full_r: float | None = None,
+                   use_trail: bool = True) -> dict:
+    """A0 入场 + 初始硬止损 + 可选分批/固定止盈 + 剩余仓位 ST 跟随。
+
+    - tp1_r=None 且 tp_full_r=None 且 use_trail=True 时与 simulate_st_trail 等价；
+    - tp1_r：价格到 tp1_r×止损距离时平掉 tp1_ratio% 仓位，止损移到开仓价（保本）；
+    - tp_full_r：价格到 tp_full_r×止损距离时剩余全平；
+    - use_trail：轨道越过当前止损后改跟轨道；False 则剩余只等 ST 翻转/硬止损。
+    同根先判止损再判止盈；翻转平仓后同根允许反向开新仓（与基线一致）。
+    """
+    fee = fee_bps / 10_000.0
+    slip = slip_bps / 10_000.0
+    by_entry: dict[int, list[dict]] = {}
+    for c in candidates:
+        by_entry.setdefault(c["entry_i"], []).append(c)
+
+    pos = None
+    realized = 0.0
+    equity = [INIT]
+    trades = []
+
+    def leg(i: int, reason: str, raw_px: float, qty: float) -> None:
+        nonlocal realized, pos
+        if pos is None or qty <= 0:
+            return
+        side = pos["side"]
+        fill = raw_px * (1 - slip) if side == 1 else raw_px * (1 + slip)
+        gross = (fill - pos["entry_fill"]) * qty * side
+        out_fee = fill * qty * fee
+        in_fee = pos["entry_fee"] * (qty / pos["qty0"])
+        net = gross - out_fee - in_fee
+        realized += net
+        pos["qty"] -= qty
+        pos["pnl"] += net
+        pos["gross_sum"] += gross
+        pos["fee_sum"] += out_fee + in_fee
+        pos["legs"].append(reason)
+        if pos["qty"] <= pos["qty0"] * 1e-9:
+            trades.append({
+                "flip_i": pos["flip_i"], "entry_i": pos["entry_i"], "exit_i": i,
+                "flip_ts": candles[pos["flip_i"]]["ts"],
+                "entry_ts": candles[pos["entry_i"]]["ts"],
+                "exit_ts": candles[i]["ts"],
+                "side": "long" if side == 1 else "short",
+                "reason": "+".join(pos["legs"]), "pnl": pos["pnl"],
+                "gross": pos["gross_sum"], "fees": pos["fee_sum"],
+                "entry": pos["entry"], "exit": raw_px,
+                "bars_since_flip": i - pos["flip_i"],
+            })
+            pos = None
+
+    for i, bar in enumerate(candles):
+        if pos is not None and i > pos["entry_i"]:
+            side = pos["side"]
+            line = st["up"][i] if side == 1 else st["dn"][i]
+            if use_trail and line is not None and (
+                (side == 1 and line > pos["stop"]) or
+                (side == -1 and line < pos["stop"])
+            ):
+                pos["stop"] = line
+                pos["trailing"] = True
+            stop_hit = (bar["l"] <= pos["stop"]) if side == 1 else (bar["h"] >= pos["stop"])
+            if stop_hit:
+                label = "st_trail" if pos["trailing"] else ("be" if pos["be"] else "stop")
+                leg(i, label, pos["stop"], pos["qty"])
+
+        if pos is not None and i > pos["entry_i"]:
+            side = pos["side"]
+            if tp1_r is not None and not pos["tp1_done"]:
+                t1 = pos["entry"] + side * tp1_r * pos["dist"]
+                reached = (bar["h"] >= t1) if side == 1 else (bar["l"] <= t1)
+                if reached:
+                    part = pos["qty0"] * tp1_ratio / 100.0
+                    leg(i, "tp1", t1, part)
+                    if pos is not None:
+                        pos["tp1_done"] = True
+                        pos["stop"] = (max(pos["stop"], pos["entry_fill"]) if side == 1
+                                       else min(pos["stop"], pos["entry_fill"]))
+                        pos["be"] = True
+            if pos is not None and tp_full_r is not None:
+                t2 = pos["entry"] + side * tp_full_r * pos["dist"]
+                reached = (bar["h"] >= t2) if side == 1 else (bar["l"] <= t2)
+                if reached:
+                    leg(i, "tp", t2, pos["qty"])
+            if pos is not None and st["trend"][i] not in (None, side):
+                leg(i, "st_flip", bar["c"], pos["qty"])
+
+        for cand in by_entry.get(i, []):
+            if pos is not None:
+                break
+            eq = INIT + realized
+            risk = eq * RISK_PCT
+            dist = abs(cand["entry"] - cand["stop"])
+            qty = min(risk / dist, eq * LEVERAGE_CAP / cand["entry"])
+            if qty <= 0:
+                continue
+            side = cand["side"]
+            entry_fill = cand["entry"] * (1 + slip if side == 1 else 1 - slip)
+            pos = {
+                "flip_i": cand["flip_i"], "entry_i": i, "side": side,
+                "entry": cand["entry"], "entry_fill": entry_fill,
+                "qty": qty, "qty0": qty, "dist": dist,
+                "stop": cand["stop"], "entry_fee": qty * cand["entry"] * fee,
+                "tp1_done": False, "be": False, "trailing": False,
+                "legs": [], "pnl": 0.0, "gross_sum": 0.0, "fee_sum": 0.0,
+            }
+
+        float_pnl = 0.0
+        if pos is not None:
+            float_pnl = (bar["c"] - pos["entry_fill"]) * pos["qty"] * pos["side"]
+        equity.append(INIT + realized + float_pnl)
+
+    if pos is not None:
+        leg(len(candles) - 1, "end", candles[-1]["c"], pos["qty"])
+        equity[-1] = INIT + realized
+
+    peak = INIT
+    max_dd = 0.0
+    for eq in equity:
+        peak = max(peak, eq)
+        max_dd = max(max_dd, (peak - eq) / peak if peak > 0 else 0.0)
+    return {"trades": trades, "equity": equity, "max_dd_pct": max_dd * 100}
+
+
+def _avg_hold(trades: list[dict]) -> float:
+    if not trades:
+        return 0.0
+    return sum(t["exit_i"] - t["entry_i"] for t in trades) / len(trades)
+
+
+def run_tp_sl_study() -> None:
+    """出场研究：3ATR 硬止损 × 固定止盈/分批止盈/保本 × ST 跟随，BTC/ETH 1h。"""
+    configs = [
+        ("BTCUSDT", "BTC低滞后", 10, 3.5, 1.05),
+        ("BTCUSDT", "BTC收益向", 11, 6.0, 0.0),
+        ("BTCUSDT", "BTC无过滤", 10, 3.5, 0.0),
+        ("ETHUSDT", "ETH质量向", 15, 6.0, 1.2),
+    ]
+    stops = [2.5, 3.0, 3.5]
+    variants = [
+        ("基线 无TP+跟随", {}),
+        ("纯反向平(不跟轨)", dict(use_trail=False)),
+        ("全平1R", dict(tp_full_r=1.0)),
+        ("全平1.5R", dict(tp_full_r=1.5)),
+        ("全平2R", dict(tp_full_r=2.0)),
+        ("全平2.5R", dict(tp_full_r=2.5)),
+        ("全平3R", dict(tp_full_r=3.0)),
+        ("全平4R", dict(tp_full_r=4.0)),
+        ("TP1 1R/30%+保本", dict(tp1_r=1.0, tp1_ratio=30.0)),
+        ("TP1 1.5R/30%+保本", dict(tp1_r=1.5, tp1_ratio=30.0)),
+        ("TP1 2R/30%+保本", dict(tp1_r=2.0, tp1_ratio=30.0)),
+        ("TP1 1.5R/50%+保本", dict(tp1_r=1.5, tp1_ratio=50.0)),
+        ("TP1 2R/50%+保本", dict(tp1_r=2.0, tp1_ratio=50.0)),
+        ("TP1 1.5R/30%+不跟轨", dict(tp1_r=1.5, tp1_ratio=30.0, use_trail=False)),
+        ("TP1 2R/30%+不跟轨", dict(tp1_r=2.0, tp1_ratio=30.0, use_trail=False)),
+    ]
+
+    rows: list[dict] = []
+    for symbol, tag, period, mult, ratio in configs:
+        candles = load_tf("1h", symbol)
+        o = [c["o"] for c in candles]
+        h = [c["h"] for c in candles]
+        lo_ = [c["l"] for c in candles]
+        cl = [c["c"] for c in candles]
+        st = super_trend(o, h, lo_, cl, periods=period, multiplier=mult,
+                         src="hl2", change_atr=True)
+        atr = ta_atr(h, lo_, cl, period)
+        adx = ta_adx(h, lo_, cl, ADX_LEN)
+        er = er_series(cl, ER_LEN)
+
+        for stop_atr in stops:
+            cands = build_candidates(candles, st, atr, adx, er, "A", 0,
+                                     stop_atr=stop_atr, atr_min_ratio=ratio)
+            for vname, kw in variants:
+                base = simulate_tp_sl(candles, cands, st, BASE_FEE_BPS,
+                                      BASE_SLIP_BPS, **kw)
+                stress = simulate_tp_sl(candles, cands, st, STRESS_FEE_BPS,
+                                        STRESS_SLIP_BPS, **kw)
+                if (stop_atr == 3.0 and not kw):
+                    ref = simulate_st_trail(candles, cands, st, BASE_FEE_BPS,
+                                            BASE_SLIP_BPS)
+                    d = abs(sum(t["pnl"] for t in base["trades"])
+                            - sum(t["pnl"] for t in ref["trades"]))
+                    if d > 1e-6 or len(base["trades"]) != len(ref["trades"]):
+                        raise RuntimeError(f"TP/SL 引擎与基线不一致: {tag} diff={d}")
+                    print(f"[自检] {tag} 基线复算一致 "
+                          f"({len(ref['trades'])} 笔, diff={d:.2e})")
+                segs = {s[0]: stat_block(base["trades"], st["flips"], candles,
+                                        base["equity"], s) for s in SEGMENTS}
+                allb = stat_block(base["trades"], st["flips"], candles,
+                                  base["equity"], ("all", 2021, 2100))
+                rows.append({
+                    "symbol": symbol, "tag": tag, "st": f"{period}x{mult:g}",
+                    "ratio": ratio, "stop_atr": stop_atr, "variant": vname,
+                    "candidates": len(cands), "n": allb["n"],
+                    "ret_pct": allb["ret_pct"], "pf": allb["pf"],
+                    "dev": segs["dev"]["pf"], "val": segs["val"]["pf"],
+                    "oos": segs["oos"]["pf"], "oos_n": segs["oos"]["n"],
+                    "oos_dd": segs["oos"]["max_dd_pct"],
+                    "winrate": allb["winrate"],
+                    "avg_hold": _avg_hold(base["trades"]),
+                    "max_stop_streak": allb["max_stop_streak"],
+                    "stress_oos": stat_block(stress["trades"], st["flips"], candles,
+                                             stress["equity"], SEGMENTS[2])["pf"],
+                })
+
+    for symbol, tag, period, mult, ratio in configs:
+        sub = [r for r in rows if r["tag"] == tag]
+        print(f"\n=== {symbol} 1h ST{period}x{mult:g}/R{ratio:g} 出场网格"
+              f"（{len(sub)} 组，按 OOS PF 排序） ===")
+        print(f"{'变体':<22} {'止损':>5} {'笔数':>6} {'收益%':>8} {'净PF':>6} "
+              f"{'DEV':>6} {'VAL':>6} {'OOS':>6} {'OOSDD%':>7} {'胜率%':>6} "
+              f"{'持仓根':>6} {'连损':>5} {'压力OOS':>7}")
+        for r in sorted(sub, key=lambda x: -x["oos"])[:15]:
+            print(f"{r['variant']:<22} {r['stop_atr']:>5.1f} {r['n']:>6} "
+                  f"{r['ret_pct']:>+8.1f} {fmt_pf(r['pf']):>6} {fmt_pf(r['dev']):>6} "
+                  f"{fmt_pf(r['val']):>6} {fmt_pf(r['oos']):>6} {r['oos_dd']:>7.2f} "
+                  f"{r['winrate']:>6.1f} {r['avg_hold']:>6.0f} "
+                  f"{r['max_stop_streak']:>5} {fmt_pf(r['stress_oos']):>7}")
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    rp = os.path.join(CACHE_DIR, "tp_sl_report.json")
+    with open(rp, "w", encoding="utf-8") as fh:
+        json.dump({
+            "source": "data-api.binance.vision spot 1h",
+            "study": "A0 entry; stop_atr x TP structure (none/full/partial+BE) x ST trail",
+            "params": {"risk_pct": RISK_PCT, "leverage_cap": LEVERAGE_CAP,
+                       "fee_bps": BASE_FEE_BPS, "slip_bps": BASE_SLIP_BPS,
+                       "stress_fee_bps": STRESS_FEE_BPS,
+                       "stress_slip_bps": STRESS_SLIP_BPS},
+            "grid": {"configs": [c[1] for c in configs], "stops": stops,
+                     "variants": [v[0] for v in variants]},
+            "results": rows,
+        }, fh, ensure_ascii=False, indent=2)
+    print(f"\n[done] TP/SL report: {rp}")
+
+
+def simulate_pct_exits(candles, candidates, st, fee_bps: float, slip_bps: float,
+                       stop_pct: float | None = None,
+                       legs: list[tuple[float, float]] | None = None,
+                       move_be: bool = True,
+                       use_trail: bool = True,
+                       stop_atr: float | None = None) -> dict:
+    """固定百分比（或 ATR 倍数）硬止损 + 多档 % 止盈 + 剩余出场方式。
+
+    stop_pct：硬止损按入场价百分比；stop_atr：硬止损按 stop_atr × ATR（二选一）。
+    legs=[(浮盈%, 平仓比例%), ...] 依序触发，触发后 remaining 继续跑；
+    move_be=True 时首档止盈后止损移到开仓价；use_trail=False 则剩余只等反向翻转。
+    同根先判止损、再按顺序判各档止盈。
+    """
+    fee = fee_bps / 10_000.0
+    slip = slip_bps / 10_000.0
+    plans = list(legs or [])
+    by_entry: dict[int, list[dict]] = {}
+    for c in candidates:
+        by_entry.setdefault(c["entry_i"], []).append(c)
+
+    pos = None
+    realized = 0.0
+    equity = [INIT]
+    trades = []
+
+    def leg(i: int, reason: str, raw_px: float, qty: float) -> None:
+        nonlocal realized, pos
+        if pos is None or qty <= 0:
+            return
+        qty = min(qty, pos["qty"])
+        side = pos["side"]
+        fill = raw_px * (1 - slip) if side == 1 else raw_px * (1 + slip)
+        gross = (fill - pos["entry_fill"]) * qty * side
+        out_fee = fill * qty * fee
+        in_fee = pos["entry_fee"] * (qty / pos["qty0"])
+        net = gross - out_fee - in_fee
+        realized += net
+        pos["qty"] -= qty
+        pos["pnl"] += net
+        pos["gross_sum"] += gross
+        pos["fee_sum"] += out_fee + in_fee
+        pos["legs"].append(reason)
+        if pos["qty"] <= pos["qty0"] * 1e-9:
+            trades.append({
+                "flip_i": pos["flip_i"], "entry_i": pos["entry_i"], "exit_i": i,
+                "flip_ts": candles[pos["flip_i"]]["ts"],
+                "entry_ts": candles[pos["entry_i"]]["ts"],
+                "exit_ts": candles[i]["ts"],
+                "side": "long" if side == 1 else "short",
+                "reason": "+".join(pos["legs"]), "pnl": pos["pnl"],
+                "gross": pos["gross_sum"], "fees": pos["fee_sum"],
+                "entry": pos["entry"], "exit": raw_px,
+                "bars_since_flip": i - pos["flip_i"],
+            })
+            pos = None
+
+    for i, bar in enumerate(candles):
+        if pos is not None and i > pos["entry_i"]:
+            side = pos["side"]
+            line = st["up"][i] if side == 1 else st["dn"][i]
+            if use_trail and line is not None and (
+                (side == 1 and line > pos["stop"]) or
+                (side == -1 and line < pos["stop"])
+            ):
+                pos["stop"] = line
+                pos["trailing"] = True
+            stop_hit = (bar["l"] <= pos["stop"]) if side == 1 else (bar["h"] >= pos["stop"])
+            if stop_hit:
+                label = "st_trail" if pos["trailing"] else ("be" if pos["be"] else "stop")
+                leg(i, label, pos["stop"], pos["qty"])
+
+        if pos is not None and i > pos["entry_i"]:
+            side = pos["side"]
+            while pos["leg_i"] < len(plans):
+                trig, ratio = plans[pos["leg_i"]]
+                target = pos["entry"] * (1 + side * trig / 100.0)
+                reached = (bar["h"] >= target) if side == 1 else (bar["l"] <= target)
+                if not reached:
+                    break
+                pos["leg_i"] += 1
+                leg(i, f"tp{pos['leg_i']}", target, pos["qty0"] * ratio / 100.0)
+                if pos is None:
+                    break
+                if move_be and pos["leg_i"] == 1:
+                    pos["stop"] = (max(pos["stop"], pos["entry_fill"]) if side == 1
+                                   else min(pos["stop"], pos["entry_fill"]))
+                    pos["be"] = True
+            if pos is not None and st["trend"][i] not in (None, side):
+                leg(i, "st_flip", bar["c"], pos["qty"])
+
+        for cand in by_entry.get(i, []):
+            if pos is not None:
+                break
+            eq = INIT + realized
+            if stop_atr is not None:
+                if cand.get("atr") is None:
+                    continue
+                dist = stop_atr * cand["atr"]
+            else:
+                dist = cand["entry"] * (stop_pct or 0.0) / 100.0
+            if dist <= 0:
+                continue
+            qty = min(eq * RISK_PCT / dist, eq * LEVERAGE_CAP / cand["entry"])
+            if qty <= 0:
+                continue
+            side = cand["side"]
+            entry_fill = cand["entry"] * (1 + slip if side == 1 else 1 - slip)
+            pos = {
+                "flip_i": cand["flip_i"], "entry_i": i, "side": side,
+                "entry": cand["entry"], "entry_fill": entry_fill,
+                "qty": qty, "qty0": qty,
+                "stop": (cand["entry"] - dist if side == 1 else cand["entry"] + dist),
+                "entry_fee": qty * cand["entry"] * fee,
+                "leg_i": 0, "be": False, "trailing": False,
+                "legs": [], "pnl": 0.0, "gross_sum": 0.0, "fee_sum": 0.0,
+            }
+
+        float_pnl = 0.0
+        if pos is not None:
+            float_pnl = (bar["c"] - pos["entry_fill"]) * pos["qty"] * pos["side"]
+        equity.append(INIT + realized + float_pnl)
+
+    if pos is not None:
+        leg(len(candles) - 1, "end", candles[-1]["c"], pos["qty"])
+        equity[-1] = INIT + realized
+
+    peak = INIT
+    max_dd = 0.0
+    for eq in equity:
+        peak = max(peak, eq)
+        max_dd = max(max_dd, (peak - eq) / peak if peak > 0 else 0.0)
+    return {"trades": trades, "equity": equity, "max_dd_pct": max_dd * 100}
+
+
+def run_pct_exit_study() -> None:
+    """实盘百分比口径：固定 % 止损 × 多档 % 止盈（含 tp1 30%）× ST 跟随。"""
+    configs = [
+        ("BTCUSDT", "BTC低滞后", 10, 3.5, 1.05),
+        ("BTCUSDT", "BTC收益向", 11, 6.0, 0.0),
+        ("ETHUSDT", "ETH质量向", 15, 6.0, 1.2),
+    ]
+    stops = [2.0, 3.0, 4.0]
+    plans = [
+        ("无TP+跟随", []),
+        ("无TP+纯反向", []),
+        ("TP1 1%/30%", [(1.0, 30.0)]),
+        ("TP1 1%/50%", [(1.0, 50.0)]),
+        ("TP1 1%/100%", [(1.0, 100.0)]),
+        ("TP1 1.5%/30%", [(1.5, 30.0)]),
+        ("TP1 2%/30%", [(2.0, 30.0)]),
+        ("TP1 2%/50%", [(2.0, 50.0)]),
+        ("TP1 3%/30%", [(3.0, 30.0)]),
+        ("TP1 1%+TP2 2% (30/40)", [(1.0, 30.0), (2.0, 40.0)]),
+        ("TP1 1%+TP2 3% (30/40)", [(1.0, 30.0), (3.0, 40.0)]),
+        ("TP1 1.5%+TP2 3% (30/40)", [(1.5, 30.0), (3.0, 40.0)]),
+    ]
+
+    rows: list[dict] = []
+    for symbol, tag, period, mult, ratio in configs:
+        candles = load_tf("1h", symbol)
+        o = [c["o"] for c in candles]
+        h = [c["h"] for c in candles]
+        lo_ = [c["l"] for c in candles]
+        cl = [c["c"] for c in candles]
+        st = super_trend(o, h, lo_, cl, periods=period, multiplier=mult,
+                         src="hl2", change_atr=True)
+        atr = ta_atr(h, lo_, cl, period)
+        adx = ta_adx(h, lo_, cl, ADX_LEN)
+        er = er_series(cl, ER_LEN)
+        cands = build_candidates(candles, st, atr, adx, er, "A", 0,
+                                 stop_atr=3.0, atr_min_ratio=ratio)
+        med_r = sorted(abs(c["entry"] - c["stop"]) / c["entry"] * 100
+                       for c in cands)
+        med_r = med_r[len(med_r) // 2] if med_r else 0.0
+
+        for stop_pct in stops:
+            for pname, legs in plans:
+                # 「纯反向」档不跟轨，其余均开启 ST 跟随
+                use_trail = pname != "无TP+纯反向"
+                base = simulate_pct_exits(candles, cands, st, BASE_FEE_BPS,
+                                          BASE_SLIP_BPS, stop_pct=stop_pct,
+                                          legs=legs, use_trail=use_trail)
+                stress = simulate_pct_exits(candles, cands, st, STRESS_FEE_BPS,
+                                            STRESS_SLIP_BPS, stop_pct=stop_pct,
+                                            legs=legs, use_trail=use_trail)
+                segs = {s[0]: stat_block(base["trades"], st["flips"], candles,
+                                        base["equity"], s) for s in SEGMENTS}
+                allb = stat_block(base["trades"], st["flips"], candles,
+                                  base["equity"], ("all", 2021, 2100))
+                rows.append({
+                    "symbol": symbol, "tag": tag, "st": f"{period}x{mult:g}",
+                    "ratio": ratio, "median_1r_pct": med_r,
+                    "stop_pct": stop_pct, "variant": pname,
+                    "n": allb["n"], "ret_pct": allb["ret_pct"], "pf": allb["pf"],
+                    "dev": segs["dev"]["pf"], "val": segs["val"]["pf"],
+                    "oos": segs["oos"]["pf"], "oos_dd": segs["oos"]["max_dd_pct"],
+                    "winrate": allb["winrate"],
+                    "avg_hold": _avg_hold(base["trades"]),
+                    "max_stop_streak": allb["max_stop_streak"],
+                    "stress_oos": stat_block(stress["trades"], st["flips"], candles,
+                                             stress["equity"], SEGMENTS[2])["pf"],
+                })
+
+    for symbol, tag, period, mult, ratio in configs:
+        sub = [r for r in rows if r["tag"] == tag]
+        print(f"\n=== {symbol} 1h ST{period}x{mult:g}/R{ratio:g} 百分比出场网格"
+              f"（3ATR止损中位≈{sub[0]['median_1r_pct']:.2f}%，按 OOS PF 排序） ===")
+        print(f"{'变体':<22} {'硬止损%':>7} {'笔数':>5} {'收益%':>8} {'净PF':>6} "
+              f"{'DEV':>6} {'VAL':>6} {'OOS':>6} {'OOSDD%':>7} {'胜率%':>6} "
+              f"{'持仓根':>6} {'连损':>5} {'压力OOS':>7}")
+        for r in sorted(sub, key=lambda x: -x["oos"])[:14]:
+            print(f"{r['variant']:<22} {r['stop_pct']:>7.1f} {r['n']:>5} "
+                  f"{r['ret_pct']:>+8.1f} {fmt_pf(r['pf']):>6} {fmt_pf(r['dev']):>6} "
+                  f"{fmt_pf(r['val']):>6} {fmt_pf(r['oos']):>6} {r['oos_dd']:>7.2f} "
+                  f"{r['winrate']:>6.1f} {r['avg_hold']:>6.0f} "
+                  f"{r['max_stop_streak']:>5} {fmt_pf(r['stress_oos']):>7}")
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    rp = os.path.join(CACHE_DIR, "pct_exit_report.json")
+    with open(rp, "w", encoding="utf-8") as fh:
+        json.dump({
+            "source": "data-api.binance.vision spot 1h",
+            "study": "A0 entry; fixed % hard stop x % TP legs (live-style) x ST trail",
+            "params": {"risk_pct": RISK_PCT, "leverage_cap": LEVERAGE_CAP,
+                       "fee_bps": BASE_FEE_BPS, "slip_bps": BASE_SLIP_BPS,
+                       "stress_fee_bps": STRESS_FEE_BPS,
+                       "stress_slip_bps": STRESS_SLIP_BPS},
+            "grid": {"configs": [c[1] for c in configs], "stops_pct": stops,
+                     "plans": [p[0] for p in plans]},
+            "results": rows,
+        }, fh, ensure_ascii=False, indent=2)
+    print(f"\n[done] pct exit report: {rp}")
+
+
+def run_pct_reverse_study() -> None:
+    """实盘口径：固定%止盈分批 + 保本 + 剩余只等反向平仓（不跟轨）。"""
+    configs = [
+        ("BTCUSDT", "BTC低滞后", 10, 3.5, 1.05),
+        ("BTCUSDT", "BTC收益向", 11, 6.0, 0.0),
+        ("ETHUSDT", "ETH质量向", 15, 6.0, 1.2),
+    ]
+    # (标签, 止损%（None 表示用 ATR）, ATR 倍数)
+    stops = [
+        ("3.0ATR", None, 3.0),
+        ("3.5ATR", None, 3.5),
+        ("2%", 2.0, None),
+        ("3%", 3.0, None),
+    ]
+    # (标签, legs, 保本, 剩余是否跟轨)
+    plans = [
+        ("无TP 纯反向", [], False, False),
+        ("TP1 1%/30%", [(1.0, 30.0)], True, False),
+        ("TP1 1.5%/30%", [(1.5, 30.0)], True, False),
+        ("TP1 2%/30%", [(2.0, 30.0)], True, False),
+        ("TP1 3%/30%", [(3.0, 30.0)], True, False),
+        ("TP1 2%/50%", [(2.0, 50.0)], True, False),
+        ("TP1 2%/30% 不保本", [(2.0, 30.0)], False, False),
+        ("TP1 2%/30%+TP2 4%/40%", [(2.0, 30.0), (4.0, 40.0)], True, False),
+        ("TP1 1%/30%+TP2 2%/40%", [(1.0, 30.0), (2.0, 40.0)], True, False),
+        ("对照 TP1 2%/30% 跟轨", [(2.0, 30.0)], True, True),
+    ]
+
+    rows: list[dict] = []
+    for symbol, tag, period, mult, ratio in configs:
+        candles = load_tf("1h", symbol)
+        o = [c["o"] for c in candles]
+        h = [c["h"] for c in candles]
+        lo_ = [c["l"] for c in candles]
+        cl = [c["c"] for c in candles]
+        st = super_trend(o, h, lo_, cl, periods=period, multiplier=mult,
+                         src="hl2", change_atr=True)
+        atr = ta_atr(h, lo_, cl, period)
+        adx = ta_adx(h, lo_, cl, ADX_LEN)
+        er = er_series(cl, ER_LEN)
+        cands = build_candidates(candles, st, atr, adx, er, "A", 0,
+                                 stop_atr=3.0, atr_min_ratio=ratio)
+        med_r = sorted(abs(c["entry"] - c["stop"]) / c["entry"] * 100
+                       for c in cands)
+        med_r = med_r[len(med_r) // 2] if med_r else 0.0
+
+        for slabel, stop_pct, stop_atr in stops:
+            for pname, legs, move_be, use_trail in plans:
+                kw = dict(stop_pct=stop_pct, stop_atr=stop_atr, legs=legs,
+                          move_be=move_be, use_trail=use_trail)
+                base = simulate_pct_exits(candles, cands, st, BASE_FEE_BPS,
+                                          BASE_SLIP_BPS, **kw)
+                stress = simulate_pct_exits(candles, cands, st, STRESS_FEE_BPS,
+                                            STRESS_SLIP_BPS, **kw)
+                segs = {s[0]: stat_block(base["trades"], st["flips"], candles,
+                                        base["equity"], s) for s in SEGMENTS}
+                allb = stat_block(base["trades"], st["flips"], candles,
+                                  base["equity"], ("all", 2021, 2100))
+                rows.append({
+                    "symbol": symbol, "tag": tag, "st": f"{period}x{mult:g}",
+                    "ratio": ratio, "median_3atr_pct": med_r,
+                    "stop": slabel, "variant": pname,
+                    "n": allb["n"], "ret_pct": allb["ret_pct"], "pf": allb["pf"],
+                    "dev": segs["dev"]["pf"], "val": segs["val"]["pf"],
+                    "oos": segs["oos"]["pf"], "oos_dd": segs["oos"]["max_dd_pct"],
+                    "winrate": allb["winrate"],
+                    "avg_hold": _avg_hold(base["trades"]),
+                    "max_stop_streak": allb["max_stop_streak"],
+                    "stress_oos": stat_block(stress["trades"], st["flips"], candles,
+                                             stress["equity"], SEGMENTS[2])["pf"],
+                })
+
+    for symbol, tag, period, mult, ratio in configs:
+        sub = [r for r in rows if r["tag"] == tag]
+        print(f"\n=== {symbol} 1h ST{period}x{mult:g}/R{ratio:g} | "
+              f"分批%止盈+保本+剩余反向平（3ATR中位≈{sub[0]['median_3atr_pct']:.2f}%） ===")
+        print(f"{'变体':<24} {'止损':>7} {'笔数':>5} {'收益%':>8} {'净PF':>6} "
+              f"{'DEV':>6} {'VAL':>6} {'OOS':>6} {'OOSDD%':>7} {'胜率%':>6} "
+              f"{'持仓根':>6} {'连损':>5} {'压力OOS':>7}")
+        for r in sorted(sub, key=lambda x: -x["oos"]):
+            print(f"{r['variant']:<24} {r['stop']:>7} {r['n']:>5} "
+                  f"{r['ret_pct']:>+8.1f} {fmt_pf(r['pf']):>6} {fmt_pf(r['dev']):>6} "
+                  f"{fmt_pf(r['val']):>6} {fmt_pf(r['oos']):>6} {r['oos_dd']:>7.2f} "
+                  f"{r['winrate']:>6.1f} {r['avg_hold']:>6.0f} "
+                  f"{r['max_stop_streak']:>5} {fmt_pf(r['stress_oos']):>7}")
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    rp = os.path.join(CACHE_DIR, "pct_reverse_report.json")
+    with open(rp, "w", encoding="utf-8") as fh:
+        json.dump({
+            "source": "data-api.binance.vision spot 1h",
+            "study": "A0 entry; % hard stop (or ATR) x partial % TP + breakeven "
+                     "+ reverse-close remainder",
+            "params": {"risk_pct": RISK_PCT, "leverage_cap": LEVERAGE_CAP,
+                       "fee_bps": BASE_FEE_BPS, "slip_bps": BASE_SLIP_BPS,
+                       "stress_fee_bps": STRESS_FEE_BPS,
+                       "stress_slip_bps": STRESS_SLIP_BPS},
+            "grid": {"configs": [c[1] for c in configs],
+                     "stops": [s[0] for s in stops],
+                     "plans": [p[0] for p in plans]},
+            "results": rows,
+        }, fh, ensure_ascii=False, indent=2)
+    print(f"\n[done] pct reverse report: {rp}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("action", choices=["fetch", "run", "all", "exit", "stop",
@@ -1878,9 +2456,19 @@ def main() -> None:
                                        "diag", "atrfilter", "atrth", "atrfactor",
                                        "f35atr", "atrz", "atrpct", "atrchg",
                                        "val15", "val15matrix", "val30matrix",
-                                       "delay", "full1h", "ethmatrix"])
+                                       "delay", "full1h", "ethmatrix", "tpsl",
+                                       "pctexit", "pctrev"])
     args = ap.parse_args()
 
+    if args.action == "pctrev":
+        run_pct_reverse_study()
+        return
+    if args.action == "pctexit":
+        run_pct_exit_study()
+        return
+    if args.action == "tpsl":
+        run_tp_sl_study()
+        return
     if args.action == "exit":
         run_exit_study()
         return
