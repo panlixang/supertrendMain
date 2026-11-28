@@ -169,6 +169,12 @@ class SymbolTradeConfig:
     atr_ratio_enabled:   bool  = False
     atr_ratio_threshold: float = 1.05
     atr_ratio_window:    int   = 50
+    # ── 波动高潮闸门（品种独立；F2/F3 研究：翻转时 ATR 处于高分位=高潮反转陷阱 → 拦截）──
+    # 口径：信号根 ATR(periods) 在含自身的前 window 根 ATR 中的分位（0~1，与回测 rolling.rank 一致）。
+    # 低分位翻转（压缩突破）不拦，只拦 ≥ atr_pctile_max 的高分位翻转。数据不足/失败一律放行。
+    atr_pctile_gate:   bool  = False
+    atr_pctile_max:    float = 0.90
+    atr_pctile_window: int   = 8760   # 信号周期 K 线根数；1h×8760≈1年
     # ── 形态识别页 指标区间闸门（品种独立；形态识别页专用）──
     # 规则：开启后，当前 ATR14/ATR50 必须落在第一段或第二段（第二段可单独开关），
     #       且 ER20 落在配置区间内才下单；否则拦截。默认关=不启用该闸门。

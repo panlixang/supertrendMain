@@ -410,6 +410,7 @@ export default function PatternTradePanel({ currentSymbol }) {
                   s.reverse_close, s.allow_tfs,
                   s.st_periods, s.st_multiplier,
                   s.atr_ratio_enabled, s.atr_ratio_threshold, s.atr_ratio_window,
+                  s.atr_pctile_gate, s.atr_pctile_max, s.atr_pctile_window,
                   s.range_gate, s.atr_ratio_min, s.atr_ratio_max,
                   s.atr_ratio2_enabled, s.atr_ratio2_min, s.atr_ratio2_max,
                   s.er20_min, s.er20_max, s.er_dir_filter, s.er_rise_gate,
@@ -517,6 +518,23 @@ export default function PatternTradePanel({ currentSymbol }) {
             <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 6 }}>
               <div style={{ fontSize: 11, color: C.neutral, marginBottom: 4 }}>
                 过滤策略（勾选即启用）
+              </div>
+              <div style={SZ.row}>
+                <input
+                  type="checkbox"
+                  checked={!!s.atr_pctile_gate}
+                  onChange={(e) => updateSymbol(s.symbol, { atr_pctile_gate: e.target.checked })}
+                />
+                <span style={{ fontSize: 11 }}>波动高潮过滤（ATR高分位翻转拦截）</span>
+              </div>
+              <div style={{ ...SZ.row, paddingLeft: 18, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: C.neutral, width: 56 }}>分位≥</span>
+                {tpInput(s.symbol, s, "atr_pctile_max", 0.90, 0.01, 56, "0 0 auto")}
+                <span style={{ fontSize: 11, color: C.neutral, width: 40 }}>窗口</span>
+                {tpInput(s.symbol, s, "atr_pctile_window", 8760, 1, 64, "0 0 auto")}
+              </div>
+              <div style={{ fontSize: 10, color: C.neutral, marginTop: 2, lineHeight: 1.5 }}>
+                翻转根 ATR 分位 ≥ 阈值 → 高潮反转陷阱，不下单；低分位（压缩突破）不拦。窗口=信号周期K线根数（1h×8760≈1年）；数据不足放行。
               </div>
               <div style={SZ.row}>
                 <span style={{ fontSize: 11, minWidth: 56 }}>ER方向过滤</span>

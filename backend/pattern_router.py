@@ -76,6 +76,9 @@ class SymbolIn(BaseModel):
     atr_ratio_enabled:   Optional[bool]  = None
     atr_ratio_threshold: Optional[float] = None
     atr_ratio_window:    Optional[int]   = None
+    atr_pctile_gate:     Optional[bool]  = None   # 波动高潮闸门：翻转时ATR高分位→拦截
+    atr_pctile_max:      Optional[float] = None
+    atr_pctile_window:   Optional[int]   = None
     exit_mode:        Optional[str]   = None   # 档位：multi=三挡 | single=单档
     sl_mode:          Optional[str]   = None   # st=超趋线 | pct=固定百分比真实硬止损
     # 指标区间闸门（ATR14/ATR50 + ER20；形态识别页专用，默认关）
@@ -114,6 +117,9 @@ def _symbols_view() -> list[dict]:
             "atr_ratio_enabled": sc.atr_ratio_enabled,
             "atr_ratio_threshold": sc.atr_ratio_threshold,
             "atr_ratio_window": sc.atr_ratio_window,
+            "atr_pctile_gate": sc.atr_pctile_gate,
+            "atr_pctile_max": sc.atr_pctile_max,
+            "atr_pctile_window": sc.atr_pctile_window,
             "range_gate": sc.range_gate,
             "atr_ratio_min": sc.atr_ratio_min,
             "atr_ratio_max": sc.atr_ratio_max,

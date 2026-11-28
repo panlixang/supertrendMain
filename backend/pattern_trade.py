@@ -4,7 +4,7 @@
 - 配置文件 pattern_trade.json、凭据文件 pattern_credentials.json，都不进 settings.json
 - 下单通过 creds 的 ContextVar 覆盖 —— Task 级隔离，两页可跑不同交易所 / 不同子账户
 - 信号用基础周期的「原始 SuperTrend」（ATR 10 / factor 3.0），与首页 15/9.1 无关
-- 过滤：ATR ratio 过滤 + ATR14/ATR50、ER20 双区间闸门 + ER方向过滤（上升/下降/不选，品种独立）
+- 过滤：ATR ratio 过滤 + 波动高潮闸门（ATR高分位翻转拦截）+ ATR14/ATR50、ER20 双区间闸门 + ER方向过滤（上升/下降/不选，品种独立）
 - 出场用 position.ExitRules 默认档 = 回测验证过的 TP1 1.5% 平 70% + 保本 + 跟随 ST 跟踪
 
 同一品种两页都可能下单时不校验冲突（用户用不同子账户各自管理）。
@@ -118,6 +118,9 @@ DEF_ST_PERIODS = ST_PERIODS
 DEF_ST_MULTIPLIER = ST_MULTIPLIER
 DEF_ATR_RATIO_THRESHOLD = 1.05
 DEF_ATR_RATIO_WINDOW = 50
+# 波动高潮闸门默认值（面板可逐品种手填）
+DEF_ATR_PCTILE_MAX = 0.90
+DEF_ATR_PCTILE_WINDOW = 8760
 
 
 def st_params_for(sc) -> tuple[int, float]:
@@ -152,6 +155,43 @@ def atr_ratio_cur_avg(candles: list[dict], periods: int = ST_PERIODS,
     if mean <= 0:
         return None
     return round(cur / mean, 4)
+
+
+def atr_percentile_at(candles: list[dict], periods: int = ST_PERIODS,
+                      window: int = DEF_ATR_PCTILE_WINDOW,
+                      upto_ts: int | None = None) -> float | None:
+    """信号根 ATR(periods) 在含自身的前 window 根 ATR 中的分位（0~1）。
+
+    与回测口径一致：pandas rolling(window).rank(pct=True) —— 窗口含当前根。
+    upto_ts 给定时，截取到该时间戳所在 K 线为止（信号根），避免用收盘确认后
+    才拉到的新 K 线污染分位。数据不足 / 指标缺失返回 None。
+    """
+    if not candles or periods <= 0 or window <= 0:
+        return None
+    cs = candles
+    if upto_ts is not None:
+        cut = next((i for i, k in enumerate(cs) if k["ts"] == upto_ts), None)
+        if cut is None:   # 信号根不在本次拉取里：退而取 ts<=信号时间的最后一根
+            cut = -1
+            for i, k in enumerate(cs):
+                if k["ts"] <= upto_ts:
+                    cut = i
+                else:
+                    break
+            if cut < 0:
+                return None
+        cs = cs[:cut + 1]
+    if len(cs) < periods + window:
+        return None
+    h = [c["h"] for c in cs]
+    l = [c["l"] for c in cs]
+    c = [c["c"] for c in cs]
+    atr = ta_atr(h, l, c, periods)
+    win = [x for x in atr[-window:] if x is not None]
+    cur = atr[-1]
+    if cur is None or not win:
+        return None
+    return round(sum(1 for x in win if x <= cur) / len(win), 4)
 
 
 def _okx_symbol(s: str) -> str:
@@ -331,6 +371,11 @@ class PatternTrader:
                                                    DEF_ATR_RATIO_THRESHOLD),
                     atr_ratio_window=_cfg_int(row.get("atr_ratio_window"),
                                               DEF_ATR_RATIO_WINDOW),
+                    atr_pctile_gate=bool(row.get("atr_pctile_gate", False)),
+                    atr_pctile_max=_cfg_float(row.get("atr_pctile_max"),
+                                              DEF_ATR_PCTILE_MAX),
+                    atr_pctile_window=_cfg_int(row.get("atr_pctile_window"),
+                                               DEF_ATR_PCTILE_WINDOW),
                     range_gate=bool(row.get("range_gate", False)),
                     atr_ratio_min=_cfg_float(row.get("atr_ratio_min"), DEF_ATR_RATIO_MIN),
                     atr_ratio_max=_cfg_float(row.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
@@ -465,6 +510,11 @@ class PatternTrader:
                                            DEF_ATR_RATIO_THRESHOLD),
             atr_ratio_window=_cfg_int(kw.get("atr_ratio_window"),
                                       DEF_ATR_RATIO_WINDOW),
+            atr_pctile_gate=bool(kw.get("atr_pctile_gate", False)),
+            atr_pctile_max=_cfg_float(kw.get("atr_pctile_max"),
+                                      DEF_ATR_PCTILE_MAX),
+            atr_pctile_window=_cfg_int(kw.get("atr_pctile_window"),
+                                       DEF_ATR_PCTILE_WINDOW),
             range_gate=bool(kw.get("range_gate", False)),
             atr_ratio_min=_cfg_float(kw.get("atr_ratio_min"), DEF_ATR_RATIO_MIN),
             atr_ratio_max=_cfg_float(kw.get("atr_ratio_max"), DEF_ATR_RATIO_MAX),
@@ -501,6 +551,7 @@ class PatternTrader:
                    "move_sl_to_entry", "trail_with_st", "reverse_close",
                    "st_periods", "st_multiplier",
                    "atr_ratio_enabled", "atr_ratio_threshold", "atr_ratio_window",
+                   "atr_pctile_gate", "atr_pctile_max", "atr_pctile_window",
                    "range_gate", "atr_ratio_min", "atr_ratio_max",
                    "atr_ratio2_enabled", "atr_ratio2_min", "atr_ratio2_max",
                    "er20_min", "er20_max", "er_dir_filter")
@@ -512,10 +563,11 @@ class PatternTrader:
                 # 抛错 → 整个品种清单加载失败（该事故形态见 _load 里的逐行容错说明）。
                 if k == "leverage":
                     v = int(float(v))
-                elif k in ("st_periods", "atr_ratio_window"):
+                elif k in ("st_periods", "atr_ratio_window", "atr_pctile_window"):
                     v = int(float(v))
                 elif k in ("margin_usdt", "equity_pct",
                            "st_multiplier", "atr_ratio_threshold",
+                           "atr_pctile_max",
                            "atr_ratio_min", "atr_ratio_max",
                            "atr_ratio2_min", "atr_ratio2_max",
                            "er20_min", "er20_max"):
@@ -881,6 +933,8 @@ class PatternTrader:
                 continue
             if not await self._allow_by_atr_ratio(sym, sc, sig):
                 continue
+            if not await self._allow_by_atr_pctile(sym, sc, sig):
+                continue
             if not self._allow_by_er_dir(sc, sig, prev_er):
                 continue
             self._last_order_at[key] = time.time()
@@ -1007,6 +1061,34 @@ class PatternTrader:
         if ratio < threshold:
             logger.info("[形态下单] %s %s ATR ratio 拦截: %.3f < %.3f (period=%d window=%d)",
                         sym, tf, ratio, threshold, periods, window)
+            return False
+        return True
+
+    async def _allow_by_atr_pctile(self, sym: str, sc: "SymbolTradeConfig", sig: dict) -> bool:
+        """True=放行。波动高潮闸门（品种独立，默认关）。
+
+        规则（F2/F3 研究结论）：翻转根 ATR(ST周期) 在含自身的前 window 根 ATR 中的
+        分位 >= atr_pctile_max → 拦截（高潮反转陷阱：抛物线末端翻转后大概率均值回归）。
+        低分位翻转（压缩突破起点）不拦。数据不足 / 计算失败一律放行。
+        """
+        if not getattr(sc, "atr_pctile_gate", False):
+            return True
+        tf = sig.get("tf") or "1h"
+        periods, _ = st_params_for(sc)
+        window = _cfg_int(getattr(sc, "atr_pctile_window", None), DEF_ATR_PCTILE_WINDOW)
+        pmax = _cfg_float(getattr(sc, "atr_pctile_max", None), DEF_ATR_PCTILE_MAX)
+        try:
+            cs = await self._kline(sym, tf, periods + window + 60)
+            pct = atr_percentile_at(cs, periods=periods, window=window,
+                                    upto_ts=sig.get("ts"))
+        except Exception as e:
+            logger.warning("[形态下单] %s 波动高潮闸门取数/计算失败，放行: %s", sym, e)
+            return True
+        if pct is None:
+            return True
+        if pct >= pmax:
+            logger.info("[形态下单] %s %s 波动高潮拦截: ATR分位=%.2f >= %.2f "
+                        "(period=%d window=%d)", sym, tf, pct, pmax, periods, window)
             return False
         return True
 
